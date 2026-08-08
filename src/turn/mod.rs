@@ -40,6 +40,26 @@ pub fn respond_with(
     respond_full(runner, home, thread, said, None, author)
 }
 
+/// Waits for the whole answer, with standing instructions for this way of asking.
+pub fn respond_extra(
+    home: &Path,
+    thread: &ThreadId,
+    said: &str,
+    author: Option<String>,
+    extra: Option<&str>,
+) -> Result<Answer> {
+    let runner = Runner::default();
+    Exchange {
+        home,
+        thread,
+        said,
+        sent: None,
+        author,
+        extra,
+    }
+    .run(|turn| runner.ask(turn))
+}
+
 /// The full form, where what gets recorded and what gets sent can differ.
 pub fn respond_full(
     runner: &Runner,

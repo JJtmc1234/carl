@@ -1,0 +1,26 @@
+[Unit]
+# Carl's echo canceller. See etc/carl-aec.conf for what it builds and why.
+#
+# Tied to the graphical session rather than to boot, because it is a PipeWire client and
+# PipeWire only exists once somebody has logged in. Starting it earlier would just fail in a
+# loop until it happened to coincide with a login.
+Description=Carl echo canceller
+PartOf=graphical-session.target
+After=pipewire.service
+Wants=pipewire.service
+
+# These belong in [Unit]. systemd ignores them in [Service] without complaining, so the
+# obvious place gives rate limiting that silently does nothing.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/pipewire -c %h/Projects/carl/etc/carl-aec.conf
+Restart=always
+RestartSec=2
+# A canceller that cannot start should not spin. Five tries in a minute and it gives up
+# loudly, which is easier to find in the journal than a line every two seconds forever.
+
+[Install]
+WantedBy=graphical-session.target

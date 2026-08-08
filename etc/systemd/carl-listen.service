@@ -1,0 +1,27 @@
+[Unit]
+# Carl listening on the microphone.
+#
+# Wants rather than Requires on the canceller. Without it Carl still works, he just goes deaf
+# while he speaks and cannot be interrupted, and half a Carl beats no Carl.
+Description=Carl, listening
+PartOf=graphical-session.target
+After=carl-aec.service pipewire.service
+Wants=carl-aec.service pipewire.service
+
+# These belong in [Unit]. systemd ignores them in [Service] without complaining, so the
+# obvious place gives rate limiting that silently does nothing.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Given a moment after the canceller starts. Carl checks once at startup for the cancelled
+# devices and falls back to muting for the rest of the run if they are not there yet.
+ExecStartPre=/bin/sleep 3
+ExecStart=%h/.local/bin/carl listen
+Restart=always
+RestartSec=5
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=graphical-session.target

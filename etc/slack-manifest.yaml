@@ -27,6 +27,13 @@ features:
   bot_user:
     display_name: Carl
     always_online: false
+  # Without this the direct message box is switched off and you cannot type to Carl at all.
+  # It is not obvious, because the app still installs, still connects and still reports
+  # itself as healthy. It simply never receives anything.
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
 
 oauth_config:
   scopes:

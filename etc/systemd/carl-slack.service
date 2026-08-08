@@ -1,0 +1,25 @@
+[Unit]
+# Carl answering in Slack.
+#
+# The only one of the three that has no business with audio, so it is the only one that can
+# genuinely run without anybody logged in. That needs lingering, see install.sh.
+Description=Carl, in Slack
+After=network-online.target
+Wants=network-online.target
+
+# These belong in [Unit]. systemd ignores them in [Service] without complaining, so the
+# obvious place gives rate limiting that silently does nothing.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/carl slack
+Restart=always
+# Longer than the others. A restart loop here reconnects to Slack every time, and hammering
+# their gateway is how an app gets rate limited.
+RestartSec=15
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

@@ -83,6 +83,27 @@ enum Command {
     /// Needs ~/.carl/slack.json with a bot token and an app token. See readme.md.
     Slack,
 
+    /// Say something in a Slack channel without being asked.
+    ///
+    /// Carl has to be in the channel already. Invite him with /invite @Carl.
+    Say {
+        /// A channel id like C01ABC, or a name like #general.
+        channel: String,
+        message: Vec<String>,
+    },
+
+    /// Open an A2A exchange with another agent in a channel.
+    ///
+    /// The protocol is in docs/a2a.md. With no message this sends a hello, which is how you
+    /// find out whether the other agent speaks it.
+    Greet {
+        /// A channel id like C01ABC, or a name like #general.
+        channel: String,
+        /// The other agent's Slack user id, the U... in their mention.
+        agent: String,
+        message: Vec<String>,
+    },
+
     /// Check the microphone and report what each stage actually heard.
     ///
     /// Run this when Carl is not responding. It shows the level, what the cheap wake model
@@ -180,6 +201,20 @@ fn main() -> Result<()> {
         } => ear::Ear::new(ThreadId::new(thread)?, accurate)?.run(&home, ear::Timing { hush, cap }),
 
         Command::Slack => chat::run(&home),
+
+        Command::Say { channel, message } => {
+            let text = message.join(" ");
+            if text.trim().is_empty() {
+                anyhow::bail!("nothing to say");
+            }
+            chat::say(&home, &channel, &text)
+        }
+
+        Command::Greet {
+            channel,
+            agent,
+            message,
+        } => chat::greet(&home, &channel, &agent, &message.join(" ")),
 
         Command::MicCheck { secs } => {
             use carl::audio::{Mic, SPEECH_FLOOR};

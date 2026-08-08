@@ -135,9 +135,10 @@ Slack message can be longer than the argument limit and can contain anything at 
 | streaming answers | done | 6 |
 | sentences from a stream | done | 10 |
 | the listen loop | wake path confirmed on this machine, the rest needs a real conversation | |
-| slack, socket mode | done | 13 |
+| slack, socket mode | done | 15 |
+| a2a, agent to agent | done, untested against Alex | 15 |
 
-112 tests, clippy clean at deny warnings.
+129 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -365,3 +366,51 @@ has allowed a dot in its character set since the day it was written.
 
 No spoken brief in Slack. It is read, not heard, and two sentences is the wrong shape for
 something you can scroll back over.
+
+## the third time the same loop showed up
+
+The microphone heard the speakers. Carl saw his own Slack messages. Now two agents feed each
+other. Same shape every time, and each one worse than the last: the room only had Carl in it,
+the channel has an audience, and the agent exchange has an audience and a bill.
+
+The first two were fixed by refusing to listen to yourself. That does not work here, because
+Alex genuinely is somebody else and hearing him is the entire point.
+
+So the rule stopped being about who is talking and became about how long it has been since a
+person was involved. `patience.rs` counts consecutive agent messages per thread and stops at
+six. A human message resets it. It is per thread, so Hunter and Alex arguing in one channel
+cannot silence Carl answering JJ in another.
+
+That local count is the guard that matters, because it is the only one that survives the
+other agent being broken or hostile. The protocol `ttl` is cooperative, which means it is an
+agreement rather than a safety mechanism.
+
+## why the protocol is so small
+
+Slack already carries most of what a protocol would normally invent. The sender is the
+message author, the recipient is the mention, the conversation is the thread. Adding fields
+for those would mean two sources of truth that can disagree, and Slack's would win.
+
+That leaves two things Slack cannot express.
+
+`kind` is what the other agent should do with it. Without it, "thanks, that helps" and "and
+what about X" are both just text, so an agent answers both and the politeness itself becomes
+the loop. `done` and `decline` are unanswerable by rule, and that is what gives an exchange
+an ending.
+
+`ttl` is how many hops are left. Every reply decrements it. At zero the only legal move is to
+stop, and stopping means saying `done` rather than going quiet, because silence looks like a
+crash and invites a retry.
+
+The body underneath is ordinary prose, on purpose. People are reading the channel, and a
+protocol they cannot follow over somebody's shoulder is one that gets switched off.
+
+## Carl did not know he had a mouth
+
+Asked in Slack to message another user, he replied that he could not, because the claude.ai
+Slack connector on his session was not authorised. That reply was itself posted to Slack.
+
+He runs on the claude command line, which has its own idea of what Slack access means, and
+nothing had told him that his answer is posted automatically. `slack::CONTEXT` now does, on
+every Slack turn. It is the same class of problem as him thinking he was a coding assistant:
+the underlying tool has an identity and it leaks through unless something displaces it.

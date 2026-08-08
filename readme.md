@@ -177,6 +177,45 @@ file, which is what a service unit wants.
 The two tokens look alike and Slack answers a swap with `invalid_auth`, which tells you
 nothing. Carl checks the prefixes and says "the two are the wrong way round" instead.
 
+### speaking first
+
+```sh
+./target/debug/carl say C0BNA6YQ16E "the smelters are backed up again"
+./target/debug/carl greet C0BNA6YQ16E U0ALEX
+./target/debug/carl greet C0BNA6YQ16E U0ALEX "how do you handle memory between conversations"
+```
+
+`say` posts an ordinary message. `greet` opens an exchange with another agent using the A2A
+protocol, and with no message it sends a hello, which is how you find out whether the other
+agent speaks it.
+
+### talking to other agents
+
+Carl can talk to Hunter's agent Alex. The protocol is written up in
+[docs/a2a.md](docs/a2a.md), which is what Alex's side needs in order to be implemented.
+
+The short version. Slack already says who sent a message, who it is for and which
+conversation it belongs to, so the protocol only adds the two things Slack cannot: what kind
+of message this is, and how many more hops the exchange may take.
+
+```
+<@U0ALEX> [a2a/1 ask ttl=5]
+How do you handle memory between conversations?
+```
+
+Two agents left alone do not stop. Neither gets bored, neither runs out of things to say, and
+every turn is a paid model call in a room other people are in. There are three guards and no
+single one of them is enough.
+
+| guard | stops | survives the other agent being broken |
+|---|---|---|
+| never answer yourself | Carl looping alone | yes |
+| `ttl` in the protocol | a polite exchange running long | no, it is cooperative |
+| six agent turns per thread, counted locally | everything else | yes |
+
+A person speaking in the thread resets the count, because a person in the conversation is
+what makes it a conversation rather than a loop.
+
 ### what he will not do
 
 He never answers himself. He posts into the same channels he listens to, so his own messages

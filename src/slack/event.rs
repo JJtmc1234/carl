@@ -15,6 +15,11 @@ use crate::ThreadId;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ask {
     pub thread: ThreadId,
+    /// True when another bot sent this, rather than a person.
+    ///
+    /// Not a reason to ignore it. Talking to Hunter's agent is the point. It is the reason to
+    /// count how long it has been since a person was involved.
+    pub from_agent: bool,
     pub channel: String,
     /// The thread to reply in. Slack threads a reply when this is the parent's timestamp.
     pub thread_ts: String,
@@ -24,24 +29,34 @@ pub struct Ask {
 
 /// Reads one Socket Mode payload. `None` for everything Carl should stay out of.
 ///
-/// `me` is Carl's own user id from `auth.test`.
-pub fn ask_from(payload: &serde_json::Value, me: &str) -> Option<Ask> {
+/// `me` is Carl's own user id and `my_bot` his own bot id, both from `auth.test`.
+pub fn ask_from(payload: &serde_json::Value, me: &str, my_bot: &str) -> Option<Ask> {
     let event = payload.get("event")?;
     let kind = event.get("type")?.as_str()?;
 
-    // A message Carl posted comes back as an event like any other. Three separate ways to
-    // spot it, because any one of them missing is an infinite loop in a channel with people
-    // in it.
-    if event.get("bot_id").is_some() {
+    // A message Carl posted comes back as an event like any other, and answering it is an
+    // infinite loop in a channel with people in it. Checked two ways, because a bot message
+    // does not always carry a user field and a user message does not carry a bot id.
+    let bot = event.get("bot_id").and_then(|b| b.as_str());
+    if bot.is_some() && bot == Some(my_bot) {
         return None;
     }
-    let user = event.get("user")?.as_str()?;
-    if user == me {
+    let user = event
+        .get("user")
+        .and_then(|u| u.as_str())
+        .or(bot)
+        .unwrap_or_default();
+    if user.is_empty() || user == me {
         return None;
     }
+
+    // Another agent. Heard, deliberately, because talking to Alex is the whole point. What
+    // stops that running away is patience.rs and the protocol ttl, not deafness.
+    let from_agent = bot.is_some();
     // Edits, deletions, joins, topic changes. Only a plain new message is a question.
+    // bot_message is allowed through, because that is how another agent's words arrive.
     if let Some(sub) = event.get("subtype").and_then(|s| s.as_str())
-        && sub != "file_share"
+        && !matches!(sub, "file_share" | "bot_message")
     {
         return None;
     }
@@ -74,6 +89,7 @@ pub fn ask_from(payload: &serde_json::Value, me: &str) -> Option<Ask> {
 
     Some(Ask {
         thread: ThreadId::slack(channel, &thread_ts).ok()?,
+        from_agent,
         channel: channel.to_string(),
         thread_ts,
         text,
@@ -97,6 +113,7 @@ mod tests {
     use super::*;
 
     const ME: &str = "U0CARL";
+    const MY_BOT: &str = "B0CARL";
 
     fn payload(event: serde_json::Value) -> serde_json::Value {
         serde_json::json!({ "event": event })
@@ -113,6 +130,7 @@ mod tests {
                 "text": "<@U0CARL> what should I research next"
             })),
             ME,
+            MY_BOT,
         )
         .expect("should be a question");
 
@@ -131,11 +149,12 @@ mod tests {
                 "channel": "D01", "ts": "1.1", "text": "an answer Carl posted"
             }),
             serde_json::json!({
-                "type": "message", "channel_type": "im", "bot_id": "B01", "user": "U0X",
-                "channel": "D01", "ts": "1.1", "text": "posted as a bot"
+                "type": "message", "channel_type": "im", "subtype": "bot_message",
+                "bot_id": MY_BOT, "channel": "D01", "ts": "1.1",
+                "text": "an answer Carl posted, arriving with no user field at all"
             }),
         ] {
-            assert_eq!(ask_from(&payload(own), ME), None);
+            assert_eq!(ask_from(&payload(own), ME, MY_BOT), None);
         }
     }
 
@@ -148,6 +167,7 @@ mod tests {
                 "channel": "D01", "ts": "1700000000.000200", "text": "hello Carl"
             })),
             ME,
+            MY_BOT,
         )
         .expect("a dm is a question");
         assert_eq!(ask.text, "hello Carl");
@@ -162,7 +182,8 @@ mod tests {
                     "type": "message", "channel_type": "channel", "user": "U0JJ",
                     "channel": "C01", "ts": "1.1", "text": "morning everyone"
                 })),
-                ME
+                ME,
+                MY_BOT
             ),
             None
         );
@@ -179,7 +200,8 @@ mod tests {
                         "type": "message", "channel_type": "im", "user": "U0JJ",
                         "subtype": sub, "channel": "D01", "ts": "1.1", "text": "x"
                     })),
-                    ME
+                    ME,
+                    MY_BOT
                 ),
                 None,
                 "{sub} should be ignored"
@@ -198,6 +220,7 @@ mod tests {
                 "text": "<@U0CARL> and what after that"
             })),
             ME,
+            MY_BOT,
         )
         .unwrap();
         assert_eq!(ask.thread_ts, "1700000000.000100", "must join the parent");
@@ -213,10 +236,43 @@ mod tests {
                     "type": "app_mention", "user": "U0JJ", "channel": "C01",
                     "ts": "1.1", "text": "<@U0CARL>"
                 })),
-                ME
+                ME,
+                MY_BOT
             ),
             None
         );
+    }
+
+    /// Another agent is heard, deliberately. Talking to Hunter's Alex is the point, and it
+    /// is the one case the old blanket "ignore every bot" rule got wrong.
+    #[test]
+    fn another_agent_is_heard_and_marked_as_an_agent() {
+        let ask = ask_from(
+            &payload(serde_json::json!({
+                "type": "app_mention", "subtype": "bot_message", "bot_id": "B0ALEX",
+                "channel": "C01", "ts": "1700000000.000300",
+                "text": "<@U0CARL> [a2a/1 hello ttl=6]"
+            })),
+            ME,
+            MY_BOT,
+        )
+        .expect("Alex must be heard");
+        assert!(ask.from_agent, "and must be known to be an agent");
+    }
+
+    /// A person must never be counted as an agent, or the loop guard would throttle JJ.
+    #[test]
+    fn a_person_is_not_an_agent() {
+        let ask = ask_from(
+            &payload(serde_json::json!({
+                "type": "message", "channel_type": "im", "user": "U0JJ",
+                "channel": "D01", "ts": "1.1", "text": "hello"
+            })),
+            ME,
+            MY_BOT,
+        )
+        .unwrap();
+        assert!(!ask.from_agent);
     }
 
     #[test]

@@ -32,6 +32,9 @@ impl Api {
         let v = self.call("auth.test", &self.bot, json!({}))?;
         Ok(Me {
             user_id: field(&v, "user_id")?,
+            // A bot message does not always carry a user field, so this is the other half of
+            // recognising his own words coming back at him.
+            bot_id: field(&v, "bot_id").unwrap_or_default(),
             team: field(&v, "team").unwrap_or_default(),
         })
     }
@@ -45,6 +48,21 @@ impl Api {
         field(&v, "url")
     }
 
+    /// Says something in a channel without being asked first.
+    ///
+    /// A top level message rather than a thread reply, which is what starting a conversation
+    /// means in Slack. Carl has to be in the channel already, so `/invite @Carl` first.
+    /// Returns the new message timestamp, which is the id of the thread it starts.
+    pub fn announce(&self, channel: &str, text: &str) -> Result<String> {
+        let v = self.call(
+            "chat.postMessage",
+            &self.bot,
+            json!({ "channel": channel, "text": text }),
+        )?;
+        field(&v, "ts")
+    }
+
+    /// Replies inside a thread.
     pub fn post(&self, channel: &str, thread_ts: &str, text: &str) -> Result<()> {
         self.call(
             "chat.postMessage",
@@ -89,6 +107,7 @@ impl Api {
 #[derive(Debug, Clone)]
 pub struct Me {
     pub user_id: String,
+    pub bot_id: String,
     pub team: String,
 }
 

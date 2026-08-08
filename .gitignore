@@ -3,3 +3,7 @@
 
 # Carl's brain. Conversations and memory are personal, never committed.
 /.carl
+
+# Secrets. The bot token lets anyone post as Carl.
+slack.json
+*.token
