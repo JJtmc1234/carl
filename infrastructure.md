@@ -259,6 +259,17 @@ stall Claude if the same thread were reading its output, so a reader thread drai
 channel and Claude writes at full speed while Carl talks. Third time that pattern has been
 the answer in this project.
 
+## Carl is not a coding assistant
+
+He runs on the `claude` command line, whose own system prompt says it is a CLI for software
+engineering tasks. That is right for Claude Code and wrong for Carl, and left alone it leaks
+into the answers: a question about a video game gets turned down as out of scope.
+
+`brief.rs` holds two pieces. `IDENTITY` says who Carl is and goes on every turn, typed or
+spoken. `SPOKEN` is added on top only when the answer is going through a speaker.
+
+Giving the model a name and a job works. Telling it that it is wrong does not.
+
 ## the instruction that mattered more than the code
 
 Everything above shaves tenths of a second. Telling Carl that his answer is going to be
@@ -296,7 +307,19 @@ identical transcript word for word. The echo canceller suppresses room noise on 
 through, so the audio reaching whisper is cleaner than it was when `small.en` was chosen.
 `--accurate` puts the bigger model back for a noisy room.
 
-A faster model was the obvious thing to try and it was wrong. Haiku refused the question
-outright, because Claude Code tells the model it is a coding agent and the smaller model took
-that literally. Sonnet was slower than Opus. Opus was both the fastest and the only one that
-answered, so nothing changed here.
+A faster model was the obvious thing to try and it did not help, but the reason first given
+here was wrong and is worth writing down properly.
+
+Haiku did refuse the question, twice in three runs, saying it was there to help with coding.
+The conclusion drawn from that, that the smaller model is unusable for Carl, was wrong. With
+Carl's real identity brief it answered three times out of three. What it had been given at
+the time was a thin instruction saying "you are a voice assistant", which sits on top of
+Claude Code's own description of itself as a tool for software engineering and does not
+displace it. A name and a job displaces it. A correction does not.
+
+That is why the identity now goes on every turn rather than only spoken ones. `carl ask` in
+a terminal inherited exactly the same problem and nobody had noticed.
+
+With that fixed, the models were measured again on equal terms. Haiku takes 5.2 to 6.1
+seconds to its first word, Opus 2.9 to 4.1. Opus stays the default because it is faster,
+which is not the reason originally given.

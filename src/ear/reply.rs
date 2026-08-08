@@ -24,7 +24,7 @@ impl Ear {
                     &self.thread,
                     question,
                     carl::Area::Screen,
-                    Some(carl::BRIEF),
+                    Some(carl::brief::SPOKEN),
                     &mut on_text,
                 )
             } else {
@@ -33,7 +33,7 @@ impl Ear {
                     &self.thread,
                     question,
                     None,
-                    Some(carl::BRIEF),
+                    Some(carl::brief::SPOKEN),
                     &mut on_text,
                 )
             }

@@ -37,10 +37,10 @@ pub struct Exchange<'a> {
     /// which would be noise in the record.
     pub sent: Option<&'a str>,
     pub author: Option<String>,
-    /// Standing instructions for this way of asking, appended after the memory notes.
+    /// Extra instructions for this way of asking, on top of the identity every turn gets.
     ///
-    /// Carries the voice brief on spoken turns and nothing at all on typed ones, because the
-    /// rule that makes a good spoken answer makes a uselessly thin written one.
+    /// Carries the spoken brief on voice turns and nothing on typed ones, because the rule
+    /// that makes a good spoken answer makes a uselessly thin written one.
     pub extra: Option<&'a str>,
 }
 
@@ -63,12 +63,19 @@ impl Exchange<'_> {
         let (session, is_new) = registry.session_for(self.thread, now())?;
 
         let memory = Memory::open(self.home.join("memory"))?;
-        let extra_system = match (memory.assemble()?, self.extra) {
-            (Some(notes), Some(extra)) => Some(format!("{notes}\n\n{extra}")),
-            (Some(notes), None) => Some(notes),
-            (None, Some(extra)) => Some(extra.to_string()),
-            (None, None) => None,
-        };
+
+        // Who Carl is goes on every turn, not just spoken ones. The underlying binary
+        // describes itself as a tool for software engineering, and without this Carl inherits
+        // that and turns down questions about anything else.
+        let mut extra_system = carl::brief::IDENTITY.to_string();
+        if let Some(notes) = memory.assemble()? {
+            extra_system.push_str("\n\n");
+            extra_system.push_str(&notes);
+        }
+        if let Some(extra) = self.extra {
+            extra_system.push_str("\n\n");
+            extra_system.push_str(extra);
+        }
 
         // Claude Code runs with this as its working directory, so anything it writes lands
         // somewhere predictable rather than wherever carl happened to be started from.
@@ -80,7 +87,7 @@ impl Exchange<'_> {
             // between continuing a conversation and starting a second one silently.
             resume: !is_new,
             prompt: self.sent.unwrap_or(self.said),
-            extra_system: extra_system.as_deref(),
+            extra_system: Some(&extra_system),
             workdir: &workdir,
         });
 
