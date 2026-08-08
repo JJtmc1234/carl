@@ -1,5 +1,7 @@
 # carl
 
+Docs: [infrastructure.md](infrastructure.md) for how it fits together, [progress-report.md](progress-report.md) for where it stands, [docs/a2a.md](docs/a2a.md) for the agent to agent protocol.
+
 A helper that remembers. Rust, driving the `claude` command line as a child process.
 
 ## how memory actually works
