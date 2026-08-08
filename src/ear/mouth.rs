@@ -10,15 +10,16 @@ use std::time::Duration;
 
 use carl::Voice;
 use carl::audio::Mic;
+use carl::speech::Speaking;
 
 use crate::Result;
 
 /// How often to check whether you have started talking. Short enough that Carl stops within
 /// a syllable or two of being cut off.
-const CHECK: Duration = Duration::from_millis(100);
+pub(super) const CHECK: Duration = Duration::from_millis(100);
 
 /// How much of the recent past counts as "right now" when watching for an interruption.
-const RECENT_SECS: f32 = 0.3;
+pub(super) const RECENT_SECS: f32 = 0.3;
 
 /// How many checks in a row must be loud before Carl stops.
 ///
@@ -38,13 +39,13 @@ const OVER_ROOM: f32 = 2.5;
 /// Its own type so the rule can be tested without a microphone, a speaker or a room. Every
 /// threshold in Carl that lived only inside a loop has needed changing once someone actually
 /// used it, and the ones that were pure functions were the cheap ones to change.
-struct Barge {
+pub(super) struct Barge {
     over: f32,
     ticks: u32,
 }
 
 impl Barge {
-    fn new(hush: f32) -> Self {
+    pub(super) fn new(hush: f32) -> Self {
         Self {
             over: hush * OVER_ROOM,
             ticks: 0,
@@ -52,7 +53,7 @@ impl Barge {
     }
 
     /// Feeds in one check. True once it has been loud long enough to mean it.
-    fn saw(&mut self, level: f32) -> bool {
+    pub(super) fn saw(&mut self, level: f32) -> bool {
         if level > self.over {
             self.ticks += 1;
         } else {
@@ -63,14 +64,14 @@ impl Barge {
 }
 
 pub struct Mouth {
-    voice: Voice,
+    pub(super) voice: Voice,
     /// Whether Carl can hear while talking. Only true with the echo canceller running, since
     /// otherwise everything the microphone hears during a reply is Carl himself.
-    duplex: bool,
+    pub(super) duplex: bool,
 }
 
 /// What ended a spoken line.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Said {
     /// He finished the sentence.
     Fully,
@@ -97,20 +98,25 @@ impl Mouth {
         };
 
         let mut barge = Barge::new(hush);
+        Ok(wait_out(&mut speaking, mic, &mut barge))
+    }
+}
 
-        loop {
-            if speaking.done() {
-                return Ok(Said::Fully);
-            }
-            std::thread::sleep(CHECK);
+/// Waits for a sentence to finish playing, stopping early if you talk over it.
+///
+/// Deliberately does not forget the microphone window afterwards. What you said to interrupt
+/// him is the start of your next sentence, and throwing it away would make you repeat the
+/// first word of every interruption.
+pub(super) fn wait_out(speaking: &mut Speaking, mic: &Mic, barge: &mut Barge) -> Said {
+    loop {
+        if speaking.done() {
+            return Said::Fully;
+        }
+        std::thread::sleep(CHECK);
 
-            if barge.saw(mic.recent(RECENT_SECS)) {
-                speaking.stop();
-                // Deliberately not forgetting the window. What you said to interrupt him is
-                // the start of your next sentence, and throwing it away would make you repeat
-                // the first word of every interruption.
-                return Ok(Said::CutOff);
-            }
+        if barge.saw(mic.recent(RECENT_SECS)) {
+            speaking.stop();
+            return Said::CutOff;
         }
     }
 }

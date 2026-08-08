@@ -12,6 +12,9 @@ use serde::Deserialize;
 
 use crate::{Error, Result, SessionId};
 
+mod stream;
+pub use stream::{Chunk, Flow, chunk_of};
+
 /// One turn: what to say, and which conversation to say it in.
 pub struct Turn<'a> {
     pub session: &'a SessionId,
@@ -42,6 +45,11 @@ struct Envelope {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Answer {
     pub text: String,
+    /// True when Carl was talked over and stopped reading the rest.
+    ///
+    /// Worth carrying rather than dropping. Claude's own session holds the whole answer, so
+    /// without this the record would claim Carl said things nobody ever heard.
+    pub interrupted: bool,
     /// The session Claude Code actually used. Compared against the one we asked for, because
     /// a silent mismatch means the next turn resumes the wrong conversation.
     pub session_id: Option<String>,
@@ -69,7 +77,15 @@ impl Runner {
     }
 
     pub fn args_for(&self, turn: &Turn<'_>) -> Vec<String> {
-        let mut args = vec!["--print".into(), "--output-format".into(), "json".into()];
+        self.args_with(turn, ["--print", "--output-format", "json"])
+    }
+
+    fn args_with<'b>(
+        &self,
+        turn: &Turn<'_>,
+        head: impl IntoIterator<Item = &'b str>,
+    ) -> Vec<String> {
+        let mut args: Vec<String> = head.into_iter().map(str::to_owned).collect();
 
         // --session-id pins a new conversation to an id we chose. --resume continues one that
         // already exists. Sending both is an error, which is why `resume` is a flag on the
@@ -153,6 +169,7 @@ pub fn parse(stdout: &str) -> Result<Answer> {
 
     Ok(Answer {
         text,
+        interrupted: false,
         session_id: envelope.session_id,
         cost_usd: envelope.total_cost_usd,
     })

@@ -18,6 +18,7 @@ use carl::audio::Mic;
 use carl::{Heard, ThreadId, Tier, Voice, Whisper, heard};
 
 mod mouth;
+mod narrate;
 mod reply;
 
 use mouth::Mouth;
@@ -26,11 +27,18 @@ use mouth::Mouth;
 const WINDOW_SECS: f32 = 3.0;
 /// How often the idle loop wakes up to look at that window.
 const STEP_SECS: f32 = 0.6;
-/// How long you have to stop talking before Carl decides you are done.
-const HUSH_SECS: f32 = 0.9;
-/// A hard stop, so a noisy room cannot record forever. Fifteen seconds is longer than
-/// anyone says in one breath, and short enough that hitting it is not a lost afternoon.
-const CAP_SECS: f32 = 15.0;
+/// How long to wait for you to stop talking, and how long to wait before giving up.
+///
+/// Both are settable from the command line. There is no value that suits every person and
+/// every room, and the last three bugs in this file were all a constant that fitted the
+/// machine it was written on and nothing else.
+#[derive(Debug, Clone, Copy)]
+pub struct Timing {
+    /// Seconds of quiet that mean you have finished speaking.
+    pub hush: f32,
+    /// Seconds before Carl stops waiting.
+    pub cap: f32,
+}
 
 pub struct Ear {
     whisper: Whisper,
@@ -55,7 +63,7 @@ impl Ear {
     }
 
     /// Runs until interrupted.
-    pub fn run(&self, home: &Path) -> Result<()> {
+    pub fn run(&self, home: &Path, timing: Timing) -> Result<()> {
         // Audio scratch lives in RAM. Nothing recorded ever reaches the disk, whether it is
         // kept or not, so the discard below is a real one.
         let mic = Mic::open(
@@ -135,7 +143,7 @@ impl Ear {
             // Awake. Capture a whole sentence rather than a window, because a sentence can
             // easily run longer than one.
             eprint!("  listening... ");
-            let wav = mic.utterance(HUSH_SECS, CAP_SECS, hush)?;
+            let wav = mic.utterance(timing.hush, timing.cap, hush)?;
             let text = self.whisper.transcribe(Tier::Talk, wav)?;
             eprintln!("heard: {text:?}");
 

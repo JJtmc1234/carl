@@ -132,10 +132,12 @@ Slack message can be longer than the argument limit and can contain anything at 
 | the microphone | done | 6 |
 | whisper, two tier | done | 6 |
 | Carl's voice | done | 7 |
-| the listen loop | wake path confirmed on this machine, the awake path is being fixed | |
+| streaming answers | done | 6 |
+| sentences from a stream | done | 10 |
+| the listen loop | wake path confirmed on this machine, the rest needs a real conversation | |
 | Slack | not built | |
 
-69 tests, clippy clean at deny warnings.
+95 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -222,3 +224,37 @@ The voice is reachable only through a type that demands the microphone as an arg
 does not use it for anything except switching it off. A spoken line that forgets to mute
 would fail silently and sound like Carl talking to himself, so the wrong version is made
 impossible to write rather than left to memory.
+
+## saying it before it is finished
+
+Claude is the slow part by a wide margin and nothing here changes that. What can change is
+how much of it is spent in silence.
+
+`--output-format stream-json` emits one JSON object per line as the answer is written. Carl
+reads the text deltas, collects them into sentences, and speaks each one as it lands.
+
+Measured on one four sentence answer.
+
+| moment | time |
+|---|---|
+| first token | 5.8s |
+| first sentence, which is when Carl now starts talking | 7.1s |
+| whole answer, which is when he used to start | 9.4s |
+
+So it saves the tail, 2.3s here and more on a longer answer. It does nothing about the wait
+before the first word, because that is Claude thinking.
+
+Two things about this were not obvious.
+
+Splitting a stream into sentences is not the same job as tidying a finished answer. A code
+fence opens in one chunk and closes four seconds later, and the decision about whether to
+read a line aloud has to be made before the closing fence exists. So the buffer holds text
+until it is certain what that text is: a newline for anything that might be markup, a full
+stop for ordinary prose. There is a test that feeds the same answer one character at a time
+and demands the identical result, because chunk boundaries come off the network and must not
+change a single word.
+
+The callback that speaks a sentence blocks for as long as the sentence takes. That would
+stall Claude if the same thread were reading its output, so a reader thread drains it into a
+channel and Claude writes at full speed while Carl talks. Third time that pattern has been
+the answer in this project.

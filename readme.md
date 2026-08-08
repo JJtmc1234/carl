@@ -71,18 +71,44 @@ next" does not look. "Should I put it here" does, because *here* has no meaning 
 sentence and can only mean the screen. This matters because GNOME flashes the display on every
 screenshot and gives no way to turn it off.
 
+You can talk over him. Three tenths of a second of you speaking stops him mid word, and what
+you said to interrupt is kept as the start of your next sentence. That needs the echo
+canceller running, see below. Without it he mutes the microphone while he speaks and has to
+finish.
+
 ### what it costs, end to end
 
 | step | time |
 |---|---|
 | you speak | as long as you take |
+| quiet before he decides you are done | 0.9s, `--hush` to change it |
 | whisper `small.en` | ~0.9s |
 | screenshot, only when needed | ~0.3s, plus a white flash |
-| **claude** | **5 to 25s** |
+| **claude, to its first word** | **1 to 6s** |
+| **claude, to its last word** | **9 to 25s** |
 | piper and playback | ~0.3s |
 
-Claude dominates and nothing else is close. This is good for "what should I research next"
-and not a conversation you can interrupt.
+Claude dominates and nothing else is close.
+
+He speaks each sentence as it is written rather than waiting for the last word. Measured on
+one four sentence answer: first token at 5.8s, first sentence at 7.1s, whole answer at 9.4s.
+So it saves the 2.3s tail on a short answer and more on a long one. It does not help with the
+wait before the first word, because that is Claude thinking and nothing here can touch it.
+
+### the echo canceller
+
+```sh
+pipewire -c etc/carl-aec.conf &
+```
+
+Run it before `carl listen`. It creates a speaker Carl plays into and a microphone with his
+own voice already subtracted, which is what lets him listen while he talks. Measured with
+Carl speaking, his voice reaches the plain microphone at rms 0.048 and the cancelled one at
+0.0017. It also suppresses room noise on the way through, which took this room from 0.24
+to 0.001.
+
+It is a separate process, so it can be stopped at any time and nothing else on the machine
+notices. Carl checks for it at startup and says which mode he is in.
 
 ## the exact privacy promise
 

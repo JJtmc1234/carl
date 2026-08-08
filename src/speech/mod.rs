@@ -14,7 +14,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+mod sentences;
 mod words;
+pub use sentences::Sentences;
 pub use words::speakable;
 
 use crate::{Error, Result};

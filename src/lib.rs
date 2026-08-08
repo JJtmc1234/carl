@@ -31,10 +31,11 @@ pub mod threads;
 pub mod whisper;
 
 pub use capture::{Area, Camera};
+pub use claude::Flow;
 pub use heard::{Heard, interpret, needs_screen};
 pub use log::{Entry, Log, Speaker};
 pub use memory::Memory;
-pub use speech::Voice;
+pub use speech::{Sentences, Voice};
 pub use threads::{Registry, SessionId};
 pub use whisper::{Tier, Whisper};
 

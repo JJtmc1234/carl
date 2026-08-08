@@ -56,6 +56,17 @@ enum Command {
     Listen {
         #[arg(long, default_value = "voice")]
         thread: String,
+
+        /// Seconds of quiet before Carl decides you have finished talking.
+        ///
+        /// Lower feels snappier and starts cutting you off when you pause to think. There is
+        /// no right answer here, only your right answer, so it is a flag rather than a guess.
+        #[arg(long, default_value_t = 0.9)]
+        hush: f32,
+
+        /// Seconds before Carl gives up waiting for you to stop.
+        #[arg(long, default_value_t = 15.0)]
+        cap: f32,
     },
 
     /// Check the microphone and report what each stage actually heard.
@@ -109,8 +120,19 @@ fn main() -> Result<()> {
             if said.trim().is_empty() {
                 anyhow::bail!("nothing to say");
             }
-            let answer = turn::respond(&home, &thread, &said, None)?;
-            println!("{}", answer.text);
+            // Streamed rather than waited for, so the terminal shows the answer being
+            // written. Same path the voice uses, which means running this exercises it.
+            use std::io::Write;
+            let mut out = std::io::stdout();
+            let answer = turn::stream(&home, &thread, &said, None, &mut |t| {
+                let _ = out.write_all(t.as_bytes());
+                let _ = out.flush();
+                carl::Flow::Continue
+            })?;
+            println!();
+            if answer.text.trim().is_empty() {
+                anyhow::bail!("claude returned an empty answer");
+            }
             Ok(())
         }
 
@@ -134,7 +156,9 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Command::Listen { thread } => ear::Ear::new(ThreadId::new(thread)?)?.run(&home),
+        Command::Listen { thread, hush, cap } => {
+            ear::Ear::new(ThreadId::new(thread)?)?.run(&home, ear::Timing { hush, cap })
+        }
 
         Command::MicCheck { secs } => {
             use carl::audio::{Mic, SPEECH_FLOOR};

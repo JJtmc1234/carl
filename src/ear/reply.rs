@@ -6,21 +6,38 @@ use anyhow::Result;
 use carl::audio::Mic;
 
 use super::Ear;
+use super::narrate::Narration;
 use crate::turn;
 
 impl Ear {
     /// Answers one question, looking at the screen only if the question needs it.
     pub(super) fn answer(&self, mic: &Mic, home: &Path, question: &str, hush: f32) -> Result<()> {
-        let answer = if carl::needs_screen(question) {
-            turn::look(home, &self.thread, question, carl::Area::Screen)
-        } else {
-            turn::respond(home, &self.thread, question, None)
+        // Speaks each sentence as Claude writes it. The narration has to outlive the call so
+        // the last sentence can finish playing, because dropping it kills the player mid word.
+        let mut narration = Narration::new(&self.mouth, mic, hush);
+
+        let answer = {
+            let mut on_text = |t: &str| narration.feed(t);
+            if carl::needs_screen(question) {
+                turn::look_streaming(
+                    home,
+                    &self.thread,
+                    question,
+                    carl::Area::Screen,
+                    &mut on_text,
+                )
+            } else {
+                turn::stream(home, &self.thread, question, None, &mut on_text)
+            }
         };
+        narration.finish();
 
         match answer {
             Ok(a) => {
                 println!("{}", a.text);
-                self.mouth.say(mic, &a.text, hush)?;
+                if a.interrupted {
+                    eprintln!("  (interrupted)");
+                }
             }
             // Spoken, not just printed. You are looking at a game, not at this terminal, and
             // silence after a question is indistinguishable from Carl ignoring you.
