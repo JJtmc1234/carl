@@ -53,6 +53,49 @@ cargo test
 Everything lives under `~/.carl` by default. Point `--home` somewhere else to keep a
 separate brain.
 
+## talking to him
+
+```sh
+./target/debug/carl listen
+```
+
+Say **"hey carl"** to start, then just talk. Say **"end conversation"** to finish, and Carl
+writes down whatever was worth keeping before going back to listening.
+
+Anything you say that is not addressed to Carl is never transcribed past the wake check and
+never written anywhere. Audio lives in RAM and in `/dev/shm`, never on the disk, so discarding
+it is a real deletion rather than an unlink that leaves the bytes on the SSD.
+
+He takes a picture of the screen only when the question needs one. "What should I research
+next" does not look. "Should I put it here" does, because *here* has no meaning in the
+sentence and can only mean the screen. This matters because GNOME flashes the display on every
+screenshot and gives no way to turn it off.
+
+### what it costs, end to end
+
+| step | time |
+|---|---|
+| you speak | as long as you take |
+| whisper `small.en` | ~0.9s |
+| screenshot, only when needed | ~0.3s, plus a white flash |
+| **claude** | **5 to 25s** |
+| piper and playback | ~0.3s |
+
+Claude dominates and nothing else is close. This is good for "what should I research next"
+and not a conversation you can interrupt.
+
+## the exact privacy promise
+
+Worth being precise, because a reasonable person would assume otherwise.
+
+**Audio is never kept.** Not addressed to Carl, not stored, not even transcribed past the
+two-word wake check.
+
+**Conversations you start are kept forever**, in `conversations.jsonl`, by design.
+
+So the mic being always on does not mean the room is being recorded. It means two words are
+being watched for, in memory, and everything else falls out of a three second window.
+
 ## not built yet
 
-Slack, screen capture, and voice. See `planning.md` for why the order is what it is.
+Slack. Everything it needs already exists, so it is a transport and a thread id.

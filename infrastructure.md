@@ -125,7 +125,23 @@ Slack message can be longer than the argument limit and can contain anything at 
 | thread ids | done | 4 |
 | screen capture | written, untested, needs `gnome-screenshot` | 6 |
 | wake word logic | done | 12 |
-| the ear, audio and whisper | not built, needs `cmake` | |
+| the microphone | done | 3 |
+| whisper, two tier | done | 6 |
+| Carl's voice | done | 7 |
+| the listen loop | done, needs a real conversation to prove | |
 | Slack | not built | |
 
-47 tests, clippy clean at deny warnings.
+65 tests, clippy clean at deny warnings.
+
+## measured, not estimated
+
+Everything below was timed on this machine rather than guessed.
+
+| thing | number |
+|---|---|
+| screen capture | 3840x2400 |
+| whisper `tiny.en`, 11s of speech | 0.7s |
+| whisper `small.en`, 11s of speech | 3.4s |
+| whisper `large-v3-turbo`, 11s of speech | 13.9s, unusable in a loop |
+| piper, 5.2s of speech | 0.21s, real time factor 0.04 |
+| a whole spoken exchange | 6 to 27s, almost all of it Claude |

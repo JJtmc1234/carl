@@ -6,6 +6,7 @@
 //! Slack is not wired up yet. When it is, it calls the same `respond` path with a thread id
 //! built from the channel and thread timestamp, so the transport is the only new part.
 
+mod ear;
 mod turn;
 
 use std::path::PathBuf;
@@ -46,6 +47,15 @@ enum Command {
         /// Just the focused window instead of the whole screen.
         #[arg(long)]
         window: bool,
+    },
+
+    /// Listen on the microphone until interrupted.
+    ///
+    /// Say "hey carl" to start, "end conversation" to finish. Anything not addressed to
+    /// Carl is never transcribed past the wake check and never written down.
+    Listen {
+        #[arg(long, default_value = "voice")]
+        thread: String,
     },
 
     /// Show a conversation as it was recorded.
@@ -112,6 +122,8 @@ fn main() -> Result<()> {
             println!("{}", answer.text);
             Ok(())
         }
+
+        Command::Listen { thread } => ear::Ear::new(ThreadId::new(thread)?)?.run(&home),
 
         Command::History { thread, all } => {
             let entries = carl::log::read(home.join("conversations.jsonl"))?;

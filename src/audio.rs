@@ -40,10 +40,14 @@ impl Mic {
         let child = Command::new("arecord")
             .args([
                 "--quiet",
-                "--format", "S16_LE",
-                "--rate", &RATE.to_string(),
-                "--channels", "1",
-                "--file-type", "raw",
+                "--format",
+                "S16_LE",
+                "--rate",
+                &RATE.to_string(),
+                "--channels",
+                "1",
+                "--file-type",
+                "raw",
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -119,6 +123,70 @@ impl Mic {
     pub fn forget(&mut self) {
         self.ring.clear();
     }
+
+    /// Records one whole thing you said, from now until you stop talking.
+    ///
+    /// The sliding window is right for spotting a wake word and wrong for capturing a
+    /// sentence, because a sentence can be longer than the window and would be cut off at the
+    /// front. This grows instead, and stops when you have been quiet for `hush_secs`.
+    ///
+    /// `cap_secs` is a hard stop. Without it, a noisy room or a stuck microphone records
+    /// forever and Carl never answers.
+    pub fn utterance(&mut self, hush_secs: f32, cap_secs: f32) -> Result<&Path> {
+        let hush_bytes = (RATE as f32 * hush_secs) as usize * BYTES_PER_SAMPLE;
+        let cap_bytes = (RATE as f32 * cap_secs) as usize * BYTES_PER_SAMPLE;
+
+        // Start from what is already in the window. The first syllable of an answer often
+        // lands before the loop gets here, and losing it costs the whole word.
+        let mut pcm = std::mem::take(&mut self.ring);
+        let mut buf = vec![0u8; 4096];
+
+        {
+            let stdout = self
+                .child
+                .stdout
+                .as_mut()
+                .ok_or_else(|| Error::Refused("the microphone pipe closed".into()))?;
+
+            while pcm.len() < cap_bytes {
+                let n = stdout.read(&mut buf)?;
+                if n == 0 {
+                    return Err(Error::Refused("the microphone stopped".into()));
+                }
+                pcm.extend_from_slice(&buf[..n]);
+
+                // Stop once the tail has been quiet long enough, but only after there is
+                // enough audio for a tail to mean anything.
+                if pcm.len() > hush_bytes * 2 {
+                    let tail = &pcm[pcm.len() - hush_bytes..];
+                    if peak_of(tail) < SPEECH_FLOOR {
+                        break;
+                    }
+                }
+            }
+        }
+
+        write_wav(&self.scratch, &pcm)?;
+        // Dropped here rather than kept. Once it is a file the buffer is dead weight, and
+        // holding a whole utterance in two places is exactly the kind of copy that outlives
+        // the promise not to keep it.
+        drop(pcm);
+        Ok(&self.scratch)
+    }
+}
+
+/// Anything below this is a quiet room rather than speech.
+///
+/// Set by ear rather than derived. Too low and Carl transcribes fan noise all day, too high
+/// and he misses someone speaking softly.
+pub const SPEECH_FLOOR: f32 = 0.02;
+
+fn peak_of(pcm: &[u8]) -> f32 {
+    let mut peak = 0i32;
+    for pair in pcm.chunks_exact(BYTES_PER_SAMPLE) {
+        peak = peak.max((i16::from_le_bytes([pair[0], pair[1]]) as i32).abs());
+    }
+    peak as f32 / i16::MAX as f32
 }
 
 impl Drop for Mic {
