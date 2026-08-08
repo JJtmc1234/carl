@@ -140,11 +140,26 @@ fn main() -> Result<()> {
             use carl::audio::{Mic, SPEECH_FLOOR};
             let mic = Mic::open(secs as f32 + 1.0, std::path::Path::new("/dev/shm/carl"))?;
 
+            // Measure the empty room first. This is the number that decides when Carl
+            // thinks you have stopped talking, and getting it wrong the loud way makes him
+            // record until his cap on every turn.
+            print!("hold still, measuring the room... ");
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+            let hush = mic.calibrate(1.5);
+            let room = mic.loudness();
+            println!("room {room:.3}, so quiet means below {hush:.3}");
+
             println!("say \"hey carl, what should I do now\" ... recording {secs}s");
+            mic.forget();
             mic.wait(secs as f32);
 
             let level = mic.loudness();
-            println!("  level      {level:.3}   (speech floor is {SPEECH_FLOOR})");
+            println!("  level      {level:.3}   (rms while speaking)");
+            if level < hush {
+                println!("  -> that was no louder than the room. Nothing to transcribe.");
+                return Ok(());
+            }
             if level < SPEECH_FLOOR {
                 println!("  -> too quiet. Raise the mic in Settings, Sound, Input.");
                 return Ok(());

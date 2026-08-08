@@ -55,6 +55,7 @@ sign it is a real rule and not a preference.
       |  16 kHz wav, written to /dev/shm so discarded audio never touches the disk
       v
   audio.rs                            one long lived arecord, sliding window
+    calibrate    ->  measure the empty room, so "quiet" is this room and not a guess
     level gate   ->  is anyone speaking at all, before whisper runs
     whisper tiny ->  what did they say, 0.7s per 11s of audio
       |
@@ -127,13 +128,13 @@ Slack message can be longer than the argument limit and can contain anything at 
 | thread ids | done | 4 |
 | screen capture | done, captured this machine at 3840x2400 | 6 |
 | wake word logic | done | 12 |
-| the microphone | done | 3 |
+| the microphone | done | 6 |
 | whisper, two tier | done | 6 |
 | Carl's voice | done | 7 |
-| the listen loop | written, every part it calls is proven, the loop itself is not | |
+| the listen loop | wake path confirmed on this machine, the awake path is being fixed | |
 | Slack | not built | |
 
-65 tests, clippy clean at deny warnings.
+69 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -147,3 +148,16 @@ Everything below was timed on this machine rather than guessed.
 | whisper `large-v3-turbo`, 11s of speech | 13.9s, unusable in a loop |
 | piper, 5.2s of speech | 0.21s, real time factor 0.04 |
 | a whole spoken exchange | 6 to 27s, almost all of it Claude |
+
+## measuring loudness, and why peak was wrong
+
+Carl decides you have stopped talking by watching how loud the last moment was. The first
+version used peak, the largest single sample in the window. That is the wrong measure.
+
+One key press sends peak to 0.24 in a room that is otherwise silent. The threshold was 0.02,
+so the tail never counted as quiet, so the recording never stopped early and ran to its cap
+of thirty seconds on every single turn. Carl looked deaf. He was listening the whole time.
+
+Two changes. Loudness is now RMS, which averages over the window and ignores a lone click.
+And the threshold is measured from the room at startup rather than written into the source,
+because a laptop fan and a quiet study are not the same number and no constant fits both.

@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use carl::audio::{Mic, SPEECH_FLOOR};
+use carl::audio::Mic;
 use carl::{Heard, ThreadId, Tier, Voice, Whisper, heard};
 
 use crate::turn;
@@ -24,8 +24,9 @@ const WINDOW_SECS: f32 = 3.0;
 const STEP_SECS: f32 = 0.6;
 /// How long you have to stop talking before Carl decides you are done.
 const HUSH_SECS: f32 = 0.9;
-/// A hard stop, so a noisy room cannot record forever.
-const CAP_SECS: f32 = 30.0;
+/// A hard stop, so a noisy room cannot record forever. Fifteen seconds is longer than
+/// anyone says in one breath, and short enough that hitting it is not a lost afternoon.
+const CAP_SECS: f32 = 15.0;
 
 pub struct Ear {
     whisper: Whisper,
@@ -49,6 +50,13 @@ impl Ear {
         let mic = Mic::open(WINDOW_SECS, Path::new("/dev/shm/carl"))?;
         let mut awake = false;
 
+        // Measure the room before listening to it. A fixed threshold cannot fit a laptop
+        // fan and a quiet study at the same time, and getting it wrong in the loud
+        // direction means Carl records until his cap every single time.
+        eprint!("measuring the room... ");
+        let hush = mic.calibrate(1.5);
+        eprintln!("quiet is below {hush:.3}");
+
         eprintln!("listening. say \"hey carl\" to start, \"end conversation\" to finish.");
 
         loop {
@@ -58,7 +66,7 @@ impl Ear {
                 // Silence is most of a room's day. Running whisper over it costs real time
                 // for a guaranteed empty answer, so the level check comes first.
                 let level = mic.loudness();
-                if level < SPEECH_FLOOR {
+                if level < hush {
                     continue;
                 }
 
@@ -100,9 +108,10 @@ impl Ear {
 
             // Awake. Capture a whole sentence rather than a window, because a sentence can
             // easily run longer than one.
-            let wav = mic.utterance(HUSH_SECS, CAP_SECS)?;
+            eprint!("  listening... ");
+            let wav = mic.utterance(HUSH_SECS, CAP_SECS, hush)?;
             let text = self.whisper.transcribe(Tier::Talk, wav)?;
-            eprintln!("  [awake] heard: {text:?}");
+            eprintln!("heard: {text:?}");
 
             match heard::interpret(&text, true) {
                 Heard::End => {

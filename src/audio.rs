@@ -28,7 +28,8 @@ use crate::{Error, Result};
 pub const RATE: u32 = 16_000;
 const BYTES_PER_SAMPLE: usize = 2;
 
-/// Anything below this is a quiet room rather than speech.
+/// A floor to fall back on when calibration is impossible, and a hard minimum so a silent
+/// room cannot produce a threshold of zero that nothing ever falls below.
 pub const SPEECH_FLOOR: f32 = 0.02;
 
 #[derive(Default)]
@@ -132,8 +133,26 @@ impl Mic {
         }
     }
 
+    /// Loudness as RMS, not peak.
+    ///
+    /// Peak is the wrong measure for "is anyone talking". One keyboard click sends peak to
+    /// 0.24 in a silent room, so a peak based silence test never fires and a recording runs
+    /// to its cap. RMS averages over the window and tracks how loud it actually is.
     pub fn loudness(&self) -> f32 {
-        peak_of(&self.window().0)
+        rms_of(&self.window().0)
+    }
+
+    /// Measures the room so the silence threshold fits it rather than a guess.
+    ///
+    /// Returns the level below which this room counts as quiet. Rooms differ by more than
+    /// any constant can cover: a laptop fan, an air conditioner and a quiet study are not
+    /// the same number, and picking one wrong either records forever or cuts you off.
+    pub fn calibrate(&self, secs: f32) -> f32 {
+        self.wait(secs);
+        let room = rms_of(&self.window().0);
+        // Comfortably above the room but far below speech. Speech typically sits ten times
+        // over its own background, so tripling leaves room for both.
+        (room * 3.0).max(SPEECH_FLOOR)
     }
 
     /// Writes the current window out for whisper to read.
@@ -155,7 +174,7 @@ impl Mic {
     ///
     /// The window is right for spotting a wake word and wrong for a sentence, which can run
     /// longer than the window and would lose its front. This grows instead.
-    pub fn utterance(&self, hush_secs: f32, cap_secs: f32) -> Result<&Path> {
+    pub fn utterance(&self, hush_secs: f32, cap_secs: f32, hush_level: f32) -> Result<&Path> {
         let hush = (RATE as f32 * hush_secs) as usize * BYTES_PER_SAMPLE;
         let deadline = Instant::now() + Duration::from_secs_f32(cap_secs);
 
@@ -175,7 +194,7 @@ impl Mic {
             }
             drop(s);
 
-            if pcm.len() > hush * 2 && peak_of(&pcm[pcm.len() - hush..]) < SPEECH_FLOOR {
+            if pcm.len() > hush * 2 && rms_of(&pcm[pcm.len() - hush..]) < hush_level {
                 break;
             }
         }
@@ -204,6 +223,23 @@ impl Drop for Mic {
     }
 }
 
+/// Root mean square, the honest measure of how loud something is.
+fn rms_of(pcm: &[u8]) -> f32 {
+    if pcm.len() < BYTES_PER_SAMPLE {
+        return 0.0;
+    }
+    let mut sum = 0f64;
+    let mut n = 0u64;
+    for pair in pcm.chunks_exact(BYTES_PER_SAMPLE) {
+        let s = i16::from_le_bytes([pair[0], pair[1]]) as f64 / i16::MAX as f64;
+        sum += s * s;
+        n += 1;
+    }
+    ((sum / n as f64).sqrt()) as f32
+}
+
+/// Kept only so the regression test can show what peak does wrong. Nothing ships using it.
+#[cfg(test)]
 fn peak_of(pcm: &[u8]) -> f32 {
     let mut peak = 0i32;
     for pair in pcm.chunks_exact(BYTES_PER_SAMPLE) {
@@ -266,12 +302,38 @@ mod tests {
 
     #[test]
     fn silence_reads_as_quiet_and_a_tone_does_not() {
-        assert_eq!(peak_of(&vec![0u8; 1000]), 0.0);
+        assert_eq!(rms_of(&vec![0u8; 1000]), 0.0);
 
         let loud: Vec<u8> = (0..500)
             .flat_map(|i| (if i % 2 == 0 { 16000i16 } else { -16000 }).to_le_bytes())
             .collect();
-        assert!(peak_of(&loud) > SPEECH_FLOOR);
+        assert!(rms_of(&loud) > SPEECH_FLOOR);
+    }
+
+    /// The bug that made Carl seem deaf after waking. One click in an otherwise silent room
+    /// sends peak over the floor, so a peak based silence test never fires and the recording
+    /// runs to its cap. RMS sees the same room as quiet.
+    #[test]
+    fn one_click_fools_peak_and_does_not_fool_rms() {
+        let mut room = vec![0u8; 16000 * 2];
+        // A single loud sample, like a key press.
+        room[1000..1002].copy_from_slice(&30000i16.to_le_bytes());
+
+        assert!(
+            peak_of(&room) > SPEECH_FLOOR,
+            "peak is fooled by one transient, which is the whole problem"
+        );
+        assert!(
+            rms_of(&room) < SPEECH_FLOOR,
+            "rms should still see a quiet room"
+        );
+    }
+
+    /// A silent room must not calibrate to a threshold of zero, or nothing is ever quieter
+    /// than it and every recording runs to its cap.
+    #[test]
+    fn calibration_never_returns_zero() {
+        assert_eq!((0.0f32 * 3.0).max(SPEECH_FLOOR), SPEECH_FLOOR);
     }
 
     /// The bug this whole module was rewritten for. The ring must never grow past the
