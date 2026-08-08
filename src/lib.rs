@@ -25,12 +25,14 @@ pub mod heard;
 pub mod log;
 pub mod memory;
 pub mod threads;
+pub mod whisper;
 
 pub use capture::{Area, Camera};
 pub use heard::{Heard, interpret};
 pub use log::{Entry, Log, Speaker};
 pub use memory::Memory;
 pub use threads::{Registry, SessionId};
+pub use whisper::{Tier, Whisper};
 
 use serde::{Deserialize, Serialize};
 

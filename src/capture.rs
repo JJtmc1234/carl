@@ -45,8 +45,14 @@ impl Camera {
         if area == Area::Window {
             args.push("--window".into());
         }
-        // No sound, no pointer, no flash. Carl is looking at a game, and a shutter noise over
-        // the top of it every few seconds would be its own kind of failure.
+        // The pointer is included because where you are pointing is usually the thing you
+        // are asking about.
+        //
+        // There is no way to suppress the white flash. gnome-screenshot has no flag for it,
+        // there is no gsetting, and the flash comes from GNOME Shell itself. The Shell's own
+        // D-Bus method does take a flash boolean, but it answers AccessDenied to any caller
+        // it has not sanctioned, so that route is closed. Carl flashes the screen every time
+        // he looks, and during a game that is genuinely unpleasant.
         args.push("--include-pointer".into());
         args.push("--file".into());
         args.push(to.to_string_lossy().into_owned());
@@ -62,15 +68,35 @@ impl Camera {
         // Carl would confidently describe a screen from ten minutes ago.
         let _ = std::fs::remove_file(to);
 
-        let out = Command::new(&self.program)
-            .args(self.args_for(area, to))
-            .output()
-            .map_err(|e| {
-                Error::Refused(format!(
-                    "cannot run {} ({e}). Install it with: sudo apt install gnome-screenshot",
-                    self.program.display()
-                ))
-            })?;
+        let mut cmd = Command::new(&self.program);
+        cmd.args(self.args_for(area, to));
+
+        // Strip the snap environment before spawning.
+        //
+        // Carl may be started from inside a snap, and VS Code is one. A snap sets
+        // LD_LIBRARY_PATH at an old bundled glibc, which a normally installed
+        // gnome-screenshot then loads instead of the system one and dies with
+        // "undefined symbol: __libc_pthread_init". The failure names a symbol rather than a
+        // cause, so it is worth removing rather than debugging twice.
+        for leaked in [
+            "LD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "SNAP",
+            "SNAP_NAME",
+            "SNAP_REVISION",
+            "GTK_PATH",
+            "GIO_MODULE_DIR",
+            "GSETTINGS_SCHEMA_DIR",
+        ] {
+            cmd.env_remove(leaked);
+        }
+
+        let out = cmd.output().map_err(|e| {
+            Error::Refused(format!(
+                "cannot run {} ({e}). Install it with: sudo apt install gnome-screenshot",
+                self.program.display()
+            ))
+        })?;
 
         if !out.status.success() {
             return Err(Error::Refused(format!(
