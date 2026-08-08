@@ -162,6 +162,14 @@ goes when you are speaking *to* somebody and almost never where it goes when you
 Carl butting into other people's conversation, which is how a bot gets thrown out of a
 channel, so it errs towards staying quiet.
 
+**You only have to say his name once.** Once Carl has answered in a thread, that thread is
+his, and follow up messages in it need no name and no mention. Saying his name is how a
+conversation starts, not a toll on every sentence of it. The voice already worked this way,
+where "hey carl" wakes him and then you just talk.
+
+Being in one thread does not open the whole channel. A new top level message still has to
+address him.
+
 Socket Mode, which means no public URL and no hosting. Carl dials out to Slack over a
 websocket rather than Slack calling in, so a laptop behind a router works as well as a server.
 

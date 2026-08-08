@@ -68,6 +68,14 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
                 continue;
             }
 
+            // Being called by name is not being asked anything. Answered here rather than by
+            // Claude, because five seconds and a model call to say "Yes?" is absurd, and
+            // because an empty question is what broke this the first time.
+            if ask.text.trim().is_empty() {
+                let _ = api.post(&ask.channel, &ask.thread_ts, "Yes?");
+                continue;
+            }
+
             let reply = match answer(&home, &ask) {
                 Ok(text) if !text.trim().is_empty() => text,
                 Ok(_) => "I had nothing to say to that, which is probably a bug.".to_string(),

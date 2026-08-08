@@ -109,6 +109,7 @@ impl Runner {
     pub fn ask(&self, turn: &Turn<'_>) -> Result<Answer> {
         use std::io::Write;
 
+        check(turn)?;
         std::fs::create_dir_all(turn.workdir)?;
 
         let mut child = Command::new(&self.program)
@@ -142,6 +143,21 @@ impl Runner {
 
         parse(&stdout)
     }
+}
+
+/// Refuses a turn that cannot possibly work.
+///
+/// An empty prompt reaches the CLI as no prompt at all, and it answers "Input must be
+/// provided either through stdin or as a prompt argument", which is a true sentence that
+/// tells you nothing about where the empty question came from. Better to fail here, next to
+/// the caller that built it.
+pub(crate) fn check(turn: &Turn<'_>) -> Result<()> {
+    if turn.prompt.trim().is_empty() {
+        return Err(Error::Claude(
+            "refusing to ask claude an empty question".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Pulls the answer out of the JSON envelope.
@@ -232,6 +248,41 @@ mod tests {
             .position(|a| a == "--append-system-prompt")
             .unwrap();
         assert_eq!(args[at + 1], "JJ is 11.");
+    }
+
+    /// The bug that reached a real Slack channel. Somebody typed only "Carl", which is being
+    /// called rather than being asked, and the empty question went all the way to the CLI.
+    /// It answered "Input must be provided", which is true and says nothing about the cause.
+    #[test]
+    fn an_empty_question_is_refused_here_rather_than_by_the_cli() {
+        let s = session();
+        for prompt in ["", "   ", "\n\t "] {
+            let err = check(&Turn {
+                session: &s,
+                resume: false,
+                prompt,
+                extra_system: None,
+                workdir: Path::new("/tmp"),
+            })
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("empty question"), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_real_question_passes_the_check() {
+        let s = session();
+        assert!(
+            check(&Turn {
+                session: &s,
+                resume: false,
+                prompt: "what should I research",
+                extra_system: None,
+                workdir: Path::new("/tmp"),
+            })
+            .is_ok()
+        );
     }
 
     #[test]

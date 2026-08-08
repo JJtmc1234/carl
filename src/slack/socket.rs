@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tungstenite::Message;
 
-use super::{Api, Ask, Me, ask_from};
+use super::{Api, Ask, Engaged, Me, ask_from};
 use crate::Result;
 
 /// How many recent events to remember for spotting a resend.
@@ -25,6 +25,10 @@ const REMEMBERED: usize = 64;
 /// Reads envelopes until the process is killed, handing questions to `on_ask`.
 pub fn serve(api: &Api, me: &Me, on_ask: &mut dyn FnMut(Ask)) -> Result<()> {
     let mut seen: VecDeque<String> = VecDeque::new();
+    // Threads Carl has answered in. Kept here rather than in the worker because it has to be
+    // updated in step with the decision to answer, and the worker is deliberately behind a
+    // queue that can be several messages long.
+    let mut engaged = Engaged::new();
     let mut backoff = Duration::from_secs(1);
 
     loop {
@@ -121,8 +125,11 @@ pub fn serve(api: &Api, me: &Me, on_ask: &mut dyn FnMut(Ask)) -> Result<()> {
                 }
             }
 
-            match ask_from(payload, &me.user_id, &me.bot_id) {
-                Some(ask) => on_ask(ask),
+            match ask_from(payload, &me.user_id, &me.bot_id, &engaged) {
+                Some(ask) => {
+                    engaged.join(&ask.thread_ts);
+                    on_ask(ask);
+                }
                 // Says why rather than going quiet. "Carl ignored me" and "Carl never heard
                 // me" look identical from the outside and are not the same problem.
                 None => eprintln!("     ignored, not a question addressed to Carl"),

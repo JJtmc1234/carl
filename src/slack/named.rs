@@ -185,6 +185,16 @@ mod tests {
         assert_eq!(addressed("hey carl").as_deref(), Some(""));
     }
 
+    /// The exact thing JJ typed when it did not work, so if it ever stops working again this
+    /// says whether the fault is here or in Slack.
+    #[test]
+    fn the_message_jj_actually_sent() {
+        assert_eq!(
+            addressed("cARL HOW ARE YOU").as_deref(),
+            Some("HOW ARE YOU")
+        );
+    }
+
     /// Punctuation attached to the name must not hide it.
     #[test]
     fn punctuation_does_not_hide_the_name() {

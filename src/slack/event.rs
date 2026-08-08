@@ -9,7 +9,7 @@
 //! It is the same shape as the microphone hearing the speakers, and it is worse here, because
 //! the room was only Carl talking to himself and this one has an audience.
 
-use super::named;
+use super::{Engaged, named};
 use crate::ThreadId;
 
 /// Something Carl should reply to.
@@ -31,7 +31,12 @@ pub struct Ask {
 /// Reads one Socket Mode payload. `None` for everything Carl should stay out of.
 ///
 /// `me` is Carl's own user id and `my_bot` his own bot id, both from `auth.test`.
-pub fn ask_from(payload: &serde_json::Value, me: &str, my_bot: &str) -> Option<Ask> {
+pub fn ask_from(
+    payload: &serde_json::Value,
+    me: &str,
+    my_bot: &str,
+    engaged: &Engaged,
+) -> Option<Ask> {
     let event = payload.get("event")?;
     let kind = event.get("type")?.as_str()?;
 
@@ -79,8 +84,22 @@ pub fn ask_from(payload: &serde_json::Value, me: &str, my_bot: &str) -> Option<A
         // An ordinary message in a channel Carl is in. Most of these are none of his
         // business, so his name has to be used the way you use a name when you are speaking
         // to somebody rather than about them. named.rs decides, and it is deliberately strict.
+        //
+        // Except in a thread Carl is already part of. Making somebody use his name on every
+        // message of a conversation they already started is not a conversation, it is a run
+        // of unrelated questions sitting next to each other.
         "message" if matches!(channel_type, "channel" | "group" | "mpim") => {
-            named::addressed(&strip_mention(raw, me))?
+            let said = strip_mention(raw, me);
+            let in_our_thread = event
+                .get("thread_ts")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| engaged.contains(t));
+
+            match named::addressed(&said) {
+                Some(text) => text,
+                None if in_our_thread => said,
+                None => return None,
+            }
         }
         _ => return None,
     };
@@ -131,6 +150,10 @@ mod tests {
     const ME: &str = "U0CARL";
     const MY_BOT: &str = "B0CARL";
 
+    fn nothing() -> Engaged {
+        Engaged::new()
+    }
+
     fn payload(event: serde_json::Value) -> serde_json::Value {
         serde_json::json!({ "event": event })
     }
@@ -147,6 +170,7 @@ mod tests {
             })),
             ME,
             MY_BOT,
+            &nothing(),
         )
         .expect("should be a question");
 
@@ -170,7 +194,7 @@ mod tests {
                 "text": "an answer Carl posted, arriving with no user field at all"
             }),
         ] {
-            assert_eq!(ask_from(&payload(own), ME, MY_BOT), None);
+            assert_eq!(ask_from(&payload(own), ME, MY_BOT, &nothing()), None);
         }
     }
 
@@ -184,6 +208,7 @@ mod tests {
             })),
             ME,
             MY_BOT,
+            &nothing(),
         )
         .expect("a dm is a question");
         assert_eq!(ask.text, "hello Carl");
@@ -204,7 +229,8 @@ mod tests {
                         "channel": "C01", "ts": "1.1", "text": text
                     })),
                     ME,
-                    MY_BOT
+                    MY_BOT,
+                    &nothing()
                 ),
                 None,
                 "should have stayed out of: {text}"
@@ -224,6 +250,7 @@ mod tests {
             })),
             ME,
             MY_BOT,
+            &nothing(),
         )
         .expect("his own name should reach him");
         assert_eq!(ask.text, "what should I research next");
@@ -242,7 +269,8 @@ mod tests {
                         "subtype": sub, "channel": "D01", "ts": "1.1", "text": "x"
                     })),
                     ME,
-                    MY_BOT
+                    MY_BOT,
+                    &nothing()
                 ),
                 None,
                 "{sub} should be ignored"
@@ -262,6 +290,7 @@ mod tests {
             })),
             ME,
             MY_BOT,
+            &nothing(),
         )
         .unwrap();
         assert_eq!(ask.thread_ts, "1700000000.000100", "must join the parent");
@@ -278,7 +307,8 @@ mod tests {
                     "ts": "1.1", "text": "<@U0CARL>"
                 })),
                 ME,
-                MY_BOT
+                MY_BOT,
+                &nothing()
             ),
             None
         );
@@ -296,6 +326,7 @@ mod tests {
             })),
             ME,
             MY_BOT,
+            &nothing(),
         )
         .expect("Alex must be heard");
         assert!(ask.from_agent, "and must be known to be an agent");
@@ -311,9 +342,57 @@ mod tests {
             })),
             ME,
             MY_BOT,
+            &nothing(),
         )
         .unwrap();
         assert!(!ask.from_agent);
+    }
+
+    /// What JJ hit. He said "carl how are you", got an answer, then asked a follow up in the
+    /// same thread without the name and was ignored.
+    #[test]
+    fn a_follow_up_in_carls_own_thread_needs_no_name() {
+        let mut engaged = Engaged::new();
+        engaged.join("1700000000.000100");
+
+        let event = serde_json::json!({
+            "type": "message", "channel_type": "channel", "user": "U0JJ",
+            "channel": "C01", "ts": "1700000009.000900",
+            "thread_ts": "1700000000.000100",
+            "text": "and what about coal"
+        });
+
+        assert_eq!(
+            ask_from(&payload(event.clone()), ME, MY_BOT, &nothing()),
+            None,
+            "without the thread being his, this is somebody else's conversation"
+        );
+
+        let ask = ask_from(&payload(event), ME, MY_BOT, &engaged)
+            .expect("in his own thread it is for him");
+        assert_eq!(ask.text, "and what about coal");
+    }
+
+    /// Being in one thread must not make Carl answer everything in the channel.
+    #[test]
+    fn being_in_a_thread_does_not_open_the_whole_channel() {
+        let mut engaged = Engaged::new();
+        engaged.join("1700000000.000100");
+
+        assert_eq!(
+            ask_from(
+                &payload(serde_json::json!({
+                    "type": "message", "channel_type": "channel", "user": "U0JJ",
+                    "channel": "C01", "ts": "1700000050.000000",
+                    "text": "morning everyone"
+                })),
+                ME,
+                MY_BOT,
+                &engaged
+            ),
+            None,
+            "a top level message is not part of his thread"
+        );
     }
 
     #[test]

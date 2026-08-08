@@ -21,6 +21,7 @@
 
 mod a2a;
 mod api;
+mod engaged;
 mod event;
 mod named;
 mod patience;
@@ -29,6 +30,7 @@ mod tokens;
 
 pub use a2a::{Kind, Message, START_TTL, compose, header, parse};
 pub use api::{Api, Me, hint};
+pub use engaged::Engaged;
 pub use event::{Ask, ask_from, strip_mention};
 pub use named::{NAMES, addressed};
 pub use patience::{DEFAULT_LIMIT, Patience};

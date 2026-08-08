@@ -137,9 +137,10 @@ Slack message can be longer than the argument limit and can contain anything at 
 | the listen loop | wake path confirmed on this machine, the rest needs a real conversation | |
 | slack, socket mode | done | 15 |
 | a2a, agent to agent | done, untested against Alex | 15 |
-| answering to his own name | done | 7 |
+| answering to his own name | done | 8 |
+| staying in a thread once addressed | done | 4 |
 
-136 tests, clippy clean at deny warnings.
+145 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 

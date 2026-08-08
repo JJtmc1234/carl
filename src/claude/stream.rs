@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{Receiver, channel};
 
-use super::{Answer, Runner, Turn, parse};
+use super::{Answer, Runner, Turn, check, parse};
 use crate::{Error, Result};
 
 /// A piece of an answer as it arrives.
@@ -44,6 +44,7 @@ impl Runner {
         turn: &Turn<'_>,
         on_text: &mut dyn FnMut(&str) -> Flow,
     ) -> Result<Answer> {
+        check(turn)?;
         std::fs::create_dir_all(turn.workdir)?;
 
         let mut child = Command::new(&self.program)
