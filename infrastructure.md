@@ -54,12 +54,12 @@ sign it is a real rule and not a preference.
       |
       |  16 kHz wav, written to /dev/shm so discarded audio never touches the disk
       v
-  ear (voice.rs)                      not built yet, blocked on cmake
-    silero VAD  ->  is anyone speaking at all
-    whisper tiny -> what did they say, cheaply
+  audio.rs                            one long lived arecord, sliding window
+    level gate   ->  is anyone speaking at all, before whisper runs
+    whisper tiny ->  what did they say, 0.7s per 11s of audio
       |
       v
-  heard.rs                            done, 12 tests
+  heard.rs                            the rules that decide what is kept
     idle    + no wake word  ->  destroy the recording, keep nothing
     idle    + "hey carl"    ->  wake, and keep the question on the same breath
     awake   + anything      ->  send it to Carl
@@ -72,7 +72,7 @@ sign it is a real rule and not a preference.
     3. ask claude, resuming that session
     4. record the answer, or record the failure
       |
-      +---> capture.rs   gnome-screenshot, for "what am I looking at"
+      +---> capture.rs   gnome-screenshot, only when the question needs a look
       +---> memory.rs    notes injected into every conversation
       +---> log.rs       the permanent record
       |
@@ -80,8 +80,10 @@ sign it is a real rule and not a preference.
   claude CLI  --print --output-format json --resume <session>
       |
       v
-  spd-say                             speaks the answer
+  speech.rs                           piper into aplay, 0.21s for 5s of speech
 ```
+
+`ear.rs` drives that loop and is the only place the two states live.
 
 ## the privacy promise, and how it is kept
 
@@ -123,12 +125,12 @@ Slack message can be longer than the argument limit and can contain anything at 
 | memory | done | 6 |
 | the claude driver | done | 6 |
 | thread ids | done | 4 |
-| screen capture | written, untested, needs `gnome-screenshot` | 6 |
+| screen capture | done, captured this machine at 3840x2400 | 6 |
 | wake word logic | done | 12 |
 | the microphone | done | 3 |
 | whisper, two tier | done | 6 |
 | Carl's voice | done | 7 |
-| the listen loop | done, needs a real conversation to prove | |
+| the listen loop | written, every part it calls is proven, the loop itself is not | |
 | Slack | not built | |
 
 65 tests, clippy clean at deny warnings.
