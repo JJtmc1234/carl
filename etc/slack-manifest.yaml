@@ -14,9 +14,16 @@
 #   chat:write          reply
 #   im:history          hear direct messages
 #   im:read             see which conversations are direct messages
+#   channels:history    hear his own name, without needing an at sign
+#   groups:history      the same in private channels
 #
-# Deliberately absent: channels:history. Carl does not read channels he has not been spoken
-# to in, and not holding that scope means he cannot, rather than choosing not to.
+# channels:history is the one worth thinking about. It means Carl receives every message in
+# every channel he is in, which is the only way he can notice somebody typing his name
+# without an at sign. He does not record or answer any of them unless his name is used the
+# way you use a name when speaking to somebody: at the start or the end. See src/slack/named.rs.
+#
+# If that is more than you want, take these two scopes back out and reinstall. Mentions and
+# direct messages carry on working without them.
 
 display_information:
   name: Carl
@@ -42,12 +49,16 @@ oauth_config:
       - chat:write
       - im:history
       - im:read
+      - channels:history
+      - groups:history
 
 settings:
   event_subscriptions:
     bot_events:
       - app_mention
       - message.im
+      - message.channels
+      - message.groups
   interactivity:
     is_enabled: false
   org_deploy_enabled: false

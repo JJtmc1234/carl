@@ -137,8 +137,9 @@ Slack message can be longer than the argument limit and can contain anything at 
 | the listen loop | wake path confirmed on this machine, the rest needs a real conversation | |
 | slack, socket mode | done | 15 |
 | a2a, agent to agent | done, untested against Alex | 15 |
+| answering to his own name | done | 7 |
 
-129 tests, clippy clean at deny warnings.
+136 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -414,3 +415,32 @@ He runs on the claude command line, which has its own idea of what Slack access 
 nothing had told him that his answer is posted automatically. `slack::CONTEXT` now does, on
 every Slack turn. It is the same class of problem as him thinking he was a coding assistant:
 the underlying tool has an identity and it leaks through unless something displaces it.
+
+## a name is not a mention
+
+An at sign is unambiguous. A name is not, and the same five letters do completely different
+jobs in a sentence.
+
+```
+carl what should I research next     to him
+what do you think, Carl?             to him
+I asked Carl yesterday               about him
+Carl's memory design is good         about him
+ask carl when he gets back           about him, to somebody else
+```
+
+The two failures are not equal. Missing one aimed at him costs an at sign. Answering one that
+was not is a bot interrupting two people discussing it, which is how a bot gets removed from
+a channel. So the rule errs towards silence.
+
+The rule is position, not keywords. His name has to be the first word, allowing a greeting in
+front of it, or the last word. That is where a name sits when you are speaking to somebody
+and almost never where it sits when you are speaking about them. Possessive is refused
+outright, because "Carl's" is never a question for Carl.
+
+`named.rs` is pure text in and a decision out, so all of it is testable without a workspace,
+which matters because this is the code that decides when Carl speaks in front of other people.
+
+The cost is `channels:history`, so Carl now receives every message in every channel he is in.
+Nothing is recorded unless it was addressed to him, and the scope can be removed without
+breaking mentions or direct messages.

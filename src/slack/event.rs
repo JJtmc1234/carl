@@ -9,6 +9,7 @@
 //! It is the same shape as the microphone hearing the speakers, and it is worse here, because
 //! the room was only Carl talking to himself and this one has an audience.
 
+use super::named;
 use crate::ThreadId;
 
 /// Something Carl should reply to.
@@ -64,17 +65,32 @@ pub fn ask_from(payload: &serde_json::Value, me: &str, my_bot: &str) -> Option<A
     let channel = event.get("channel")?.as_str()?;
     let ts = event.get("ts")?.as_str()?;
 
-    match kind {
-        // Mentioned in a channel. Answer it.
-        "app_mention" => {}
-        // A direct message. Every message in a DM is addressed to Carl by definition.
-        "message" if event.get("channel_type").and_then(|c| c.as_str()) == Some("im") => {}
-        _ => return None,
-    }
-
     let raw = event.get("text")?.as_str()?;
-    let text = strip_mention(raw, me);
-    if text.is_empty() {
+    let channel_type = event
+        .get("channel_type")
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+
+    let text = match kind {
+        // Mentioned in a channel. Unambiguous, answer it.
+        "app_mention" => strip_mention(raw, me),
+        // A direct message. Every message in a DM is addressed to Carl by definition.
+        "message" if channel_type == "im" => strip_mention(raw, me),
+        // An ordinary message in a channel Carl is in. Most of these are none of his
+        // business, so his name has to be used the way you use a name when you are speaking
+        // to somebody rather than about them. named.rs decides, and it is deliberately strict.
+        "message" if matches!(channel_type, "channel" | "group" | "mpim") => {
+            named::addressed(&strip_mention(raw, me))?
+        }
+        _ => return None,
+    };
+
+    // A bare name is being called rather than being asked, which still deserves an answer.
+    // An empty message that never had a name in it does not.
+    if text.is_empty() && kind != "message" {
+        return None;
+    }
+    if text.is_empty() && channel_type == "im" {
         return None;
     }
 
@@ -173,20 +189,45 @@ mod tests {
         assert_eq!(ask.text, "hello Carl");
     }
 
-    /// A message in a channel Carl happens to be in, with no mention, is not for him.
+    /// A message in a channel that has nothing to do with Carl is left alone.
     #[test]
     fn ordinary_channel_chatter_is_left_alone() {
-        assert_eq!(
-            ask_from(
-                &payload(serde_json::json!({
-                    "type": "message", "channel_type": "channel", "user": "U0JJ",
-                    "channel": "C01", "ts": "1.1", "text": "morning everyone"
-                })),
-                ME,
-                MY_BOT
-            ),
-            None
-        );
+        for text in [
+            "morning everyone",
+            "I asked Carl yesterday and he said no",
+            "Carl's memory design is the good bit",
+        ] {
+            assert_eq!(
+                ask_from(
+                    &payload(serde_json::json!({
+                        "type": "message", "channel_type": "channel", "user": "U0JJ",
+                        "channel": "C01", "ts": "1.1", "text": text
+                    })),
+                    ME,
+                    MY_BOT
+                ),
+                None,
+                "should have stayed out of: {text}"
+            );
+        }
+    }
+
+    /// Using his name the way you use a name when speaking to somebody works without an at
+    /// sign, which is the point.
+    #[test]
+    fn his_name_in_a_channel_is_enough() {
+        let ask = ask_from(
+            &payload(serde_json::json!({
+                "type": "message", "channel_type": "channel", "user": "U0JJ",
+                "channel": "C01", "ts": "1700000000.000400",
+                "text": "carl what should I research next"
+            })),
+            ME,
+            MY_BOT,
+        )
+        .expect("his own name should reach him");
+        assert_eq!(ask.text, "what should I research next");
+        assert!(!ask.from_agent);
     }
 
     /// An edit arrives as a message with a subtype. Answering it would reply twice to one

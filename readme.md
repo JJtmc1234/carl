@@ -140,8 +140,27 @@ being watched for, in memory, and everything else falls out of a three second wi
 ./target/debug/carl slack
 ```
 
-Mention `@Carl` in a channel he has been invited to, or send him a direct message. He replies
-in the thread, so a conversation stays together and he remembers the rest of it.
+Three ways to reach him. Mention `@Carl`, send him a direct message, or just use his name in
+a channel he is in. He replies in the thread, so a conversation stays together and he
+remembers the rest of it.
+
+Using his name is deliberately strict about *where* the name is, because a name is ambiguous
+in a way an at sign is not.
+
+| | |
+|---|---|
+| `carl what should I research next` | answered |
+| `what do you think, Carl?` | answered |
+| `hey carl` | answered |
+| `I asked Carl yesterday` | left alone |
+| `Carl's memory design is the good bit` | left alone |
+| `ask carl when he gets back` | left alone |
+
+The rule is that his name has to be at the very start or the very end, which is where a name
+goes when you are speaking *to* somebody and almost never where it goes when you are speaking
+*about* them. Missing one aimed at him costs you an at sign. Answering one that was not is
+Carl butting into other people's conversation, which is how a bot gets thrown out of a
+channel, so it errs towards staying quiet.
 
 Socket Mode, which means no public URL and no hosting. Carl dials out to Slack over a
 websocket rather than Slack calling in, so a laptop behind a router works as well as a server.
@@ -222,6 +241,7 @@ He never answers himself. He posts into the same channels he listens to, so his 
 arrive back as events, and three separate checks catch that. Without them it is an infinite
 loop that costs real money in a channel with real people in it.
 
-He is not in ordinary channel conversation. Only a direct message or a message that mentions
-him is a question. He does not hold the `channels:history` scope at all, so this is something
-he cannot do rather than something he chooses not to.
+He does receive every message in channels he is in, because that is the only way to notice
+his own name without an at sign. Nothing is recorded or sent anywhere unless it was addressed
+to him. If that is more than you want, take `channels:history` and `groups:history` out of the
+manifest and reinstall. Mentions and direct messages carry on working without them.
