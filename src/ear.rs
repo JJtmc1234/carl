@@ -28,9 +28,24 @@ const HUSH_SECS: f32 = 0.9;
 /// anyone says in one breath, and short enough that hitting it is not a lost afternoon.
 const CAP_SECS: f32 = 15.0;
 
+/// Carl's voice, reachable only with the microphone in hand.
+///
+/// The mic argument is not used for anything except switching itself off, and it is required
+/// for exactly that reason. A spoken line that forgets to mute the mic feeds straight back
+/// into the ear and Carl answers himself, and the failure is silent. Making the wrong version
+/// impossible to write beats remembering to write the right one.
+struct Mouth(Voice);
+
+impl Mouth {
+    fn say(&self, mic: &Mic, text: &str) -> Result<()> {
+        mic.deaf_while(|| self.0.say(text))?;
+        Ok(())
+    }
+}
+
 pub struct Ear {
     whisper: Whisper,
-    voice: Voice,
+    mouth: Mouth,
     thread: ThreadId,
 }
 
@@ -38,7 +53,7 @@ impl Ear {
     pub fn new(thread: ThreadId) -> Result<Self> {
         Ok(Self {
             whisper: Whisper::found().context("whisper is not ready")?,
-            voice: Voice::found().context("piper is not ready")?,
+            mouth: Mouth(Voice::found().context("piper is not ready")?),
             thread,
         })
     }
@@ -96,8 +111,8 @@ impl Ear {
                         match question {
                             // Asked on the same breath, so answer it rather than making them
                             // say it twice.
-                            Some(q) => self.answer(home, &q)?,
-                            None => self.voice.say("Yes?")?,
+                            Some(q) => self.answer(&mic, home, &q)?,
+                            None => self.mouth.say(&mic, "Yes?")?,
                         }
                     }
                     // interpret only returns these when already listening.
@@ -116,19 +131,18 @@ impl Ear {
             match heard::interpret(&text, true) {
                 Heard::End => {
                     self.remember(home)?;
-                    self.voice.say("Alright. I'll remember that.")?;
+                    self.mouth.say(&mic, "Alright. I'll remember that.")?;
                     awake = false;
-                    mic.forget();
                     eprintln!("back to listening.");
                 }
-                Heard::Say(q) => self.answer(home, &q)?,
+                Heard::Say(q) => self.answer(&mic, home, &q)?,
                 // Nothing usually means the utterance was noise, not speech. Staying awake
                 // rather than dropping out avoids the loop where a cough ends the
                 // conversation and you have to wake him again.
                 Heard::Nothing => continue,
                 Heard::Wake { question } => {
                     if let Some(q) = question {
-                        self.answer(home, &q)?;
+                        self.answer(&mic, home, &q)?;
                     }
                 }
             }
@@ -136,7 +150,11 @@ impl Ear {
     }
 
     /// Answers one question, looking at the screen only if the question needs it.
-    fn answer(&self, home: &Path, question: &str) -> Result<()> {
+    ///
+    /// Takes the microphone because speaking is the one thing that must switch it off. The
+    /// speakers and the mic share a room, so anything Carl says out loud comes straight back
+    /// in and he transcribes himself.
+    fn answer(&self, mic: &Mic, home: &Path, question: &str) -> Result<()> {
         let answer = if heard::needs_screen(question) {
             turn::look(home, &self.thread, question, carl::Area::Screen)
         } else {
@@ -146,14 +164,14 @@ impl Ear {
         match answer {
             Ok(a) => {
                 println!("{}", a.text);
-                self.voice.say(&a.text)?;
+                self.mouth.say(mic, &a.text)?;
             }
             // Spoken, not just printed. You are looking at a game, not at this terminal, and
             // silence after a question is indistinguishable from Carl ignoring you.
             Err(e) => {
                 eprintln!("failed: {e:#}");
-                self.voice
-                    .say("Sorry, something went wrong. Say that again?")?;
+                self.mouth
+                    .say(mic, "Sorry, something went wrong. Say that again?")?;
             }
         }
         Ok(())

@@ -32,6 +32,12 @@ const BYTES_PER_SAMPLE: usize = 2;
 /// room cannot produce a threshold of zero that nothing ever falls below.
 pub const SPEECH_FLOOR: f32 = 0.02;
 
+/// How long the room keeps ringing after a speaker stops.
+///
+/// Not zero, because the sound card holds a buffer of its own and the walls hold the rest.
+/// Unmuting the instant playback returns still catches the tail of Carl's own last word.
+const SETTLE: Duration = Duration::from_millis(350);
+
 #[derive(Default)]
 struct Shared {
     buf: VecDeque<u8>,
@@ -44,6 +50,7 @@ pub struct Mic {
     child: Child,
     shared: Arc<Mutex<Shared>>,
     stop: Arc<AtomicBool>,
+    deaf: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
     scratch: PathBuf,
 }
@@ -77,10 +84,12 @@ impl Mic {
 
         let shared = Arc::new(Mutex::new(Shared::default()));
         let stop = Arc::new(AtomicBool::new(false));
+        let deaf = Arc::new(AtomicBool::new(false));
 
         let reader = {
             let shared = shared.clone();
             let stop = stop.clone();
+            let deaf = deaf.clone();
             std::thread::spawn(move || {
                 let mut chunk = vec![0u8; 4096];
                 while !stop.load(Ordering::Relaxed) {
@@ -88,7 +97,12 @@ impl Mic {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
                             let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
-                            s.buf.extend(&chunk[..n]);
+                            // Deaf still reads the pipe, and only then drops the bytes. A
+                            // pipe nobody drains backs up, and the next thing heard would be
+                            // however far behind real time the silence lasted.
+                            if !deaf.load(Ordering::Relaxed) {
+                                s.buf.extend(&chunk[..n]);
+                            }
                             s.total += n as u64;
                             // Only the recent past is kept. This is the discard that makes
                             // the promise true, and it happens whether anyone is listening
@@ -106,6 +120,7 @@ impl Mic {
             child,
             shared,
             stop,
+            deaf,
             reader: Some(reader),
             scratch: scratch_dir.join("listening.wav"),
         })
@@ -168,6 +183,38 @@ impl Mic {
             .unwrap_or_else(|e| e.into_inner())
             .buf
             .clear();
+    }
+
+    /// Runs something with the microphone deaf, and forgets everything it missed.
+    ///
+    /// A speaker and a microphone in one room are a loop. Carl says an answer, the mic hears
+    /// it, whisper transcribes it, and Carl answers his own answer. Nothing downstream can
+    /// tell his voice from yours, so the only place to break the loop is here.
+    ///
+    /// This makes him half duplex: he cannot hear you while he talks. That is a real
+    /// limitation and the honest one to ship, because the alternative is a Carl who
+    /// interrupts himself. Echo cancellation in the audio server is what lifts it, and that
+    /// belongs in the audio server rather than in here.
+    pub fn deaf_while<T>(&self, f: impl FnOnce() -> T) -> T {
+        // A guard rather than two stores, so a panic inside `f` cannot leave Carl permanently
+        // deaf with no sign of why.
+        struct Deafness<'a>(&'a Mic);
+        impl Drop for Deafness<'_> {
+            fn drop(&mut self) {
+                std::thread::sleep(SETTLE);
+                self.0.deaf.store(false, Ordering::Relaxed);
+                self.0.forget();
+            }
+        }
+
+        self.deaf.store(true, Ordering::Relaxed);
+        let _guard = Deafness(self);
+        f()
+    }
+
+    /// True while Carl is speaking and deliberately not listening.
+    pub fn is_deaf(&self) -> bool {
+        self.deaf.load(Ordering::Relaxed)
     }
 
     /// Records one whole thing you said, from now until you stop talking.

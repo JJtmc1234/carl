@@ -82,6 +82,7 @@ sign it is a real rule and not a preference.
       |
       v
   speech.rs                           piper into aplay, 0.21s for 5s of speech
+    and the mic is deaf for all of it, or Carl hears himself and replies to that
 ```
 
 `ear.rs` drives that loop and is the only place the two states live.
@@ -161,3 +162,28 @@ of thirty seconds on every single turn. Carl looked deaf. He was listening the w
 Two changes. Loudness is now RMS, which averages over the window and ignores a lone click.
 And the threshold is measured from the room at startup rather than written into the source,
 because a laptop fan and a quiet study are not the same number and no constant fits both.
+
+## why Carl cannot hear you while he talks
+
+A speaker and a microphone in one room are a feedback loop. Carl says an answer, the mic
+picks it up, whisper transcribes it, and Carl answers his own answer. Nothing downstream can
+tell his voice from yours, because by the time it is a transcript both are just text.
+
+So the mic goes deaf for the length of every spoken line, plus 350 milliseconds for the room
+to stop ringing and the sound card to finish its own buffer. The reader thread keeps draining
+the pipe throughout and throws the bytes away, because a pipe nobody drains backs up and the
+next thing heard would be however far behind real time the silence lasted. That was already
+one bug and it is not worth having twice.
+
+The cost is that Carl is half duplex. You cannot interrupt him, and anything said while he is
+speaking is gone. That is a real limitation, not a detail.
+
+Lifting it takes echo cancellation, which subtracts what is playing from what the mic hears
+so the two can run at once. PipeWire ships a WebRTC canceller and this machine already has
+the module installed. It belongs in the audio server rather than in Carl, because the audio
+server is the only thing that knows what the speakers are playing right now.
+
+The voice is reachable only through a type that demands the microphone as an argument. It
+does not use it for anything except switching it off. A spoken line that forgets to mute
+would fail silently and sound like Carl talking to himself, so the wrong version is made
+impossible to write rather than left to memory.
