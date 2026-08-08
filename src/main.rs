@@ -6,6 +6,7 @@
 //! Slack is not wired up yet. When it is, it calls the same `respond` path with a thread id
 //! built from the channel and thread timestamp, so the transport is the only new part.
 
+mod chat;
 mod ear;
 mod turn;
 
@@ -75,6 +76,12 @@ enum Command {
         #[arg(long)]
         accurate: bool,
     },
+
+    /// Answer in Slack until interrupted.
+    ///
+    /// Mention @Carl in a channel he has been invited to, or send him a direct message.
+    /// Needs ~/.carl/slack.json with a bot token and an app token. See readme.md.
+    Slack,
 
     /// Check the microphone and report what each stage actually heard.
     ///
@@ -171,6 +178,8 @@ fn main() -> Result<()> {
             cap,
             accurate,
         } => ear::Ear::new(ThreadId::new(thread)?, accurate)?.run(&home, ear::Timing { hush, cap }),
+
+        Command::Slack => chat::run(&home),
 
         Command::MicCheck { secs } => {
             use carl::audio::{Mic, SPEECH_FLOOR};

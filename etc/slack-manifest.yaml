@@ -1,0 +1,48 @@
+# Carl's Slack app.
+#
+# Create the app from this rather than by clicking through the settings pages. Go to
+# https://api.slack.com/apps, choose Create New App, then From an app manifest, pick the
+# workspace, and paste this in.
+#
+# Socket Mode is on, which is the reason this needs no public URL and no hosting. Carl dials
+# out to Slack over a websocket instead of Slack calling in to him, so a laptop behind a
+# router works exactly as well as a server.
+#
+# The scopes are the smallest set that works.
+#
+#   app_mentions:read   hear it when somebody writes @Carl in a channel
+#   chat:write          reply
+#   im:history          hear direct messages
+#   im:read             see which conversations are direct messages
+#
+# Deliberately absent: channels:history. Carl does not read channels he has not been spoken
+# to in, and not holding that scope means he cannot, rather than choosing not to.
+
+display_information:
+  name: Carl
+  description: A helper that remembers.
+  background_color: "#2c3e50"
+
+features:
+  bot_user:
+    display_name: Carl
+    always_online: false
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - chat:write
+      - im:history
+      - im:read
+
+settings:
+  event_subscriptions:
+    bot_events:
+      - app_mention
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

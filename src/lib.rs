@@ -27,6 +27,7 @@ pub mod claude;
 pub mod heard;
 pub mod log;
 pub mod memory;
+pub mod slack;
 pub mod speech;
 pub mod threads;
 pub mod whisper;

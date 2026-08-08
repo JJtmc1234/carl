@@ -135,9 +135,9 @@ Slack message can be longer than the argument limit and can contain anything at 
 | streaming answers | done | 6 |
 | sentences from a stream | done | 10 |
 | the listen loop | wake path confirmed on this machine, the rest needs a real conversation | |
-| Slack | not built | |
+| slack, socket mode | done | 13 |
 
-97 tests, clippy clean at deny warnings.
+112 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -323,3 +323,45 @@ a terminal inherited exactly the same problem and nobody had noticed.
 With that fixed, the models were measured again on equal terms. Haiku takes 5.2 to 6.1
 seconds to its first word, Opus 2.9 to 4.1. Opus stays the default because it is faster,
 which is not the reason originally given.
+
+## slack, and the two loops that were the same loop
+
+Socket Mode, not the Events API. The Events API needs Slack to reach a public URL and this
+machine is a laptop behind a router. Socket Mode dials out over a websocket, so nothing is
+exposed and nothing is hosted.
+
+```
+  apps.connections.open  ->  a single use websocket url
+  dial it
+  for each envelope:
+    acknowledge it immediately
+    is it a question, and is it from me      <- event.rs, pure
+    hand it to the worker                    <- so reading never stops
+  worker: ask claude, post the answer
+```
+
+Three things about this were not obvious.
+
+**Acknowledge before answering.** Slack wants an acknowledgement within three seconds and
+resends the event if it does not get one. Claude takes five at the very best. Answering first
+means Slack decides the event was dropped and sends it again, and Carl answers the same
+question two or three times. That does not show up when you test with one message and is
+extremely obvious in a channel. Envelopes are acknowledged before Carl has even decided
+whether the message was for him, because an ignored envelope still has to be acknowledged.
+
+**Carl posts into the room he is listening to.** His own message comes straight back as an
+event. That is the microphone hearing the speakers again, exactly, and it is worse here,
+because the room only had Carl in it and a channel has an audience and a bill. Three separate
+checks catch it: a bot id on the event, the sender being Carl's own user id, and a subtype
+that means this was not a person typing. Any one of them missing is an infinite loop.
+
+**Resends carry the same event id.** Slack resends on any doubt including its own timeouts,
+so the last sixty four event ids are remembered and a repeat is dropped.
+
+The answer itself goes through the same `turn` machinery as the terminal and the microphone,
+so a Slack thread gets the same record, the same memory and the same record before acting
+ordering. A Slack thread id is `slack-<channel>-<parent timestamp>`, which is why `ThreadId`
+has allowed a dot in its character set since the day it was written.
+
+No spoken brief in Slack. It is read, not heard, and two sentences is the wrong shape for
+something you can scroll back over.

@@ -134,6 +134,55 @@ two-word wake check.
 So the mic being always on does not mean the room is being recorded. It means two words are
 being watched for, in memory, and everything else falls out of a three second window.
 
-## not built yet
+## slack
 
-Slack. Everything it needs already exists, so it is a transport and a thread id.
+```sh
+./target/debug/carl slack
+```
+
+Mention `@Carl` in a channel he has been invited to, or send him a direct message. He replies
+in the thread, so a conversation stays together and he remembers the rest of it.
+
+Socket Mode, which means no public URL and no hosting. Carl dials out to Slack over a
+websocket rather than Slack calling in, so a laptop behind a router works as well as a server.
+
+### setting it up
+
+You have to do this part. It needs a browser and a workspace you can install apps into.
+
+1. Go to https://api.slack.com/apps, choose **Create New App**, then **From an app manifest**.
+   Pick your workspace and paste in `etc/slack-manifest.yaml`. That sets the name, the scopes
+   and Socket Mode in one go.
+2. **Install to Workspace**, then copy the **Bot User OAuth Token**. It starts `xoxb-`.
+3. **Basic Information**, scroll to **App-Level Tokens**, **Generate Token and Scopes**. Give
+   it the `connections:write` scope. Copy it. It starts `xapp-`.
+4. Write both into `~/.carl/slack.json` and make it private:
+
+```sh
+cat > ~/.carl/slack.json <<'EOF'
+{
+  "bot": "xoxb-your-bot-token",
+  "app": "xapp-your-app-token"
+}
+EOF
+chmod 600 ~/.carl/slack.json
+```
+
+Carl refuses to start if that file is readable by other users, because a bot token lets
+anyone post as him. `CARL_SLACK_BOT_TOKEN` and `CARL_SLACK_APP_TOKEN` work instead of the
+file, which is what a service unit wants.
+
+5. Invite him where you want him: `/invite @Carl`.
+
+The two tokens look alike and Slack answers a swap with `invalid_auth`, which tells you
+nothing. Carl checks the prefixes and says "the two are the wrong way round" instead.
+
+### what he will not do
+
+He never answers himself. He posts into the same channels he listens to, so his own messages
+arrive back as events, and three separate checks catch that. Without them it is an infinite
+loop that costs real money in a channel with real people in it.
+
+He is not in ordinary channel conversation. Only a direct message or a message that mentions
+him is a question. He does not hold the `channels:history` scope at all, so this is something
+he cannot do rather than something he chooses not to.
