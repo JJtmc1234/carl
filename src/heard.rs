@@ -104,6 +104,54 @@ pub fn interpret(transcript: &str, listening: bool) -> Heard {
     }
 }
 
+/// Words that mean the question is about what is on screen right now.
+///
+/// Two kinds. Explicit asks to look, and deictic words. "Should I put it *here*" or "what is
+/// *this*" have no referent in the text at all, so they can only mean the screen.
+const SCREEN_WORDS: &[&str] = &[
+    "look at",
+    "look here",
+    "see this",
+    "see that",
+    "on screen",
+    "on my screen",
+    "the screen",
+    "what is this",
+    "what's this",
+    "what is that",
+    "what's that",
+    "right here",
+    "over here",
+    "over there",
+    "this thing",
+    "am i looking",
+    "do you see",
+    "can you see",
+    "show you",
+];
+
+/// Deictic words, only meaningful when they stand alone as a reference.
+const POINTERS: &[&str] = &["here", "this", "that", "these", "those"];
+
+/// Whether answering needs a picture of the screen.
+///
+/// Screenshots are not free. Every one flashes the display, which GNOME gives no way to
+/// suppress, and costs a few thousand vision tokens. So Carl looks when the question needs
+/// looking at and not otherwise.
+///
+/// This errs toward not looking. A wrong "no" gets you an answer that asks what you mean,
+/// which costs a sentence. A wrong "yes" strobes your screen mid game for nothing.
+pub fn needs_screen(question: &str) -> bool {
+    let text = normalise(question);
+
+    if SCREEN_WORDS.iter().any(|w| text.contains(w)) {
+        return true;
+    }
+    // A pointer word on its own, as a whole word rather than inside another one, so "there"
+    // does not trip on "therefore" and "this" does not trip on "thistle".
+    text.split_whitespace().any(|w| POINTERS.contains(&w))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,5 +262,45 @@ mod tests {
             interpret("hey carl end conversation", false),
             Heard::Wake { .. }
         ));
+    }
+
+    /// Screenshots flash the display and cost vision tokens, so Carl looks only when the
+    /// question cannot be answered without looking.
+    #[test]
+    fn questions_about_the_screen_need_a_look() {
+        for asked in [
+            "what am I looking at",
+            "should I put it here",
+            "what is this building",
+            "look at my base",
+            "can you see the red science",
+            "what's that error",
+            "show you something",
+        ] {
+            assert!(needs_screen(asked), "{asked:?} needs the screen");
+        }
+    }
+
+    /// Erring toward not looking. A wrong no costs a clarifying sentence. A wrong yes strobes
+    /// the display mid game for nothing.
+    #[test]
+    fn general_questions_do_not_need_a_look() {
+        for asked in [
+            "what should I research next",
+            "how many iron plates for a science pack",
+            "remind me what we decided yesterday",
+            "how do belts work",
+            "what is the ratio for green circuits",
+        ] {
+            assert!(!needs_screen(asked), "{asked:?} should not have looked");
+        }
+    }
+
+    /// Whole words only, or "therefore" and "thistle" would both trigger a screenshot.
+    #[test]
+    fn pointer_words_only_match_as_whole_words() {
+        assert!(!needs_screen("therefore I need more coal"));
+        assert!(!needs_screen("gather thistles"));
+        assert!(needs_screen("I need more of this"));
     }
 }
