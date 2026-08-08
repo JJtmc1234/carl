@@ -58,6 +58,17 @@ enum Command {
         thread: String,
     },
 
+    /// Check the microphone and report what each stage actually heard.
+    ///
+    /// Run this when Carl is not responding. It shows the level, what the cheap wake model
+    /// heard, what the better model heard, and whether that would have woken him, so the
+    /// failing stage names itself instead of having to be guessed at.
+    MicCheck {
+        /// Seconds to record.
+        #[arg(long, default_value_t = 5)]
+        secs: u64,
+    },
+
     /// Show a conversation as it was recorded.
     History {
         #[arg(long, default_value = "cli")]
@@ -124,6 +135,39 @@ fn main() -> Result<()> {
         }
 
         Command::Listen { thread } => ear::Ear::new(ThreadId::new(thread)?)?.run(&home),
+
+        Command::MicCheck { secs } => {
+            use carl::audio::{Mic, SPEECH_FLOOR};
+            let mic = Mic::open(secs as f32 + 1.0, std::path::Path::new("/dev/shm/carl"))?;
+
+            println!("say \"hey carl, what should I do now\" ... recording {secs}s");
+            mic.wait(secs as f32);
+
+            let level = mic.loudness();
+            println!("  level      {level:.3}   (speech floor is {SPEECH_FLOOR})");
+            if level < SPEECH_FLOOR {
+                println!("  -> too quiet. Raise the mic in Settings, Sound, Input.");
+                return Ok(());
+            }
+
+            let wav = mic.snapshot()?;
+            let w = carl::Whisper::found()?;
+            let wake = w.transcribe(carl::Tier::Wake, wav)?;
+            let talk = w.transcribe(carl::Tier::Talk, wav)?;
+            println!("  wake model heard   {wake:?}");
+            println!("  talk model heard   {talk:?}");
+
+            match carl::heard::interpret(&wake, false) {
+                carl::Heard::Wake { question } => {
+                    println!("  -> would have woken. Question: {question:?}")
+                }
+                _ => println!(
+                    "  -> would NOT have woken. Say \"hey carl\" clearly, or add a spelling \
+                     to NAMES in heard.rs if the model wrote something odd above."
+                ),
+            }
+            Ok(())
+        }
 
         Command::History { thread, all } => {
             let entries = carl::log::read(home.join("conversations.jsonl"))?;

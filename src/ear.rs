@@ -46,14 +46,14 @@ impl Ear {
     pub fn run(&self, home: &Path) -> Result<()> {
         // Audio scratch lives in RAM. Nothing recorded ever reaches the disk, whether it is
         // kept or not, so the discard below is a real one.
-        let mut mic = Mic::open(WINDOW_SECS, Path::new("/dev/shm/carl"))?;
+        let mic = Mic::open(WINDOW_SECS, Path::new("/dev/shm/carl"))?;
         let mut awake = false;
 
         eprintln!("listening. say \"hey carl\" to start, \"end conversation\" to finish.");
 
         loop {
             if !awake {
-                mic.advance(STEP_SECS)?;
+                mic.wait(STEP_SECS);
 
                 // Silence is most of a room's day. Running whisper over it costs real time
                 // for a guaranteed empty answer, so the level check comes first.
