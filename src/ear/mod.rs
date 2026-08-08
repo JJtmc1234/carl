@@ -13,10 +13,14 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use carl::aec::Devices;
 use carl::audio::Mic;
 use carl::{Heard, ThreadId, Tier, Voice, Whisper, heard};
 
-use crate::turn;
+mod mouth;
+mod reply;
+
+use mouth::Mouth;
 
 /// How much of the recent past Carl can see while idle. Comfortably longer than a wake word.
 const WINDOW_SECS: f32 = 3.0;
@@ -28,33 +32,25 @@ const HUSH_SECS: f32 = 0.9;
 /// anyone says in one breath, and short enough that hitting it is not a lost afternoon.
 const CAP_SECS: f32 = 15.0;
 
-/// Carl's voice, reachable only with the microphone in hand.
-///
-/// The mic argument is not used for anything except switching itself off, and it is required
-/// for exactly that reason. A spoken line that forgets to mute the mic feeds straight back
-/// into the ear and Carl answers himself, and the failure is silent. Making the wrong version
-/// impossible to write beats remembering to write the right one.
-struct Mouth(Voice);
-
-impl Mouth {
-    fn say(&self, mic: &Mic, text: &str) -> Result<()> {
-        mic.deaf_while(|| self.0.say(text))?;
-        Ok(())
-    }
-}
-
 pub struct Ear {
     whisper: Whisper,
     mouth: Mouth,
     thread: ThreadId,
+    devices: Devices,
 }
 
 impl Ear {
     pub fn new(thread: ThreadId) -> Result<Self> {
+        let devices = Devices::detect();
+        let voice = Voice::found()
+            .context("piper is not ready")?
+            .to_sink(devices.sink());
+
         Ok(Self {
             whisper: Whisper::found().context("whisper is not ready")?,
-            mouth: Mouth(Voice::found().context("piper is not ready")?),
+            mouth: Mouth::new(voice, devices.can_barge_in()),
             thread,
+            devices,
         })
     }
 
@@ -62,8 +58,21 @@ impl Ear {
     pub fn run(&self, home: &Path) -> Result<()> {
         // Audio scratch lives in RAM. Nothing recorded ever reaches the disk, whether it is
         // kept or not, so the discard below is a real one.
-        let mic = Mic::open(WINDOW_SECS, Path::new("/dev/shm/carl"))?;
+        let mic = Mic::open(
+            WINDOW_SECS,
+            Path::new("/dev/shm/carl"),
+            self.devices.source(),
+        )?;
         let mut awake = false;
+
+        if self.devices.can_barge_in() {
+            eprintln!("echo cancelled audio. you can talk over him.");
+        } else {
+            eprintln!(
+                "no echo canceller, so Carl goes deaf while he speaks and cannot be \
+                 interrupted. Start it with: pipewire -c etc/carl-aec.conf"
+            );
+        }
 
         // Measure the room before listening to it. A fixed threshold cannot fit a laptop
         // fan and a quiet study at the same time, and getting it wrong in the loud
@@ -111,8 +120,10 @@ impl Ear {
                         match question {
                             // Asked on the same breath, so answer it rather than making them
                             // say it twice.
-                            Some(q) => self.answer(&mic, home, &q)?,
-                            None => self.mouth.say(&mic, "Yes?")?,
+                            Some(q) => self.answer(&mic, home, &q, hush)?,
+                            None => {
+                                self.mouth.say(&mic, "Yes?", hush)?;
+                            }
                         }
                     }
                     // interpret only returns these when already listening.
@@ -131,84 +142,21 @@ impl Ear {
             match heard::interpret(&text, true) {
                 Heard::End => {
                     self.remember(home)?;
-                    self.mouth.say(&mic, "Alright. I'll remember that.")?;
+                    self.mouth.say(&mic, "Alright. I'll remember that.", hush)?;
                     awake = false;
                     eprintln!("back to listening.");
                 }
-                Heard::Say(q) => self.answer(&mic, home, &q)?,
+                Heard::Say(q) => self.answer(&mic, home, &q, hush)?,
                 // Nothing usually means the utterance was noise, not speech. Staying awake
                 // rather than dropping out avoids the loop where a cough ends the
                 // conversation and you have to wake him again.
                 Heard::Nothing => continue,
                 Heard::Wake { question } => {
                     if let Some(q) = question {
-                        self.answer(&mic, home, &q)?;
+                        self.answer(&mic, home, &q, hush)?;
                     }
                 }
             }
         }
-    }
-
-    /// Answers one question, looking at the screen only if the question needs it.
-    ///
-    /// Takes the microphone because speaking is the one thing that must switch it off. The
-    /// speakers and the mic share a room, so anything Carl says out loud comes straight back
-    /// in and he transcribes himself.
-    fn answer(&self, mic: &Mic, home: &Path, question: &str) -> Result<()> {
-        let answer = if heard::needs_screen(question) {
-            turn::look(home, &self.thread, question, carl::Area::Screen)
-        } else {
-            turn::respond(home, &self.thread, question, None)
-        };
-
-        match answer {
-            Ok(a) => {
-                println!("{}", a.text);
-                self.mouth.say(mic, &a.text)?;
-            }
-            // Spoken, not just printed. You are looking at a game, not at this terminal, and
-            // silence after a question is indistinguishable from Carl ignoring you.
-            Err(e) => {
-                eprintln!("failed: {e:#}");
-                self.mouth
-                    .say(mic, "Sorry, something went wrong. Say that again?")?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Writes down what was worth keeping, then the thread can be forgotten.
-    ///
-    /// This is what "end conversation" buys. The full text stays in the record either way,
-    /// but the record is not read back into future conversations. Only memory is.
-    fn remember(&self, home: &Path) -> Result<()> {
-        let asked = "Our conversation is ending. In three lines or fewer, write only what is \
-             genuinely worth carrying into future conversations: preferences, decisions, \
-             facts about me. Skip anything you would not want repeated back weeks from now. \
-             If there is nothing worth keeping, reply with exactly NOTHING.";
-
-        let note = match turn::respond(home, &self.thread, asked, None) {
-            Ok(a) => a.text.trim().to_string(),
-            Err(e) => {
-                eprintln!("could not write a memory: {e:#}");
-                return Ok(());
-            }
-        };
-
-        if note.is_empty() || note.to_uppercase().contains("NOTHING") {
-            return Ok(());
-        }
-
-        // Named by when it happened, so notes accumulate in order and never overwrite one
-        // another.
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-
-        let memory = carl::Memory::open(home.join("memory"))?;
-        let path = memory.write(&format!("chat-{stamp}"), &note)?;
-        eprintln!("remembered: {}", path.display());
-        Ok(())
     }
 }

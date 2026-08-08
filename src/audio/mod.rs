@@ -59,22 +59,34 @@ pub struct Mic {
 }
 
 impl Mic {
-    pub fn open(window_secs: f32, scratch_dir: &Path) -> Result<Self> {
+    /// Opens the microphone. `source` names a specific one, or `None` takes the default.
+    ///
+    /// The name is passed through the environment rather than as a device argument, because
+    /// ALSA's device string for a named PulseAudio source is fragile and quoting it wrong
+    /// silently opens the default one instead. Failing over to the wrong microphone without
+    /// saying so is the worst outcome here, since it is the echo cancelled source that stops
+    /// Carl hearing himself.
+    pub fn open(window_secs: f32, scratch_dir: &Path, source: Option<&str>) -> Result<Self> {
         std::fs::create_dir_all(scratch_dir)?;
         let cap = (RATE as f32 * window_secs) as usize * BYTES_PER_SAMPLE;
 
-        let mut child = Command::new("arecord")
-            .args([
-                "--quiet",
-                "--format",
-                "S16_LE",
-                "--rate",
-                &RATE.to_string(),
-                "--channels",
-                "1",
-                "--file-type",
-                "raw",
-            ])
+        let mut cmd = Command::new("arecord");
+        cmd.args([
+            "--quiet",
+            "--format",
+            "S16_LE",
+            "--rate",
+            &RATE.to_string(),
+            "--channels",
+            "1",
+            "--file-type",
+            "raw",
+        ]);
+        if let Some(name) = source {
+            cmd.args(["-D", "pulse"]).env("PULSE_SOURCE", name);
+        }
+
+        let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()

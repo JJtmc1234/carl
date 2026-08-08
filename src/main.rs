@@ -138,7 +138,19 @@ fn main() -> Result<()> {
 
         Command::MicCheck { secs } => {
             use carl::audio::{Mic, SPEECH_FLOOR};
-            let mic = Mic::open(secs as f32 + 1.0, std::path::Path::new("/dev/shm/carl"))?;
+            let devices = carl::aec::Devices::detect();
+            let mic = Mic::open(
+                secs as f32 + 1.0,
+                std::path::Path::new("/dev/shm/carl"),
+                devices.source(),
+            )?;
+            match devices.source() {
+                Some(d) => println!("  device     {d} (echo cancelled, so you can interrupt him)"),
+                None => println!(
+                    "  device     default. No echo canceller, so Carl goes deaf while \
+                     speaking.\n             Start one with: pipewire -c etc/carl-aec.conf"
+                ),
+            }
 
             // Measure the empty room first. This is the number that decides when Carl
             // thinks you have stopped talking, and getting it wrong the loud way makes him

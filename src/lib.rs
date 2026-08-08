@@ -19,6 +19,7 @@
 //! forth inside that thread. It does not make Carl remember something said in a different
 //! Slack thread last week. Only memory does that.
 
+pub mod aec;
 pub mod audio;
 pub mod capture;
 pub mod claude;

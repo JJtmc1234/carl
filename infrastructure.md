@@ -163,7 +163,42 @@ Two changes. Loudness is now RMS, which averages over the window and ignores a l
 And the threshold is measured from the room at startup rather than written into the source,
 because a laptop fan and a quiet study are not the same number and no constant fits both.
 
-## why Carl cannot hear you while he talks
+## why Carl can hear you while he talks
+
+A speaker and a microphone in one room are a feedback loop. Carl says an answer, the mic picks
+it up, whisper transcribes it, and he answers his own answer.
+
+The fix that needs no help from anyone is to mute the microphone whenever he speaks, and that
+is still what happens when nothing better is available. It costs you the ability to interrupt
+him, which is most of what separates a conversation from a machine reading at you.
+
+The better fix is to subtract his voice instead of muting. `etc/carl-aec.conf` starts a small
+second PipeWire process that creates two virtual devices. Carl plays into a sink the canceller
+owns, so the canceller knows exactly what sound is leaving the machine and when. It removes
+that from the microphone signal and offers the result as a separate source, which is what Carl
+listens to.
+
+Measured on this machine, with Carl talking:
+
+| microphone | rms | peak |
+|---|---|---|
+| plain | 0.0476 | 0.509 |
+| echo cancelled | 0.0017 | 0.019 |
+
+Twenty eight times quieter, which puts his own voice below the noise floor of a quiet room.
+The room itself measured 0.001 afterwards, against 0.24 before, because the canceller runs
+noise suppression on the way through.
+
+So Carl listens while he talks, and three tenths of a second of you speaking over him stops
+him mid word. Not one tenth: a door or a chair leg clears the threshold for a single check,
+and being cut off by a chair is worse than not being interruptible.
+
+The canceller is a separate process and can be stopped at any time. Carl checks for both
+halves of the pair at startup and falls back to muting if either is missing. Half a canceller
+is worse than none, because he would believe he could not hear himself while hearing himself
+at full volume.
+
+## the older half duplex fallback
 
 A speaker and a microphone in one room are a feedback loop. Carl says an answer, the mic
 picks it up, whisper transcribes it, and Carl answers his own answer. Nothing downstream can

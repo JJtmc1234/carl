@@ -46,6 +46,21 @@ impl Mic {
         rms_of(&self.window().0)
     }
 
+    /// Loudness of just the last moment, rather than the whole window.
+    ///
+    /// Deciding whether someone has started talking over Carl cannot use the full three
+    /// second window. Averaging half a second of speech against two and a half of silence
+    /// hides it, and by the time the window fills enough to notice, the interruption is over
+    /// and Carl has kept talking through all of it.
+    pub fn recent(&self, secs: f32) -> f32 {
+        let want = (RATE as f32 * secs) as usize * BYTES_PER_SAMPLE;
+        let s = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        let take = want.min(s.buf.len());
+        let tail: Vec<u8> = s.buf.iter().rev().take(take).rev().copied().collect();
+        drop(s);
+        rms_of(&tail)
+    }
+
     /// Measures the room so the silence threshold fits it rather than a guess.
     ///
     /// Returns the level below which this room counts as quiet. Rooms differ by more than
