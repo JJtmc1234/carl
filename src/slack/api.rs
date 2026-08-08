@@ -4,6 +4,14 @@
 //! proves nothing. An expired token, a missing scope and a channel Carl was removed from all
 //! arrive as a cheerful 200 with `"ok": false`, and treating that as success means posting
 //! into the void and never being told.
+//!
+//! There are two ways to call, and using the wrong one fails in a way that points at the
+//! wrong thing entirely. Methods that write take a JSON body. Methods that read take form
+//! encoded parameters, and if you send them JSON the parameters are silently dropped rather
+//! than refused. `users.info` with a JSON body reports `user_not_found`, which is true: no
+//! user id arrived, so no user was found. It reads as a missing person and it is a missing
+//! parameter. That cost an hour, so the two are separate functions here with names that say
+//! which is which.
 
 use serde_json::json;
 
@@ -64,10 +72,12 @@ impl Api {
 
     /// The display name behind a user id.
     ///
+    /// Form encoded, not JSON. See the note at the top of this file.
+    ///
     /// Prefers what somebody chose to be called over what the account was registered with.
     /// display_name is the one people set deliberately, real_name is the fallback.
     pub fn user_name(&self, user_id: &str) -> Result<String> {
-        let v = self.call("users.info", &self.bot, json!({ "user": user_id }))?;
+        let v = self.read("users.info", &self.bot, &[("user", user_id)])?;
         let p = v
             .get("user")
             .and_then(|u| u.get("profile"))
@@ -97,18 +107,43 @@ impl Api {
         Ok(())
     }
 
+    /// A method that changes something. These take a JSON body.
     fn call(
         &self,
         method: &str,
         token: &str,
         body: serde_json::Value,
     ) -> Result<serde_json::Value> {
-        let mut res = ureq::post(format!("{BASE}/{method}"))
+        let res = ureq::post(format!("{BASE}/{method}"))
             .header("Authorization", &format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .send_json(&body)
             .map_err(|e| Error::Refused(format!("slack {method} failed: {e}")))?;
+        Self::unwrap(method, res)
+    }
 
+    /// A method that only looks something up. These take form encoded parameters.
+    ///
+    /// Sending JSON to one of these does not fail. The parameters are dropped and the method
+    /// runs as though you had passed none, so the error you get back describes the empty
+    /// request rather than your mistake.
+    fn read(
+        &self,
+        method: &str,
+        token: &str,
+        params: &[(&str, &str)],
+    ) -> Result<serde_json::Value> {
+        let res = ureq::post(format!("{BASE}/{method}"))
+            .header("Authorization", &format!("Bearer {token}"))
+            .send_form(params.iter().copied())
+            .map_err(|e| Error::Refused(format!("slack {method} failed: {e}")))?;
+        Self::unwrap(method, res)
+    }
+
+    fn unwrap(
+        method: &str,
+        mut res: ureq::http::Response<ureq::Body>,
+    ) -> Result<serde_json::Value> {
         let v: serde_json::Value = res
             .body_mut()
             .read_json()
@@ -154,7 +189,11 @@ pub fn hint(error: &str) -> &'static str {
             ". Add the scope in the app's OAuth page, then reinstall the app to the \
              workspace. A new scope does nothing until it is reinstalled."
         }
-        "users_not_found" => ". The user id does not exist in this workspace.",
+        "user_not_found" | "users_not_found" => {
+            ". Either the id is not in this workspace, or the call sent a JSON body to a \
+             method that only reads form encoded parameters, which drops the id silently. \
+             See the note at the top of api.rs."
+        }
         "not_in_channel" | "channel_not_found" => {
             ". Invite Carl to the channel with /invite @Carl."
         }
@@ -175,5 +214,15 @@ mod tests {
         assert!(hint("missing_scope").contains("reinstall"));
         assert!(hint("not_in_channel").contains("/invite"));
         assert_eq!(hint("something_new"), "");
+    }
+
+    /// The one that pointed at the wrong thing for an hour. Slack said the user did not
+    /// exist, users.list showed that it did, and the real fault was sending JSON to a method
+    /// that only reads form parameters, which drops them without complaining.
+    #[test]
+    fn user_not_found_mentions_the_encoding_trap() {
+        let h = hint("user_not_found");
+        assert!(h.contains("form encoded"), "{h}");
+        assert!(h.contains("JSON"), "{h}");
     }
 }

@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-151 tests, clippy clean at deny warnings.
+152 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -447,3 +447,21 @@ which matters because this is the code that decides when Carl speaks in front of
 The cost is `channels:history`, so Carl now receives every message in every channel he is in.
 Nothing is recorded unless it was addressed to him, and the scope can be removed without
 breaking mentions or direct messages.
+
+## the error that described the wrong problem
+
+Carl said he could not work out who was talking to him, and Slack agreed: `users.info` came
+back `user_not_found` for `U0BP4HA8Z88`. Then `users.list` returned that exact id, attached
+to JJ_tmc Multiversal, from the same token a second later.
+
+Both were telling the truth. Slack has two calling conventions. Methods that write take a
+JSON body. Methods that read take form encoded parameters, and sending one of those a JSON
+body does not fail: the parameters are dropped and the method runs as though none were
+passed. So `users.info` was asked to look up nobody, and reported that nobody was found.
+
+It reads as a missing person and it is a missing parameter, which is why it pointed at the
+scopes, at the reinstall and at the workspace before it pointed at the request.
+
+There are now two functions with names that say which convention they use, and the hint
+attached to `user_not_found` names the trap, because the next person to hit it will start
+from the same wrong end.
