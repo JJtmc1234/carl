@@ -1,0 +1,5 @@
+/target
+**/*.rs.bk
+
+# Carl's brain. Conversations and memory are personal, never committed.
+/.carl
