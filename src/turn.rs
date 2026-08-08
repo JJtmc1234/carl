@@ -127,33 +127,6 @@ pub fn respond_full(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The question must be on disk before Claude is ever contacted, so a failure there
-    /// cannot take it with it. Proven by pointing at a binary that does not exist.
-    #[test]
-    fn the_question_survives_a_total_failure_to_answer() {
-        let home = tempfile::tempdir().unwrap();
-        let thread = ThreadId::new("cli").unwrap();
-
-        let missing = Runner::at("/nonexistent/definitely-not-claude");
-        let result = respond_with(&missing, home.path(), &thread, "did you record this", None);
-        assert!(result.is_err(), "the ask should have failed");
-
-        let entries = carl::log::read(home.path().join("conversations.jsonl")).unwrap();
-        assert!(
-            entries.iter().any(|e| e.text == "did you record this"),
-            "the question must be recorded even when the answer never arrives: {entries:?}"
-        );
-        assert!(
-            entries.iter().any(|e| e.speaker == Speaker::System),
-            "the failure should be recorded too: {entries:?}"
-        );
-    }
-}
-
 /// Take a picture of the screen, then ask about it.
 ///
 /// The image lands inside Claude Code's working directory, so the prompt can name it by a
@@ -184,4 +157,31 @@ than from what you expect to be there. If you cannot make something out, say so.
         Some(&sent),
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The question must be on disk before Claude is ever contacted, so a failure there
+    /// cannot take it with it. Proven by pointing at a binary that does not exist.
+    #[test]
+    fn the_question_survives_a_total_failure_to_answer() {
+        let home = tempfile::tempdir().unwrap();
+        let thread = ThreadId::new("cli").unwrap();
+
+        let missing = Runner::at("/nonexistent/definitely-not-claude");
+        let result = respond_with(&missing, home.path(), &thread, "did you record this", None);
+        assert!(result.is_err(), "the ask should have failed");
+
+        let entries = carl::log::read(home.path().join("conversations.jsonl")).unwrap();
+        assert!(
+            entries.iter().any(|e| e.text == "did you record this"),
+            "the question must be recorded even when the answer never arrives: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.speaker == Speaker::System),
+            "the failure should be recorded too: {entries:?}"
+        );
+    }
 }
