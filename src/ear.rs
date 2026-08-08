@@ -57,17 +57,33 @@ impl Ear {
 
                 // Silence is most of a room's day. Running whisper over it costs real time
                 // for a guaranteed empty answer, so the level check comes first.
-                if mic.loudness() < SPEECH_FLOOR {
+                let level = mic.loudness();
+                if level < SPEECH_FLOOR {
                     continue;
                 }
 
+                let started = std::time::Instant::now();
                 let text = self.whisper.transcribe(Tier::Wake, mic.snapshot()?)?;
+
+                // Printed every pass, not hidden behind a flag. When a wake word does not
+                // land you need to see what the model actually wrote, and needing to restart
+                // with a flag to find out is a step too many when the thing is already
+                // failing in front of you.
+                if !text.is_empty() {
+                    eprintln!(
+                        "  [{:.1}s, level {:.2}] heard: {text:?}",
+                        started.elapsed().as_secs_f32(),
+                        level
+                    );
+                }
+
                 match heard::interpret(&text, false) {
                     // Not for Carl. Nothing is transcribed further, nothing is written down,
                     // and the window rolls the audio out of memory on its own.
                     Heard::Nothing => continue,
                     Heard::Wake { question } => {
                         awake = true;
+                        eprintln!("  awake.");
                         mic.forget();
                         match question {
                             // Asked on the same breath, so answer it rather than making them
@@ -86,6 +102,7 @@ impl Ear {
             // easily run longer than one.
             let wav = mic.utterance(HUSH_SECS, CAP_SECS)?;
             let text = self.whisper.transcribe(Tier::Talk, wav)?;
+            eprintln!("  [awake] heard: {text:?}");
 
             match heard::interpret(&text, true) {
                 Heard::End => {
