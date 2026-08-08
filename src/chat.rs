@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
 use anyhow::Result;
-use carl::slack::{self, Api, Ask, Patience, Tokens};
+use carl::slack::{self, Api, Ask, Directory, Patience, Tokens};
 
 use crate::turn;
 
@@ -49,6 +49,9 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
         // decides whether to answer and it is the last line of defence against two agents
         // talking to each other until somebody notices the bill.
         let mut patience = Patience::default();
+        // Looked up once each. Slack never sends a name, only an id, and Carl greeting
+        // somebody as U0BNSU5N96X is worse than not greeting them.
+        let mut directory = Directory::new();
 
         for ask in rx {
             let who = if ask.from_agent { "agent" } else { "person" };
@@ -76,7 +79,9 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
                 continue;
             }
 
-            let reply = match answer(&home, &ask) {
+            let speaker = directory.name_of(&api, &ask.user);
+
+            let reply = match answer(&home, &ask, &speaker) {
                 Ok(text) if !text.trim().is_empty() => text,
                 Ok(_) => "I had nothing to say to that, which is probably a bug.".to_string(),
                 // Posted rather than only logged. Somebody is waiting in a channel, and
@@ -115,21 +120,19 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
 ///
 /// No spoken brief. Slack is read, not heard, and the two sentence rule that makes a good
 /// spoken answer makes a uselessly thin written one.
-fn answer(home: &Path, ask: &Ask) -> Result<String> {
+fn answer(home: &Path, ask: &Ask, speaker: &str) -> Result<String> {
     // Carl needs telling that he is in Slack. Without it he reasons about whether he has a
     // Slack connector authorised, decides he has not, and explains that he cannot reply, in
     // a message that is itself posted to Slack.
-    let context = if ask.from_agent {
-        format!(
-            "{}\n\nThis message came from another AI agent, not a person. Answer it \
-             directly and briefly. Do not be effusive and do not offer further help, because \
-             the other agent will answer anything you say and neither of you gets bored. If \
-             there is nothing left to settle, say so plainly.",
-            slack::CONTEXT
-        )
-    } else {
-        slack::CONTEXT.to_string()
-    };
+    let mut context = format!("{}\n\nYou are talking to {speaker}.", slack::CONTEXT);
+    if ask.from_agent {
+        context.push_str(
+            "\n\nThat is another AI agent, not a person. Answer it directly and briefly. Do \
+             not be effusive and do not offer further help, because the other agent will \
+             answer anything you say and neither of you gets bored. If there is nothing left \
+             to settle, say so plainly.",
+        );
+    }
 
     let answer = turn::respond_extra(
         home,

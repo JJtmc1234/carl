@@ -139,8 +139,10 @@ Slack message can be longer than the argument limit and can contain anything at 
 | a2a, agent to agent | done, untested against Alex | 15 |
 | answering to his own name | done | 8 |
 | staying in a thread once addressed | done | 4 |
+| names, and calling JJ JJ | done | 3 |
+| python | done | 2 |
 
-145 tests, clippy clean at deny warnings.
+151 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 

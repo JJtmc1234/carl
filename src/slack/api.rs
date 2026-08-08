@@ -62,6 +62,31 @@ impl Api {
         field(&v, "ts")
     }
 
+    /// The display name behind a user id.
+    ///
+    /// Prefers what somebody chose to be called over what the account was registered with.
+    /// display_name is the one people set deliberately, real_name is the fallback.
+    pub fn user_name(&self, user_id: &str) -> Result<String> {
+        let v = self.call("users.info", &self.bot, json!({ "user": user_id }))?;
+        let p = v
+            .get("user")
+            .and_then(|u| u.get("profile"))
+            .ok_or_else(|| Error::Refused("users.info gave no profile".into()))?;
+
+        for key in ["display_name", "real_name"] {
+            if let Some(n) = p.get(key).and_then(|n| n.as_str())
+                && !n.trim().is_empty()
+            {
+                return Ok(n.trim().to_string());
+            }
+        }
+        v.get("user")
+            .and_then(|u| u.get("name"))
+            .and_then(|n| n.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| Error::Refused("users.info gave no name at all".into()))
+    }
+
     /// Replies inside a thread.
     pub fn post(&self, channel: &str, thread_ts: &str, text: &str) -> Result<()> {
         self.call(
@@ -129,6 +154,7 @@ pub fn hint(error: &str) -> &'static str {
             ". Add the scope in the app's OAuth page, then reinstall the app to the \
              workspace. A new scope does nothing until it is reinstalled."
         }
+        "users_not_found" => ". The user id does not exist in this workspace.",
         "not_in_channel" | "channel_not_found" => {
             ". Invite Carl to the channel with /invite @Carl."
         }

@@ -27,6 +27,7 @@ mod named;
 mod patience;
 mod socket;
 mod tokens;
+mod who;
 
 pub use a2a::{Kind, Message, START_TTL, compose, header, parse};
 pub use api::{Api, Me, hint};
@@ -36,6 +37,7 @@ pub use named::{NAMES, addressed};
 pub use patience::{DEFAULT_LIMIT, Patience};
 pub use socket::serve;
 pub use tokens::Tokens;
+pub use who::{Directory, preferred};
 
 /// What Carl is told about being in Slack, on every Slack turn.
 ///

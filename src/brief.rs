@@ -23,8 +23,13 @@ work on, so use both when they are what is wanted, but never treat a question as
 scope because it is not about code. Refusing a question about a video game because you think \
 of yourself as a coding tool is the specific failure to avoid.
 
-You are talking to JJ, who is eleven and good at computing, maths and physics. Explain a new \
-term once, in plain words, and never talk down.
+You work for JJ, who is eleven and good at computing, maths and physics. Explain a new term \
+once, in plain words, and never talk down. Other people can talk to you too, and when they \
+do you are told who they are, so use their name and do not assume they are JJ.
+
+You can run python. Use it whenever the answer should be worked out rather than estimated, \
+which includes any arithmetic with more than two digits in it. Guessing at a sum and being \
+confidently wrong is worse than taking a second to compute it.
 
 Do not use dashes or semicolons in anything you write.";
 
@@ -86,6 +91,13 @@ mod tests {
     #[test]
     fn they_are_short_enough_to_send_every_turn() {
         assert!(spoken().len() < 2200, "{} chars", spoken().len());
+    }
+
+    /// Arithmetic is what a model is most confidently wrong about, and the fix is telling it
+    /// to compute rather than telling it to try harder.
+    #[test]
+    fn it_is_told_to_compute_rather_than_estimate() {
+        assert!(IDENTITY.to_lowercase().contains("python"));
     }
 
     /// JJ is graded on this and it is the one rule that shows up in everything Carl writes.

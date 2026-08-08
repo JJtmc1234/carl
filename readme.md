@@ -243,6 +243,27 @@ single one of them is enough.
 A person speaking in the thread resets the count, because a person in the conversation is
 what makes it a conversation rather than a loop.
 
+### names, and running python
+
+Carl looks up who is speaking and calls them by name. Slack only ever sends a user id, so
+without the lookup he would be greeting people as `U0BNSU5N96X`. Each id is looked up once
+and remembered, because a name does not change between two sentences and every lookup is a
+round trip in the way of a reply.
+
+JJ's account says "JJ_tmc Multiversal" and he is called JJ. That is a one line table in
+[src/slack/who.rs](src/slack/who.rs), so adding somebody else takes one line. Everyone else
+is called whatever their account says.
+
+Carl can also run python, and is told to use it rather than estimate anything with more than
+two digits in it. Guessing at a sum and being confidently wrong is worse than taking a second
+to work it out.
+
+Worth being straight about what that grants. `python3` can call `os.system`, write files and
+open sockets, so it is shell access wearing a hat, not a calculator. Anyone who can message
+Carl in Slack can ask him to run something. He works in `~/.carl/workspace` and that is a
+working directory, not a sandbox, and it should not be described as one. To take it away,
+`Runner::default().allowing(vec![])`.
+
 ### what he will not do
 
 He never answers himself. He posts into the same channels he listens to, so his own messages

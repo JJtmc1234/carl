@@ -59,12 +59,27 @@ pub struct Answer {
 /// Where the `claude` binary lives, so tests can point at a stand in.
 pub struct Runner {
     program: PathBuf,
+    /// Tools Carl may use without being asked each time.
+    ///
+    /// Headless has nobody to ask, so a tool that is not listed here is simply refused and
+    /// Carl explains that he cannot do the thing rather than doing it.
+    allowed: Vec<String>,
 }
+
+/// Running python, which is what makes Carl able to work something out rather than guess.
+///
+/// Worth being clear about what this grants. `python3` can call `os.system`, write files and
+/// open sockets, so this is shell access wearing a hat, not a calculator. It is granted
+/// because a helper that cannot compute anything is not much of a helper, and because the
+/// working directory is `~/.carl/workspace`. It is not a sandbox and should not be described
+/// as one.
+pub const PYTHON: &str = "Bash(python3:*)";
 
 impl Default for Runner {
     fn default() -> Self {
         Self {
             program: PathBuf::from("claude"),
+            allowed: vec![PYTHON.to_string()],
         }
     }
 }
@@ -73,7 +88,14 @@ impl Runner {
     pub fn at(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
+            allowed: vec![PYTHON.to_string()],
         }
+    }
+
+    /// Replaces the allowed tool list. An empty list means Carl may use no tools at all.
+    pub fn allowing(mut self, tools: Vec<String>) -> Self {
+        self.allowed = tools;
+        self
     }
 
     pub fn args_for(&self, turn: &Turn<'_>) -> Vec<String> {
@@ -86,6 +108,11 @@ impl Runner {
         head: impl IntoIterator<Item = &'b str>,
     ) -> Vec<String> {
         let mut args: Vec<String> = head.into_iter().map(str::to_owned).collect();
+
+        if !self.allowed.is_empty() {
+            args.push("--allowedTools".into());
+            args.extend(self.allowed.iter().cloned());
+        }
 
         // --session-id pins a new conversation to an id we chose. --resume continues one that
         // already exists. Sending both is an error, which is why `resume` is a flag on the
@@ -231,6 +258,37 @@ mod tests {
         });
         assert!(args.contains(&"--resume".to_string()), "{args:?}");
         assert!(!args.contains(&"--session-id".to_string()), "{args:?}");
+    }
+
+    /// Carl can work an answer out rather than guessing at it, which for arithmetic is the
+    /// difference between right and confidently wrong.
+    #[test]
+    fn python_is_allowed_by_default() {
+        let s = session();
+        let args = Runner::default().args_for(&Turn {
+            session: &s,
+            resume: false,
+            prompt: "what is 2 to the 64",
+            extra_system: None,
+            workdir: Path::new("/tmp"),
+        });
+        let at = args.iter().position(|a| a == "--allowedTools").unwrap();
+        assert_eq!(args[at + 1], PYTHON);
+    }
+
+    /// Nothing is granted silently. An empty list must produce no flag at all rather than an
+    /// empty one, which some argument parsers read as "allow everything".
+    #[test]
+    fn no_tools_means_no_flag() {
+        let s = session();
+        let args = Runner::default().allowing(vec![]).args_for(&Turn {
+            session: &s,
+            resume: false,
+            prompt: "hi",
+            extra_system: None,
+            workdir: Path::new("/tmp"),
+        });
+        assert!(!args.contains(&"--allowedTools".to_string()), "{args:?}");
     }
 
     #[test]

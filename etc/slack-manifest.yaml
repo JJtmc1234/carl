@@ -16,6 +16,8 @@
 #   im:read             see which conversations are direct messages
 #   channels:history    hear his own name, without needing an at sign
 #   groups:history      the same in private channels
+#   users:read          turn a user id into a name, so Carl can call people what they
+#                       are called rather than "hello U0BNSU5N96X"
 #
 # channels:history is the one worth thinking about. It means Carl receives every message in
 # every channel he is in, which is the only way he can notice somebody typing his name
@@ -51,6 +53,7 @@ oauth_config:
       - im:read
       - channels:history
       - groups:history
+      - users:read
 
 settings:
   event_subscriptions:
