@@ -35,6 +35,19 @@ enum Command {
         thread: String,
     },
 
+    /// Take a picture of the screen and ask about it.
+    ///
+    /// Works for any game or any window, not just one. The screenshot goes into Carl's
+    /// workspace and is replaced each time rather than piling up.
+    Look {
+        question: Vec<String>,
+        #[arg(long, default_value = "cli")]
+        thread: String,
+        /// Just the focused window instead of the whole screen.
+        #[arg(long)]
+        window: bool,
+    },
+
     /// Show a conversation as it was recorded.
     History {
         #[arg(long, default_value = "cli")]
@@ -76,6 +89,26 @@ fn main() -> Result<()> {
                 anyhow::bail!("nothing to say");
             }
             let answer = turn::respond(&home, &thread, &said, None)?;
+            println!("{}", answer.text);
+            Ok(())
+        }
+
+        Command::Look {
+            question,
+            thread,
+            window,
+        } => {
+            let thread = ThreadId::new(thread)?;
+            let asked = question.join(" ");
+            if asked.trim().is_empty() {
+                anyhow::bail!("ask something about the screen");
+            }
+            let area = if window {
+                carl::Area::Window
+            } else {
+                carl::Area::Screen
+            };
+            let answer = turn::look(&home, &thread, &asked, area)?;
             println!("{}", answer.text);
             Ok(())
         }

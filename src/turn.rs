@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use carl::claude::{Answer, Runner, Turn};
-use carl::{Log, Memory, Registry, Speaker, ThreadId};
+use carl::{Area, Camera, Log, Memory, Registry, Speaker, ThreadId};
 
 fn now() -> u64 {
     SystemTime::now()
@@ -48,6 +48,21 @@ pub fn respond_with(
     said: &str,
     author: Option<String>,
 ) -> Result<Answer> {
+    respond_full(runner, home, thread, said, None, author)
+}
+
+/// The full form, where what gets recorded and what gets sent can differ.
+///
+/// `sent` is what Claude actually receives. When a screenshot is involved it carries the
+/// image path, which would be noise in the record. The record keeps the human sentence.
+pub fn respond_full(
+    runner: &Runner,
+    home: &Path,
+    thread: &ThreadId,
+    said: &str,
+    sent: Option<&str>,
+    author: Option<String>,
+) -> Result<Answer> {
     let mut log = Log::open(home.join("conversations.jsonl"))
         .context("cannot open the conversation record")?;
 
@@ -69,7 +84,7 @@ pub fn respond_with(
         // A brand new thread has nothing to resume. Getting this wrong is the difference
         // between continuing a conversation and starting a second one silently.
         resume: !is_new,
-        prompt: said,
+        prompt: sent.unwrap_or(said),
         extra_system: extra_system.as_deref(),
         workdir: &workdir,
     });
@@ -137,4 +152,36 @@ mod tests {
             "the failure should be recorded too: {entries:?}"
         );
     }
+}
+
+/// Take a picture of the screen, then ask about it.
+///
+/// The image lands inside Claude Code's working directory, so the prompt can name it by a
+/// short relative path and Claude reads it with its own file tools. No image encoding here.
+pub fn look(home: &Path, thread: &ThreadId, question: &str, area: Area) -> Result<Answer> {
+    let workdir = home.join("workspace");
+    let shot = workdir.join("screen.png");
+
+    Camera::default()
+        .capture(area, &shot)
+        .context("could not take a picture of the screen")?;
+
+    let (w, h) = carl::capture::png_size(&shot).unwrap_or((0, 0));
+
+    // Told to look first and answer second. Asking the question first invites an answer from
+    // memory before the image is ever opened.
+    let sent = format!(
+        "Read the image at ./screen.png ({w} by {h}). It is a picture of my screen taken \
+just now. Look at it before answering, and answer from what is actually on screen rather \
+than from what you expect to be there. If you cannot make something out, say so.\n\n{question}"
+    );
+
+    respond_full(
+        &Runner::default(),
+        home,
+        thread,
+        question,
+        Some(&sent),
+        None,
+    )
 }

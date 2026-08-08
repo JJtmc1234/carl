@@ -19,11 +19,15 @@
 //! forth inside that thread. It does not make Carl remember something said in a different
 //! Slack thread last week. Only memory does that.
 
+pub mod capture;
 pub mod claude;
+pub mod heard;
 pub mod log;
 pub mod memory;
 pub mod threads;
 
+pub use capture::{Area, Camera};
+pub use heard::{Heard, interpret};
 pub use log::{Entry, Log, Speaker};
 pub use memory::Memory;
 pub use threads::{Registry, SessionId};
