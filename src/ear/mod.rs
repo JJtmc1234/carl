@@ -48,14 +48,16 @@ pub struct Ear {
 }
 
 impl Ear {
-    pub fn new(thread: ThreadId) -> Result<Self> {
+    pub fn new(thread: ThreadId, accurate: bool) -> Result<Self> {
         let devices = Devices::detect();
         let voice = Voice::found()
             .context("piper is not ready")?
             .to_sink(devices.sink());
 
         Ok(Self {
-            whisper: Whisper::found().context("whisper is not ready")?,
+            whisper: Whisper::found()
+                .context("whisper is not ready")?
+                .accurate(accurate),
             mouth: Mouth::new(voice, devices.can_barge_in()),
             thread,
             devices,

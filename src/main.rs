@@ -61,12 +61,19 @@ enum Command {
         ///
         /// Lower feels snappier and starts cutting you off when you pause to think. There is
         /// no right answer here, only your right answer, so it is a flag rather than a guess.
-        #[arg(long, default_value_t = 0.9)]
+        #[arg(long, default_value_t = 0.4)]
         hush: f32,
 
         /// Seconds before Carl gives up waiting for you to stop.
         #[arg(long, default_value_t = 15.0)]
         cap: f32,
+
+        /// Use the larger transcription model. Costs about two seconds on every turn.
+        ///
+        /// Worth it in a noisy room or when item names keep coming out wrong. On clean audio
+        /// the smaller model gave the identical transcript three times faster.
+        #[arg(long)]
+        accurate: bool,
     },
 
     /// Check the microphone and report what each stage actually heard.
@@ -124,7 +131,9 @@ fn main() -> Result<()> {
             // written. Same path the voice uses, which means running this exercises it.
             use std::io::Write;
             let mut out = std::io::stdout();
-            let answer = turn::stream(&home, &thread, &said, None, &mut |t| {
+            // No voice brief here. This is being read, not heard, and one or two sentences
+            // is the wrong shape for a terminal.
+            let answer = turn::stream(&home, &thread, &said, None, None, &mut |t| {
                 let _ = out.write_all(t.as_bytes());
                 let _ = out.flush();
                 carl::Flow::Continue
@@ -156,9 +165,12 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Command::Listen { thread, hush, cap } => {
-            ear::Ear::new(ThreadId::new(thread)?)?.run(&home, ear::Timing { hush, cap })
-        }
+        Command::Listen {
+            thread,
+            hush,
+            cap,
+            accurate,
+        } => ear::Ear::new(ThreadId::new(thread)?, accurate)?.run(&home, ear::Timing { hush, cap }),
 
         Command::MicCheck { secs } => {
             use carl::audio::{Mic, SPEECH_FLOOR};

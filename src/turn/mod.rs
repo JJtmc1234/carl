@@ -55,6 +55,7 @@ pub fn respond_full(
         said,
         sent,
         author,
+        extra: None,
     }
     .run(|turn| runner.ask(turn))
 }
@@ -62,12 +63,14 @@ pub fn respond_full(
 /// Handles one message, handing each piece of the answer over as it arrives.
 ///
 /// `on_text` decides whether to keep going. Returning `Flow::Stop` abandons the rest, which
-/// is what happens when Carl is talked over.
+/// is what happens when Carl is talked over. `extra` carries the voice brief when the answer
+/// is going to be spoken.
 pub fn stream(
     home: &Path,
     thread: &ThreadId,
     said: &str,
     sent: Option<&str>,
+    extra: Option<&str>,
     on_text: &mut dyn FnMut(&str) -> Flow,
 ) -> Result<Answer> {
     let runner = Runner::default();
@@ -77,6 +80,7 @@ pub fn stream(
         said,
         sent,
         author: None,
+        extra,
     }
     .run(|turn| runner.ask_streaming(turn, on_text))
 }
@@ -100,10 +104,11 @@ pub fn look_streaming(
     thread: &ThreadId,
     question: &str,
     area: Area,
+    extra: Option<&str>,
     on_text: &mut dyn FnMut(&str) -> Flow,
 ) -> Result<Answer> {
     let sent = shot(home, question, area)?;
-    stream(home, thread, question, Some(&sent), on_text)
+    stream(home, thread, question, Some(&sent), extra, on_text)
 }
 
 /// Takes the picture and writes the prompt that goes with it.
@@ -170,6 +175,7 @@ mod tests {
             said: "streamed question",
             sent: None,
             author: None,
+            extra: None,
         }
         .run(|turn| missing.ask_streaming(turn, &mut |_| Flow::Continue));
         assert!(result.is_err());

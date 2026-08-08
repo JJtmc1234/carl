@@ -78,22 +78,34 @@ finish.
 
 ### what it costs, end to end
 
+Carl is told on every spoken turn that his answer is going to be read out loud. That one
+instruction does more for the wait than everything else put together, because a spoken answer
+cannot be skimmed. You hear it one word at a time and you cannot skip the part you know.
+
+Same question, with and without it, measured twice each and interleaved so load could not
+flatter either one.
+
+| | words | claude | spoken aloud | total |
+|---|---|---|---|---|
+| before | about 200 | 22s | 78s | 100s |
+| after | about 29 | 4.4s | 12s | 16s |
+
+Claude got faster too, not just shorter, because it stops thinking hard about an answer it
+knows has to fit in two sentences. First token went from 15s to 2.8s.
+
+The rest of the chain:
+
 | step | time |
 |---|---|
 | you speak | as long as you take |
-| quiet before he decides you are done | 0.9s, `--hush` to change it |
-| whisper `small.en` | ~0.9s |
+| quiet before he decides you are done | 0.4s, `--hush` to change it |
+| whisper `base.en` | 0.9s, or 2.8s with `--accurate` |
 | screenshot, only when needed | ~0.3s, plus a white flash |
-| **claude, to its first word** | **1 to 6s** |
-| **claude, to its last word** | **9 to 25s** |
-| piper and playback | ~0.3s |
+| **claude, to its first word** | **~2.8s** |
+| piper and playback | starts immediately, then real time |
 
-Claude dominates and nothing else is close.
-
-He speaks each sentence as it is written rather than waiting for the last word. Measured on
-one four sentence answer: first token at 5.8s, first sentence at 7.1s, whole answer at 9.4s.
-So it saves the 2.3s tail on a short answer and more on a long one. It does not help with the
-wait before the first word, because that is Claude thinking and nothing here can touch it.
+He speaks each sentence as it is written rather than waiting for the last word, so the number
+that matters is time to first word, not to the whole answer.
 
 ### the echo canceller
 

@@ -4,14 +4,22 @@
 //! it has to be nearly free. The conversation tier only runs once you have actually said
 //! something to Carl, so it can afford to be better.
 //!
-//! Measured on this machine, for eleven seconds of speech, CPU only:
+//! Measured on this machine, CPU only, on a real spoken question lasting 1.65 seconds. All
+//! three transcribed it identically, word for word.
 //!
 //! | model | time | used for |
 //! |---|---|---|
-//! | `tiny.en` | 0.7s | the wake word, running all the time |
-//! | `base.en` | 1.3s | |
-//! | `small.en` | 3.4s | the conversation |
-//! | `large-v3-turbo` | 13.9s | nothing. Too slow on CPU to sit in a loop. |
+//! | `tiny.en` | 0.49s | the wake word, running all the time |
+//! | `base.en` | 0.89s | the conversation |
+//! | `small.en` | 2.84s | the conversation with `--accurate` |
+//! | `large-v3-turbo` | 13.9s for 11s of speech | nothing. Too slow on CPU to sit in a loop. |
+//!
+//! `base.en` rather than `small.en` for the conversation, which is a two second saving on
+//! every single thing you say. Two seconds is a long time to wait having already finished
+//! talking, and on clean audio the better model was not buying anything. The echo canceller
+//! suppresses room noise on the way through, so the audio reaching this is clean now in a
+//! way it was not when `small.en` was chosen. `--accurate` puts it back for a noisy room or
+//! a mouthful of item names.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -30,6 +38,8 @@ pub enum Tier {
 pub struct Whisper {
     binary: PathBuf,
     models: PathBuf,
+    /// Trade two seconds a turn for the larger conversation model.
+    accurate: bool,
 }
 
 impl Whisper {
@@ -50,6 +60,7 @@ impl Whisper {
         Ok(Self {
             binary,
             models: root.join("models"),
+            accurate: false,
         })
     }
 
@@ -57,13 +68,21 @@ impl Whisper {
         Self {
             binary: binary.into(),
             models: models.into(),
+            accurate: false,
         }
+    }
+
+    /// Uses the larger conversation model, at about two seconds a turn.
+    pub fn accurate(mut self, yes: bool) -> Self {
+        self.accurate = yes;
+        self
     }
 
     fn model_for(&self, tier: Tier) -> PathBuf {
         self.models.join(match tier {
             Tier::Wake => "ggml-tiny.en.bin",
-            Tier::Talk => "ggml-small.en.bin",
+            Tier::Talk if self.accurate => "ggml-small.en.bin",
+            Tier::Talk => "ggml-base.en.bin",
         })
     }
 
@@ -153,7 +172,7 @@ mod tests {
     #[test]
     fn the_talk_tier_uses_the_better_model() {
         let args = w().args_for(Tier::Talk, Path::new("/dev/shm/a.wav"));
-        assert!(args.iter().any(|a| a.contains("small.en")), "{args:?}");
+        assert!(args.iter().any(|a| a.contains("base.en")), "{args:?}");
         // large-v3-turbo took 13.9s for 11s of audio here. It must not creep back in.
         assert!(!args.iter().any(|a| a.contains("large")), "{args:?}");
     }

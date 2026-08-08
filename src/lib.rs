@@ -28,6 +28,7 @@ pub mod log;
 pub mod memory;
 pub mod speech;
 pub mod threads;
+pub mod voice_brief;
 pub mod whisper;
 
 pub use capture::{Area, Camera};
@@ -37,6 +38,7 @@ pub use log::{Entry, Log, Speaker};
 pub use memory::Memory;
 pub use speech::{Sentences, Voice};
 pub use threads::{Registry, SessionId};
+pub use voice_brief::BRIEF;
 pub use whisper::{Tier, Whisper};
 
 use serde::{Deserialize, Serialize};

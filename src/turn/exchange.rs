@@ -37,6 +37,11 @@ pub struct Exchange<'a> {
     /// which would be noise in the record.
     pub sent: Option<&'a str>,
     pub author: Option<String>,
+    /// Standing instructions for this way of asking, appended after the memory notes.
+    ///
+    /// Carries the voice brief on spoken turns and nothing at all on typed ones, because the
+    /// rule that makes a good spoken answer makes a uselessly thin written one.
+    pub extra: Option<&'a str>,
 }
 
 impl Exchange<'_> {
@@ -58,7 +63,12 @@ impl Exchange<'_> {
         let (session, is_new) = registry.session_for(self.thread, now())?;
 
         let memory = Memory::open(self.home.join("memory"))?;
-        let extra_system = memory.assemble()?;
+        let extra_system = match (memory.assemble()?, self.extra) {
+            (Some(notes), Some(extra)) => Some(format!("{notes}\n\n{extra}")),
+            (Some(notes), None) => Some(notes),
+            (None, Some(extra)) => Some(extra.to_string()),
+            (None, None) => None,
+        };
 
         // Claude Code runs with this as its working directory, so anything it writes lands
         // somewhere predictable rather than wherever carl happened to be started from.

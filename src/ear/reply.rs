@@ -24,10 +24,18 @@ impl Ear {
                     &self.thread,
                     question,
                     carl::Area::Screen,
+                    Some(carl::BRIEF),
                     &mut on_text,
                 )
             } else {
-                turn::stream(home, &self.thread, question, None, &mut on_text)
+                turn::stream(
+                    home,
+                    &self.thread,
+                    question,
+                    None,
+                    Some(carl::BRIEF),
+                    &mut on_text,
+                )
             }
         };
         narration.finish();

@@ -137,7 +137,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | the listen loop | wake path confirmed on this machine, the rest needs a real conversation | |
 | Slack | not built | |
 
-95 tests, clippy clean at deny warnings.
+97 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -258,3 +258,45 @@ The callback that speaks a sentence blocks for as long as the sentence takes. Th
 stall Claude if the same thread were reading its output, so a reader thread drains it into a
 channel and Claude writes at full speed while Carl talks. Third time that pattern has been
 the answer in this project.
+
+## the instruction that mattered more than the code
+
+Everything above shaves tenths of a second. Telling Carl that his answer is going to be
+spoken out loud took a hundred seconds down to sixteen.
+
+A screen answer can be skimmed, scrolled back over and abandoned halfway. A spoken answer
+arrives one word at a time and you cannot skip the part you already know, so length is not a
+matter of taste. It is latency, twice over: Claude spends longer writing it and Carl spends
+longer saying it.
+
+Same question, twice each, interleaved so load could not flatter either side.
+
+| | words | claude | spoken aloud | total |
+|---|---|---|---|---|
+| before | about 200 | 22s | 78s | 100s |
+| after | about 29 | 4.4s | 12s | 16s |
+
+First token dropped from 15s to 2.8s as well, which was not expected. Claude thinks less hard
+about an answer that has to fit in two sentences.
+
+The brief lives in `voice_brief.rs` and is only added to spoken turns. `carl ask` in a
+terminal deliberately does not get it, because two sentences is the wrong shape for something
+you are reading.
+
+## the other second and a half
+
+| change | saved |
+|---|---|
+| transcribing with `base.en` instead of `small.en` | 2.0s |
+| waiting 0.4s for you to stop talking instead of 0.9s | 0.5s |
+
+Both were measured rather than assumed. On a real spoken question lasting 1.65 seconds,
+`tiny.en` took 0.49s, `base.en` 0.89s and `small.en` 2.84s, and all three returned the
+identical transcript word for word. The echo canceller suppresses room noise on the way
+through, so the audio reaching whisper is cleaner than it was when `small.en` was chosen.
+`--accurate` puts the bigger model back for a noisy room.
+
+A faster model was the obvious thing to try and it was wrong. Haiku refused the question
+outright, because Claude Code tells the model it is a coding agent and the smaller model took
+that literally. Sonnet was slower than Opus. Opus was both the fastest and the only one that
+answered, so nothing changed here.
