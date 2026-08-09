@@ -85,7 +85,9 @@ impl Sentences {
 
         // Headings and bullets are decided by their first characters, which arrive before the
         // rest of the line. Emitting early would read the hash or the dash out loud.
-        if trimmed.is_empty() || trimmed.starts_with(['`', '#', '-', '*', '>', '+']) {
+        // A square bracket is in this list because a line beginning with one might turn out
+        // to be a [remember] note, and half of one spoken aloud is the worst possible outcome.
+        if trimmed.is_empty() || trimmed.starts_with(['`', '#', '-', '*', '>', '+', '[']) {
             let end = nl? + 1;
             return Some(self.buf.drain(..end).collect());
         }
@@ -233,6 +235,19 @@ mod tests {
             drain(&mut s),
             vec!["Next steps. Still the heading", "Get iron"]
         );
+    }
+
+    /// A note is Carl writing something down, not talking. Speaking half of one before the
+    /// line finished arriving would be the worst of both.
+    #[test]
+    fn a_remember_note_is_never_spoken() {
+        let mut s = Sentences::new();
+        s.feed("Go for logistics science. [rem");
+        assert_eq!(drain(&mut s), vec!["Go for logistics science."]);
+
+        s.feed("ember] JJ plays Factorio.\nAnything else?\n");
+        assert_eq!(drain(&mut s), vec!["Anything else?"]);
+        assert_eq!(s.rest(), None);
     }
 
     /// Nothing worth saying must not produce an empty string. An empty string starts a

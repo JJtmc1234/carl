@@ -21,6 +21,29 @@ use anyhow::{Context, Result};
 use carl::claude::{Answer, Turn};
 use carl::{Log, Memory, Registry, Speaker, ThreadId};
 
+/// A short, stable filename for a note.
+///
+/// Named from the note rather than the clock, so writing the same fact twice replaces it
+/// instead of accumulating near duplicates that each cost context on every future turn.
+fn note_name(note: &str) -> String {
+    let slug: String = note
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .to_lowercase()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if slug.is_empty() {
+        format!("note-{}", now())
+    } else {
+        slug
+    }
+}
+
 pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -92,7 +115,23 @@ impl Exchange<'_> {
         });
 
         match outcome {
-            Ok(answer) => {
+            Ok(mut answer) => {
+                // Taken out here, once, rather than at each of the three places that show an
+                // answer. Carl writes a note inside the reply he was already giving, which
+                // costs nothing, works on every surface, and lets him decide, since he is the
+                // only participant who knows whether something mattered.
+                let (said, notes) = carl::remember::split(&answer.text);
+                answer.text = said;
+
+                for note in &notes {
+                    match memory.write(&note_name(note), note) {
+                        Ok(path) => eprintln!("  remembered: {}", path.display()),
+                        // Never fatal. Failing to keep a note must not lose the answer that
+                        // came with it, which the person is waiting for.
+                        Err(e) => eprintln!("  could not keep a note: {e}"),
+                    }
+                }
+
                 // A session id we did not ask for means the next turn would resume the wrong
                 // conversation. Worth recording rather than shrugging at.
                 if let Some(actual) = &answer.session_id
@@ -147,5 +186,42 @@ impl Exchange<'_> {
                 Err(e.into())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Named from the note so the same fact twice replaces itself rather than accumulating
+    /// near duplicates, each of which costs context on every future turn.
+    #[test]
+    fn the_same_fact_gets_the_same_filename() {
+        let a = note_name("JJ is playing Factorio on red and green science");
+        let b = note_name("JJ is playing Factorio on red and green science");
+        assert_eq!(a, b);
+        assert_eq!(a, "jj-is-playing-factorio-on-red");
+    }
+
+    #[test]
+    fn different_facts_get_different_filenames() {
+        assert_ne!(
+            note_name("JJ likes short answers"),
+            note_name("JJ is eleven")
+        );
+    }
+
+    /// A filename becomes a path, so nothing path shaped may survive.
+    #[test]
+    fn a_note_cannot_smuggle_a_path_into_a_filename() {
+        let n = note_name("../../etc/passwd is interesting");
+        assert!(!n.contains('/'), "{n}");
+        assert!(!n.contains(".."), "{n}");
+    }
+
+    /// A note of pure punctuation would otherwise produce an empty filename.
+    #[test]
+    fn a_note_with_no_letters_still_gets_a_name() {
+        assert!(note_name("!!! ???").starts_with("note-"));
     }
 }

@@ -26,6 +26,10 @@ pub fn speakable(raw: &str) -> String {
         if in_code || t.is_empty() {
             continue;
         }
+        // Never said out loud. This is Carl writing something down, not talking.
+        if crate::remember::is_note(t) {
+            continue;
+        }
 
         // Strip leading list markers and heading hashes. "Dash dash dash" is not speech.
         let t = t

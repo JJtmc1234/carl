@@ -23,6 +23,11 @@ context window, and cost scales with it. A conversation running for months canno
 every message. Claude Code compacts a long thread automatically, and that is fine, because
 the record still has the full text.
 
+Carl writes his own notes. When something is worth keeping he puts a `[remember]` line in
+the answer, the line is stripped before anybody sees it, and the note comes back in every
+future conversation on every surface. It costs no extra model call, and he decides, since he
+is the only one who knows whether something mattered.
+
 **Memory is the part people forget.** Resuming a thread gives back and forth *inside* that
 thread. It does nothing for something said in a different Slack thread last week. Only the
 notes in `memory/` cross that gap, and they ride along on every single message, which is why

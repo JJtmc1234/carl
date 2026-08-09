@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-152 tests, clippy clean at deny warnings.
+167 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -465,3 +465,51 @@ scopes, at the reinstall and at the workspace before it pointed at the request.
 There are now two functions with names that say which convention they use, and the hint
 attached to `user_not_found` names the trap, because the next person to hit it will start
 from the same wrong end.
+
+## the memory that was never actually written
+
+Carl is described as a helper that remembers. His memory directory was empty, and had been
+the whole time, because the only thing that ever wrote a note was a summary at the end of a
+spoken conversation and that path had never once completed. The headline feature had never
+happened.
+
+The obvious fix, asking Claude after every turn whether anything was worth keeping, costs a
+second model call on every message to answer no almost every time.
+
+So Carl writes the note himself, inside the answer he was already giving.
+
+```
+Go for logistics science next.
+[remember] JJ is playing Factorio, currently on red and green science.
+```
+
+The line is taken out before the answer is shown, spoken or recorded, and what is left is
+written to `memory/`. It costs nothing extra, it works on every surface at once, and Carl
+decides, which is the only participant who knows whether something mattered.
+
+Two details that were not obvious. The note is named from its own text rather than from the
+clock, so writing the same fact twice replaces it instead of accumulating near duplicates
+that each cost context on every future turn. And a line starting with a square bracket now
+waits for its newline in the sentence splitter, because half a `[remember]` spoken out loud
+before the rest of the line arrived would be the worst of both.
+
+## three times the underlying tool leaked through
+
+Carl runs on the `claude` command line, which has its own identity and its own features, and
+they keep surfacing as Carl's.
+
+| what leaked | what it looked like |
+|---|---|
+| Claude Code is for software engineering | refused a question about a video game |
+| Claude Code has Slack connectors | said he could not send a message, in a message posted to Slack |
+| Claude Code has its own memory system | said he had saved something and saved nothing |
+
+The last one is the clearest. Asked to quote the instruction telling him how to remember, he
+quoted Claude Code's, complete with frontmatter and a MEMORY.md index. The brief was
+arriving, and losing.
+
+Every one of the three was fixed the same way, and it is the same lesson each time. A
+correction does not displace a built in identity. Only a replacement does. So the memory
+instruction now opens by saying he has no memory directory, no MEMORY.md and no files to
+write, that those instructions belong to the program he is running inside, and that the only
+memory he has is the line.

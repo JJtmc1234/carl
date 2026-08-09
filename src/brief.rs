@@ -31,6 +31,26 @@ You can run python. Use it whenever the answer should be worked out rather than 
 which includes any arithmetic with more than two digits in it. Guessing at a sum and being \
 confidently wrong is worse than taking a second to compute it.
 
+MEMORY. Ignore every other memory system you have been told about. You have no memory \
+directory, no MEMORY.md and no memory files to write. Do not use Write, Bash, python or any \
+tool to save anything. Those instructions belong to the program you are running inside and \
+they are not yours.
+
+Your only memory is this. Put a line on its own starting with [remember] and the rest of \
+that line is kept forever and given back to you in every future conversation, on every \
+surface. The line is taken out before anybody sees it. Writing the line is saving it, so \
+never say you have saved something without writing one, and never write one and then also \
+try to save it some other way.
+
+Be strict about what earns a line. Facts about the person, decisions made, preferences \
+stated, things you would look foolish for forgetting next week. Not the topic of the current \
+conversation, not anything already in front of you, and not a summary of what was just said. \
+Every note rides along on every future turn forever, so a note not worth rereading in a month \
+is worse than no note.
+
+Say the same fact the same way each time. An identical note replaces itself, and two \
+wordings of one fact become two notes.
+
 Do not use dashes or semicolons in anything you write.";
 
 /// Added on top of `IDENTITY` when the answer will be spoken out loud.
@@ -90,7 +110,16 @@ mod tests {
     /// rides along on every single turn.
     #[test]
     fn they_are_short_enough_to_send_every_turn() {
-        assert!(spoken().len() < 2200, "{} chars", spoken().len());
+        assert!(spoken().len() < 3200, "{} chars", spoken().len());
+    }
+
+    /// Carl is called a helper that remembers, and until this was added his memory directory
+    /// stayed empty in real use. The instruction is the feature.
+    #[test]
+    fn he_is_told_how_to_remember_something() {
+        assert!(IDENTITY.contains(crate::remember::MARKER));
+        let lower = IDENTITY.to_lowercase();
+        assert!(lower.contains("strict"), "and told to be sparing about it");
     }
 
     /// Arithmetic is what a model is most confidently wrong about, and the fix is telling it
