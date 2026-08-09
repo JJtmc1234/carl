@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-167 tests, clippy clean at deny warnings.
+173 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -513,3 +513,23 @@ correction does not displace a built in identity. Only a replacement does. So th
 instruction now opens by saying he has no memory directory, no MEMORY.md and no files to
 write, that those instructions belong to the program he is running inside, and that the only
 memory he has is the line.
+
+## streaming into a place that cannot stream
+
+The voice never suffered from Claude taking twenty five seconds, because a voice arriving
+late is obviously still on its way. Slack showed nothing at all until the whole answer
+landed, so a question sat there looking ignored and then was suddenly answered, and in
+between the only honest reading was that Carl had broken.
+
+Slack has no streaming. It has `chat.update`, so the message is posted before Claude is even
+asked and rewritten as the words arrive. The placeholder says which wait this is, thinking or
+looking at your screen, because those are different waits and a spinner would say neither.
+
+The real problem is pacing, which is why it is its own type with its own tests. Slack allows
+roughly one edit a second per channel and going over returns `ratelimited`, at which point
+the answer stops updating, which is worse than never having streamed. So rewrites wait 1.5
+seconds, and a trickle of new text waits longer than a flood, because rewriting a whole
+message to add three words flickers for no benefit.
+
+`[remember]` lines are stripped before each rewrite rather than after. A half written note
+appearing in a channel and then vanishing again would be worse than not streaming at all.

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
 use anyhow::Result;
-use carl::slack::{self, Api, Ask, Directory, Patience, Tokens};
+use carl::slack::{self, Api, Ask, Directory, Pace, Patience, Tokens};
 
 use crate::turn;
 
@@ -81,11 +81,21 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
 
             let speaker = directory.name_of(&api, &ask.user);
 
-            let reply = match answer(&home, &ask, &speaker) {
+            // Posted before Claude is even asked. Twenty five seconds of nothing reads as
+            // being ignored, and the only way to tell that apart from Carl being broken is
+            // for him to say he is on it.
+            let looking = carl::needs_screen(&ask.text);
+            let holding = slack::placeholder(looking);
+            let live = api
+                .post_returning(&ask.channel, &ask.thread_ts, holding)
+                .map_err(|e| eprintln!("  could not post a placeholder: {e}"))
+                .ok();
+
+            let reply = match answer(&home, &ask, &speaker, live.as_deref(), &api) {
                 Ok(text) if !text.trim().is_empty() => text,
                 Ok(_) => "I had nothing to say to that, which is probably a bug.".to_string(),
-                // Posted rather than only logged. Somebody is waiting in a channel, and
-                // silence is indistinguishable from Carl ignoring them.
+                // Said out loud rather than only logged. Somebody is waiting in a channel,
+                // and silence is indistinguishable from Carl ignoring them.
                 Err(e) => {
                     eprintln!("  failed: {e:#}");
                     format!("Sorry, that went wrong on my end. {e}")
@@ -107,7 +117,13 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
                 None => reply,
             };
 
-            if let Err(e) = api.post(&ask.channel, &ask.thread_ts, &out) {
+            // The placeholder becomes the answer. A separate message would leave the
+            // thinking line sitting above every reply forever.
+            let posted = match &live {
+                Some(ts) => api.update(&ask.channel, ts, &out),
+                None => api.post(&ask.channel, &ask.thread_ts, &out),
+            };
+            if let Err(e) = posted {
                 eprintln!("  could not post the reply: {e}");
             }
         }
@@ -120,7 +136,7 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
 ///
 /// No spoken brief. Slack is read, not heard, and the two sentence rule that makes a good
 /// spoken answer makes a uselessly thin written one.
-fn answer(home: &Path, ask: &Ask, speaker: &str) -> Result<String> {
+fn answer(home: &Path, ask: &Ask, speaker: &str, live: Option<&str>, api: &Api) -> Result<String> {
     // Carl needs telling that he is in Slack. Without it he reasons about whether he has a
     // Slack connector authorised, decides he has not, and explains that he cannot reply, in
     // a message that is itself posted to Slack.
@@ -134,13 +150,55 @@ fn answer(home: &Path, ask: &Ask, speaker: &str) -> Result<String> {
         );
     }
 
-    let answer = turn::respond_extra(
-        home,
-        &ask.thread,
-        &ask.text,
-        Some(ask.user.clone()),
-        Some(&context),
-    )?;
+    // Nothing to rewrite, so there is no reason to stream.
+    let Some(ts) = live else {
+        let answer = turn::respond_extra(
+            home,
+            &ask.thread,
+            &ask.text,
+            Some(ask.user.clone()),
+            Some(&context),
+        )?;
+        return Ok(answer.text);
+    };
+
+    let mut seen = String::new();
+    let mut pace = Pace::started_with(0);
+
+    let mut show = |chunk: &str| -> carl::Flow {
+        seen.push_str(chunk);
+        // Stripped before showing, not after. A half written [remember] line appearing in a
+        // channel and then vanishing is worse than never streaming at all.
+        let (visible, _) = carl::remember::split(&seen);
+        if pace.should_update(visible.len())
+            && let Err(e) = api.update(&ask.channel, ts, &visible)
+        {
+            // Not fatal, and not retried. The final rewrite carries the whole answer anyway,
+            // so a dropped update costs smoothness and nothing else.
+            eprintln!("  could not update the message: {e}");
+        }
+        carl::Flow::Continue
+    };
+
+    let answer = if carl::needs_screen(&ask.text) {
+        turn::look_streaming(
+            home,
+            &ask.thread,
+            &ask.text,
+            carl::Area::Screen,
+            Some(&context),
+            &mut show,
+        )?
+    } else {
+        turn::stream(
+            home,
+            &ask.thread,
+            &ask.text,
+            None,
+            Some(&context),
+            &mut show,
+        )?
+    };
     Ok(answer.text)
 }
 

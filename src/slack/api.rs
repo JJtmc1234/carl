@@ -97,6 +97,31 @@ impl Api {
             .ok_or_else(|| Error::Refused("users.info gave no name at all".into()))
     }
 
+    /// Replaces a message already posted.
+    ///
+    /// How Carl shows an answer being written. Slack has no way to stream into a message, so
+    /// the message is rewritten as the words arrive. Rate limited by Slack at roughly one a
+    /// second per channel, which is why the caller paces itself rather than updating on every
+    /// chunk.
+    pub fn update(&self, channel: &str, ts: &str, text: &str) -> Result<()> {
+        self.call(
+            "chat.update",
+            &self.bot,
+            json!({ "channel": channel, "ts": ts, "text": text }),
+        )?;
+        Ok(())
+    }
+
+    /// Replies inside a thread, and gives back the timestamp so it can be rewritten later.
+    pub fn post_returning(&self, channel: &str, thread_ts: &str, text: &str) -> Result<String> {
+        let v = self.call(
+            "chat.postMessage",
+            &self.bot,
+            json!({ "channel": channel, "thread_ts": thread_ts, "text": text }),
+        )?;
+        field(&v, "ts")
+    }
+
     /// Replies inside a thread.
     pub fn post(&self, channel: &str, thread_ts: &str, text: &str) -> Result<()> {
         self.call(
@@ -188,6 +213,13 @@ pub fn hint(error: &str) -> &'static str {
         "missing_scope" => {
             ". Add the scope in the app's OAuth page, then reinstall the app to the \
              workspace. A new scope does nothing until it is reinstalled."
+        }
+        "message_not_found" | "cant_update_message" => {
+            ". The message being rewritten is gone or belongs to somebody else."
+        }
+        "ratelimited" => {
+            ". Too many updates too fast. Slack allows roughly one message edit a second per \
+             channel."
         }
         "user_not_found" | "users_not_found" => {
             ". Either the id is not in this workspace, or the call sent a JSON body to a \

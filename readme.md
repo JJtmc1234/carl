@@ -147,6 +147,12 @@ being watched for, in memory, and everything else falls out of a three second wi
 ./target/debug/carl slack
 ```
 
+He answers straight away with what he is doing, then rewrites that message as the answer
+arrives. Slack has no way to stream into a message, so the message is edited in place, paced
+at one rewrite every 1.5 seconds because Slack rate limits edits and going over freezes the
+answer rather than failing politely. Twenty five seconds of nothing looks like being ignored,
+and that was the whole problem.
+
 Three ways to reach him. Mention `@Carl`, send him a direct message, or just use his name in
 a channel he is in. He replies in the thread, so a conversation stays together and he
 remembers the rest of it.
