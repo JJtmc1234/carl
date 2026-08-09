@@ -27,9 +27,10 @@ Everything below was built in one day, in 22 commits, from an empty directory.
 | slack, socket mode | done, live | 15 |
 | answering to his own name | done | 8 |
 | A2A protocol | built and specified, unproven | 15 |
+| memory that gets written | done | 15 |
 | running 24/7 | services installed and running | |
 
-152 tests, clippy clean at deny warnings.
+167 tests, clippy clean at deny warnings.
 
 ## what he can do
 

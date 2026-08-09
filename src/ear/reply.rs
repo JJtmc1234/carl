@@ -58,38 +58,30 @@ impl Ear {
         Ok(())
     }
 
-    /// Writes down what was worth keeping, then the thread can be forgotten.
+    /// Gives Carl one last chance to write something down before the thread is dropped.
     ///
-    /// This is what "end conversation" buys. The full text stays in the record either way,
-    /// but the record is not read back into future conversations. Only memory is.
+    /// It does not write anything itself. There is one way to keep a note and this is not a
+    /// second one. An earlier version asked for a summary and saved the whole reply under a
+    /// timestamped name, which could never replace itself, so the same fact restated at the
+    /// end of ten conversations became ten notes that each cost context forever.
+    ///
+    /// This is still worth doing rather than dropping. The end of a conversation is the one
+    /// moment when what mattered about it is obvious, and mid conversation Carl is answering
+    /// a question rather than looking back at one.
     pub(super) fn remember(&self, home: &Path) -> Result<()> {
-        let asked = "Our conversation is ending. In three lines or fewer, write only what is \
+        let asked = "This conversation is ending. Look back over it and keep anything \
              genuinely worth carrying into future conversations: preferences, decisions, \
-             facts about me. Skip anything you would not want repeated back weeks from now. \
-             If there is nothing worth keeping, reply with exactly NOTHING.";
+             facts about me. Use your [remember] lines, one fact each. Skip anything you \
+             would not want repeated back weeks from now, and skip anything already kept. \
+             If there is nothing worth keeping, reply with exactly NOTHING and no lines.";
 
-        let note = match turn::respond(home, &self.thread, asked, None) {
-            Ok(a) => a.text.trim().to_string(),
-            Err(e) => {
-                eprintln!("could not write a memory: {e:#}");
-                return Ok(());
-            }
-        };
-
-        if note.is_empty() || note.to_uppercase().contains("NOTHING") {
-            return Ok(());
+        // The reply itself is thrown away. Anything worth keeping left it as a note on the
+        // way through, and the closing summary is not something anybody wants read aloud.
+        // No extra brief. Exchange already adds the identity, which is where the [remember]
+        // instruction lives, and sending it twice would just take up room saying it again.
+        if let Err(e) = turn::respond(home, &self.thread, asked, None) {
+            eprintln!("could not look back over the conversation: {e:#}");
         }
-
-        // Named by when it happened, so notes accumulate in order and never overwrite one
-        // another.
-        let stamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-
-        let memory = carl::Memory::open(home.join("memory"))?;
-        let path = memory.write(&format!("chat-{stamp}"), &note)?;
-        eprintln!("remembered: {}", path.display());
         Ok(())
     }
 }
