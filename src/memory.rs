@@ -82,7 +82,7 @@ impl Memory {
         Ok(Some(format!(
             "# What you remember\n\n\
              These are notes you kept from earlier conversations. They may be out of date. \
-             If one turns out to be wrong, say so rather than acting on it.\n\n{out}"
+             If one turns out to be wrong, drop it with a [forget] line naming its heading, rather than acting on it or carrying on around it.\n\n{out}"
         )))
     }
 

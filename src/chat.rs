@@ -169,7 +169,7 @@ fn answer(home: &Path, ask: &Ask, speaker: &str, live: Option<&str>, api: &Api) 
         seen.push_str(chunk);
         // Stripped before showing, not after. A half written [remember] line appearing in a
         // channel and then vanishing is worse than never streaming at all.
-        let (visible, _) = carl::remember::split(&seen);
+        let visible = carl::remember::split(&seen).text;
         if pace.should_update(visible.len())
             && let Err(e) = api.update(&ask.channel, ts, &visible)
         {

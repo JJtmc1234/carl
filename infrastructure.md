@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-173 tests, clippy clean at deny warnings.
+181 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 

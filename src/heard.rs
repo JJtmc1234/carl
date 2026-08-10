@@ -36,6 +36,8 @@ const END_PHRASES: &[&str] = &[
     "and conversation",
     "end conversion",
     "end convo",
+    "end this conversation",
+    "stop listening",
     "goodbye carl",
     "bye carl",
 ];

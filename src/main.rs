@@ -159,11 +159,29 @@ fn main() -> Result<()> {
             // written. Same path the voice uses, which means running this exercises it.
             use std::io::Write;
             let mut out = std::io::stdout();
-            // No voice brief here. This is being read, not heard, and one or two sentences
-            // is the wrong shape for a terminal.
+            // Accumulated and stripped rather than printed straight through. The raw stream
+            // carries Carl's [remember] and [forget] lines, which are bookkeeping and not
+            // part of the answer, and printing them and then not having them in the final
+            // text is the worst of both. Slack already did this and the terminal did not.
+            let mut seen = String::new();
+            let mut printed = 0usize;
+
+            // No voice brief here. This is being read, not heard, and one or two sentences is
+            // the wrong shape for a terminal.
             let answer = turn::stream(&home, &thread, &said, None, None, &mut |t| {
-                let _ = out.write_all(t.as_bytes());
-                let _ = out.flush();
+                seen.push_str(t);
+                let visible = carl::remember::split(&seen).text;
+                // Only ever appends, and only on a character boundary. Stripping a note can
+                // shorten the visible text and nothing already printed can be taken back, and
+                // `printed` is a byte offset into an older version of the string, so slicing
+                // at it blindly could cut a character in half and panic.
+                if let Some(fresh) = visible.get(printed..)
+                    && !fresh.is_empty()
+                {
+                    let _ = out.write_all(fresh.as_bytes());
+                    let _ = out.flush();
+                    printed = visible.len();
+                }
                 carl::Flow::Continue
             })?;
             println!();

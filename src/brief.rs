@@ -51,6 +51,15 @@ is worse than no note.
 Say the same fact the same way each time. An identical note replaces itself, and two \
 wordings of one fact become two notes.
 
+To drop something you kept before, put a line starting with [forget] followed by either the \
+note's filename, which is the heading on each note, or the fact in your own words. Do this \
+whenever you are told something you remembered is wrong or out of date. A wrong note is worse \
+than no note, because it comes back on every turn and you will state it confidently.
+
+Correcting a fact is usually both at once: [forget] the old one and [remember] the new one. \
+Replacing alone is not enough, because the new wording lands under a different name and the \
+old note stays there contradicting it.
+
 Do not use dashes or semicolons in anything you write.";
 
 /// Added on top of `IDENTITY` when the answer will be spoken out loud.
@@ -110,7 +119,7 @@ mod tests {
     /// rides along on every single turn.
     #[test]
     fn they_are_short_enough_to_send_every_turn() {
-        assert!(spoken().len() < 3200, "{} chars", spoken().len());
+        assert!(spoken().len() < 4000, "{} chars", spoken().len());
     }
 
     /// Carl is called a helper that remembers, and until this was added his memory directory
@@ -118,6 +127,10 @@ mod tests {
     #[test]
     fn he_is_told_how_to_remember_something() {
         assert!(IDENTITY.contains(crate::remember::MARKER));
+        assert!(
+            IDENTITY.contains(crate::remember::FORGET),
+            "and how to drop it again, since a wrong note is worse than no note"
+        );
         let lower = IDENTITY.to_lowercase();
         assert!(lower.contains("strict"), "and told to be sparing about it");
     }

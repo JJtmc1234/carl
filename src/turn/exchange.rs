@@ -21,27 +21,33 @@ use anyhow::{Context, Result};
 use carl::claude::{Answer, Turn};
 use carl::{Log, Memory, Registry, Speaker, ThreadId};
 
-/// A short, stable filename for a note.
+/// Drops a note, named either by its filename or by what it said.
 ///
-/// Named from the note rather than the clock, so writing the same fact twice replaces it
-/// instead of accumulating near duplicates that each cost context on every future turn.
-fn note_name(note: &str) -> String {
-    let slug: String = note
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .to_lowercase()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("-");
+/// Both, because Carl sees the filenames in his own memory block and will sometimes quote
+/// one, and will otherwise write out the fact in his own words. Accepting only one of those
+/// would mean `[forget]` silently doing nothing half the time, which is the worst outcome
+/// available: he would believe the wrong fact was gone and keep being told it.
+fn forget_note(memory: &Memory, named: &str) -> anyhow::Result<bool> {
+    let bare = named.trim().trim_end_matches(".md");
 
-    if slug.is_empty() {
-        format!("note-{}", now())
-    } else {
-        slug
+    // Tried as a filename only if it could be one. A fact has spaces in it, and handing that
+    // to Memory is a validation error rather than a miss, which would turn "no such note"
+    // into a failure and hide the real outcome.
+    let could_be_a_filename = !bare.is_empty()
+        && bare
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+
+    if could_be_a_filename && memory.forget(bare)? {
+        return Ok(true);
     }
+
+    // Otherwise as a fact, put through the same naming rule that wrote it.
+    let slug = carl::remember::note_name(bare);
+    if !slug.is_empty() && memory.forget(&slug)? {
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 pub fn now() -> u64 {
@@ -120,14 +126,29 @@ impl Exchange<'_> {
                 // answer. Carl writes a note inside the reply he was already giving, which
                 // costs nothing, works on every surface, and lets him decide, since he is the
                 // only participant who knows whether something mattered.
-                let (said, notes) = carl::remember::split(&answer.text);
-                answer.text = said;
+                let kept = carl::remember::split(&answer.text);
+                answer.text = kept.text;
 
-                for note in &notes {
-                    match memory.write(&note_name(note), note) {
+                // Dropped before kept, so correcting a fact in one breath cannot delete the
+                // replacement it just wrote when both slugify to the same name.
+                for note in &kept.drop {
+                    match forget_note(&memory, note) {
+                        Ok(true) => eprintln!("  forgot: {note}"),
+                        Ok(false) => eprintln!("  nothing to forget matching: {note}"),
+                        Err(e) => eprintln!("  could not forget a note: {e}"),
+                    }
+                }
+
+                for note in &kept.keep {
+                    let name = carl::remember::note_name(note);
+                    if name.is_empty() {
+                        eprintln!("  a note with no words in it was skipped: {note:?}");
+                        continue;
+                    }
+                    match memory.write(&name, note) {
                         Ok(path) => eprintln!("  remembered: {}", path.display()),
                         // Never fatal. Failing to keep a note must not lose the answer that
-                        // came with it, which the person is waiting for.
+                        // came with it, which somebody is waiting for.
                         Err(e) => eprintln!("  could not keep a note: {e}"),
                     }
                 }
@@ -193,35 +214,51 @@ impl Exchange<'_> {
 mod tests {
     use super::*;
 
-    /// Named from the note so the same fact twice replaces itself rather than accumulating
-    /// near duplicates, each of which costs context on every future turn.
+    /// Naming and forgetting have to agree, and they now share one function so they cannot
+    /// drift. This is the check that the shared one is actually the one being used here.
     #[test]
-    fn the_same_fact_gets_the_same_filename() {
-        let a = note_name("JJ is playing Factorio on red and green science");
-        let b = note_name("JJ is playing Factorio on red and green science");
-        assert_eq!(a, b);
-        assert_eq!(a, "jj-is-playing-factorio-on-red");
-    }
+    fn a_note_can_be_forgotten_by_its_words_or_by_its_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::open(dir.path()).unwrap();
 
-    #[test]
-    fn different_facts_get_different_filenames() {
-        assert_ne!(
-            note_name("JJ likes short answers"),
-            note_name("JJ is eleven")
+        let fact = "JJ prefers two sentence answers";
+        memory
+            .write(&carl::remember::note_name(fact), fact)
+            .unwrap();
+
+        assert!(forget_note(&memory, fact).unwrap(), "by its words");
+        assert!(!forget_note(&memory, fact).unwrap(), "and only once");
+
+        memory
+            .write(&carl::remember::note_name(fact), fact)
+            .unwrap();
+        assert!(
+            forget_note(&memory, "jj-prefers-two-sentence-answers.md").unwrap(),
+            "by the filename he was shown"
         );
     }
 
-    /// A filename becomes a path, so nothing path shaped may survive.
+    /// Forgetting something that was never kept must say so rather than claim success, or
+    /// Carl believes a wrong fact is gone and keeps being told it.
     #[test]
-    fn a_note_cannot_smuggle_a_path_into_a_filename() {
-        let n = note_name("../../etc/passwd is interesting");
-        assert!(!n.contains('/'), "{n}");
-        assert!(!n.contains(".."), "{n}");
+    fn forgetting_something_that_is_not_there_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let memory = Memory::open(dir.path()).unwrap();
+        assert!(!forget_note(&memory, "something never written").unwrap());
     }
 
-    /// A note of pure punctuation would otherwise produce an empty filename.
+    /// A filename becomes a path.
     #[test]
-    fn a_note_with_no_letters_still_gets_a_name() {
-        assert!(note_name("!!! ???").starts_with("note-"));
+    fn forgetting_cannot_reach_outside_the_memory_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("secret.md");
+        std::fs::write(&outside, "not a note").unwrap();
+
+        let memory = Memory::open(dir.path().join("memory")).unwrap();
+        let _ = forget_note(&memory, "../secret");
+        assert!(
+            outside.exists(),
+            "must not have reached out of the directory"
+        );
     }
 }
