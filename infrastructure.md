@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-181 tests, clippy clean at deny warnings.
+198 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -533,3 +533,50 @@ message to add three words flickers for no benefit.
 
 `[remember]` lines are stripped before each rewrite rather than after. A half written note
 appearing in a channel and then vanishing again would be worse than not streaming at all.
+
+## knowing what game is being played
+
+Every screenshot was a fresh stranger. Carl could see a factory and had no idea which game
+it was, which version, or whether the tech tree in front of him was the one he knows about.
+He gave vanilla advice to somebody playing Sea Block with Angel's, Bob's and Space
+Exploration stacked on top, where there are no ores on the map at all and almost nothing
+about the base game applies.
+
+None of that needed a screenshot. It is all in the process list and in the game's own files.
+
+| where | what it says |
+|---|---|
+| `ps` | whether the game is running now |
+| `factorio-current.log`, first line | version and expansions |
+| the log's timestamp | when it was last played |
+| `mods/` | which mods, and therefore which rules |
+| `saves/` | the save name, which is often the best clue about progress |
+
+Window titles would be the obvious signal and are not available. This machine runs Wayland,
+where a program cannot ask what another window is called, and asking GNOME Shell directly
+returns false.
+
+### only the overhauls get named
+
+There are eighty four mods installed here. Listing them costs more context than the whole
+rest of the brief and buries the four that matter under sixty that do not. Nobody needs to be
+told about `squeak through`. Everybody needs to be told about Sea Block, because in Sea Block
+there is no ore on the map and every answer about mining is wrong.
+
+So known overhaul families are recognised and named, and the rest is a count.
+
+### three wrong turns getting there
+
+**A keyword list decided when to include it.** It failed on the first real question. "I need
+more iron plates" contains none of the words, so Carl answered about stone furnaces. Recency
+replaced it: the game is up, or it was up in the last six hours, or it is not mentioned.
+Recency is a fact and a keyword list is a guess.
+
+**Space Exploration was silently missed.** Family names are matched with spaces removed, and
+the pattern still had a space in it, so it could never match. A test now asserts no pattern
+contains a space, because that failure is invisible: it does not error, it just quietly finds
+nothing.
+
+**The binary was stale, twice.** `cargo clippy` and `cargo test` do not relink
+`target/debug/carl`, so a real run was exercising old code and the conclusion drawn from it
+was wrong. Third time in this project.

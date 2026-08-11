@@ -73,6 +73,12 @@ Anything you say that is not addressed to Carl is never transcribed past the wak
 never written anywhere. Audio lives in RAM and in `/dev/shm`, never on the disk, so discarding
 it is a real deletion rather than an unlink that leaves the bytes on the SSD.
 
+He knows what you are playing without being told. If a game is running, or was in the last
+six hours, he is given its version, its expansions, its overhaul mods and the name of the
+most recent save. That matters more than anything in a screenshot: with Sea Block, Angel's,
+Bob's and Space Exploration all stacked, almost no vanilla advice is correct, and none of
+that is visible in a picture.
+
 He takes a picture of the screen only when the question needs one. "What should I research
 next" does not look. "Should I put it here" does, because *here* has no meaning in the
 sentence and can only mean the screen. This matters because GNOME flashes the display on every

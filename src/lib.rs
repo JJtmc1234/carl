@@ -24,6 +24,7 @@ pub mod audio;
 pub mod brief;
 pub mod capture;
 pub mod claude;
+pub mod game;
 pub mod heard;
 pub mod log;
 pub mod memory;
@@ -35,6 +36,7 @@ pub mod whisper;
 
 pub use capture::{Area, Camera};
 pub use claude::Flow;
+pub use game::playing;
 pub use heard::{Heard, interpret, needs_screen};
 pub use log::{Entry, Log, Speaker};
 pub use memory::Memory;

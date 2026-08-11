@@ -106,6 +106,18 @@ impl Exchange<'_> {
             extra_system.push_str(extra);
         }
 
+        // Whenever a game is up or was up recently, rather than when the question looks like
+        // it is about one. Guessing from keywords was the first attempt and it failed on the
+        // first real question: "I need more iron plates" contains none of them, so Carl
+        // answered about stone furnaces to somebody playing Sea Block, where there are no
+        // ores to smelt. Recency is a fact and keyword lists are a guess.
+        if let Some(found) = carl::game::playing()
+            && let Some(brief) = carl::game::brief(&found)
+        {
+            extra_system.push_str("\n\n");
+            extra_system.push_str(&brief);
+        }
+
         // Claude Code runs with this as its working directory, so anything it writes lands
         // somewhere predictable rather than wherever carl happened to be started from.
         let workdir = self.home.join("workspace");
