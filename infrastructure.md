@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-198 tests, clippy clean at deny warnings.
+200 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -549,7 +549,7 @@ None of that needed a screenshot. It is all in the process list and in the game'
 | `ps` | whether the game is running now |
 | `factorio-current.log`, first line | version and expansions |
 | the log's timestamp | when it was last played |
-| `mods/` | which mods, and therefore which rules |
+| `mods/mod-list.json` | which mods are switched on, which is not the same as which are downloaded |
 | `saves/` | the save name, which is often the best clue about progress |
 
 Window titles would be the obvious signal and are not available. This machine runs Wayland,
@@ -576,6 +576,12 @@ Recency is a fact and a keyword list is a guess.
 the pattern still had a space in it, so it could never match. A test now asserts no pattern
 contains a space, because that failure is invisible: it does not error, it just quietly finds
 nothing.
+
+**Downloaded is not enabled.** The first version read the mods directory. Eighty eight mods
+were downloaded and four were switched on, so a vanilla Space Age save was described as Sea
+Block with Angel's and Bob's, and the answer that came out was further from correct than the
+vanilla answer it replaced. `mod-list.json` is what the game itself reads. JJ caught this, no
+test did, and it had been shown to him as proof the feature worked.
 
 **The binary was stale, twice.** `cargo clippy` and `cargo test` do not relink
 `target/debug/carl`, so a real run was exercising old code and the conclusion drawn from it

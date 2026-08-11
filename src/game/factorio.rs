@@ -58,7 +58,7 @@ pub fn facts(dir: &Path) -> Facts {
         }
     }
 
-    facts.mods = names_in(&dir.join("mods"), ".zip");
+    facts.mods = enabled_mods(&dir.join("mods"));
     facts.saves = saves_in(&dir.join("saves"));
     facts
 }
@@ -151,19 +151,40 @@ pub fn overhauls(mods: &[String]) -> (Vec<&'static str>, usize) {
     (found, mods.len())
 }
 
-/// Mod names, without their versions, because the version is noise to somebody being advised.
-fn names_in(dir: &Path, suffix: &str) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+/// Mods that are actually switched on.
+///
+/// Not the contents of the directory, which is what the first version of this read and which
+/// was badly wrong. A mod being present on disk says nothing about whether it is in the game.
+/// JJ has eighty eight mods downloaded and four enabled, so reading the directory reported
+/// Sea Block, Angel's, Bob's and Space Exploration for somebody playing vanilla Space Age.
+///
+/// That is worse than reporting nothing. Carl answered a smelting question with Angel's ore
+/// processing, which does not exist in that save, and no vanilla answer would have been that
+/// far off. `mod-list.json` is the file the game itself reads, and it is the only honest
+/// source.
+fn enabled_mods(dir: &Path) -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(dir.join("mod-list.json")) else {
+        // No list means the game has never been launched with mods, which means none are on.
+        // Falling back to the directory here is exactly the mistake being fixed.
         return Vec::new();
     };
-    let mut out: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().into_owned();
-            name.strip_suffix(suffix).map(tidy_mod)
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return Vec::new();
+    };
+
+    let mut out: Vec<String> = v
+        .get("mods")
+        .and_then(|m| m.as_array())
+        .map(|list| {
+            list.iter()
+                .filter(|m| m.get("enabled").and_then(|e| e.as_bool()) == Some(true))
+                .filter_map(|m| m.get("name").and_then(|n| n.as_str()))
+                // `base` is always on and is not information.
+                .filter(|n| *n != "base")
+                .map(tidy_mod)
+                .collect()
         })
-        .filter(|n| !n.is_empty())
-        .collect();
+        .unwrap_or_default();
     out.sort();
     out.dedup();
     out
@@ -266,6 +287,44 @@ mod tests {
         }
     }
 
+    /// The bug JJ caught. Eighty eight mods on disk, four switched on, and reading the
+    /// directory reported four overhauls to somebody playing vanilla Space Age. The advice
+    /// that came out was further from right than the vanilla advice it replaced.
+    #[test]
+    fn only_the_mods_that_are_switched_on_are_reported() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(
+            d.path().join("mod-list.json"),
+            r#"{"mods":[
+                {"name":"base","enabled":true},
+                {"name":"space-age","enabled":true},
+                {"name":"quality","enabled":true},
+                {"name":"bobores","enabled":false},
+                {"name":"SeaBlockPack","enabled":false}
+            ]}"#,
+        )
+        .unwrap();
+        // On disk but switched off, which is the whole point.
+        std::fs::write(d.path().join("bobores_1.0.0.zip"), "x").unwrap();
+
+        let mods = enabled_mods(d.path());
+        assert_eq!(mods, vec!["quality", "space age"], "{mods:?}");
+
+        let (overhauls, _) = overhauls(&mods);
+        assert!(
+            overhauls.is_empty(),
+            "vanilla must look vanilla: {overhauls:?}"
+        );
+    }
+
+    /// No list at all means nothing is on. Falling back to the directory is the mistake.
+    #[test]
+    fn no_mod_list_means_no_mods() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("bobores_1.0.0.zip"), "x").unwrap();
+        assert!(enabled_mods(d.path()).is_empty());
+    }
+
     /// A version number is noise to somebody being given advice.
     #[test]
     fn a_mod_name_loses_its_version() {
@@ -332,6 +391,6 @@ mod tests {
     #[test]
     fn a_missing_directory_is_empty_rather_than_an_error() {
         assert!(saves_in(Path::new("/definitely/not/here")).is_empty());
-        assert!(names_in(Path::new("/definitely/not/here"), ".zip").is_empty());
+        assert!(enabled_mods(Path::new("/definitely/not/here")).is_empty());
     }
 }

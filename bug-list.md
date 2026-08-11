@@ -14,6 +14,29 @@ Every bug of consequence, and the test that stops it coming back. No entry witho
 
 | 8 | Overhaul mod families were matched with spaces removed from the mod name but not from the pattern, so any pattern containing a space could never match. | Space Exploration was installed and silently never reported | `no_overhaul_stem_can_be_impossible_to_match` |
 
+| 9 | Mods were read from the directory rather than from `mod-list.json`, so mods present but switched off were reported as active. | 88 mods on disk and 4 enabled, so Carl was told a vanilla Space Age save was Sea Block with Angel's and Bob's, and answered a smelting question with ore processing that does not exist in that game | `only_the_mods_that_are_switched_on_are_reported` |
+
+## bug 9, in full
+
+The worst kind, because the fix made the thing worse than before and was reported as working.
+
+Carl was giving vanilla advice to somebody whose mods directory held Sea Block, Angel's,
+Bob's and Space Exploration. Reading that directory looked like the obvious fix, and the new
+answer talked about crushing, floating and leaching, which is Angel's ore processing. It read
+as a clear improvement and was shown as proof.
+
+None of those mods were switched on. Factorio keeps what is downloaded and what is enabled in
+different places, and `mods/mod-list.json` is the one the game reads. Eighty eight downloaded,
+four enabled, and three of those are the official Space Age components.
+
+So the advice went from being right about the wrong game to being wrong about a game nobody
+was playing. Vanilla advice on a vanilla save was closer to correct than the confident,
+detailed, entirely inapplicable answer that replaced it.
+
+JJ caught it, not a test, and not the person who wrote it. The lesson is not about Factorio.
+A file being on disk is not the same as it being in use, and the difference is exactly the
+kind of thing that produces a confident answer about something that is not there.
+
 ## bug 7, in full
 
 The one worth reading, because every check said the audio was fine.

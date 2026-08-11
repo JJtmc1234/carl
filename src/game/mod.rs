@@ -132,14 +132,15 @@ pub fn brief(found: &Playing) -> Option<String> {
         let (overhauls, total) = factorio::overhauls(&f.mods);
         if overhauls.is_empty() {
             lines.push(format!(
-                "{total} mods installed, none of them overhauls, so the base recipes and tech \
-                 tree should still hold."
+                "{total} mods enabled: {}. None of them are overhauls, so the recipes and the \
+                 tech tree are the ones the game ships with.",
+                f.mods.join(", ")
             ));
         } else {
             lines.push(format!(
-                "{total} mods installed, including {}. This is not the base game. Recipes, \
-                 costs and the whole tech tree are different, and a lot of vanilla advice is \
-                 simply wrong here. Say when you are not sure whether something applies.",
+                "{total} mods enabled, including {}. This is not the base game. Recipes, costs \
+                 and the whole tech tree are different, and a lot of standard advice is simply \
+                 wrong here. Say when you are not sure whether something applies.",
                 overhauls.join(", plus ")
             ));
         }
