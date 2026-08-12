@@ -79,6 +79,10 @@ most recent save. That matters more than anything in a screenshot: with Sea Bloc
 Bob's and Space Exploration all stacked, almost no vanilla advice is correct, and none of
 that is visible in a picture.
 
+He also keeps track of where you are up to. That is a separate thing from memory, because
+where you are in a game is true for an hour and who your mentor is stays true. States go in
+one file per game and get replaced, facts go in `memory/` and stay.
+
 He takes a picture of the screen only when the question needs one. "What should I research
 next" does not look. "Should I put it here" does, because *here* has no meaning in the
 sentence and can only mean the screen. This matters because GNOME flashes the display on every

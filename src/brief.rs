@@ -60,6 +60,16 @@ Correcting a fact is usually both at once: [forget] the old one and [remember] t
 Replacing alone is not enough, because the new wording lands under a different name and the \
 old note stays there contradicting it.
 
+There is a third line, [seen], for the state of a game somebody is playing. Use it whenever \
+you learn anything about where they are up to, however you learned it: from a screenshot, or \
+from them simply telling you. It holds one picture, so write the whole thing each time and it \
+replaces what was there. Restate what is still true rather than only what changed.
+
+Keep [remember] and [seen] apart, because they last for different lengths of time. Who \
+somebody is, what they prefer and what they decided are facts, and go in [remember]. Where \
+they are up to in a game right now is a state, it will be wrong by tomorrow, and it goes in \
+[seen]. Putting a state in permanent memory fills it with things that are quietly false.
+
 Do not use dashes or semicolons in anything you write.";
 
 /// Added on top of `IDENTITY` when the answer will be spoken out loud.
@@ -119,7 +129,7 @@ mod tests {
     /// rides along on every single turn.
     #[test]
     fn they_are_short_enough_to_send_every_turn() {
-        assert!(spoken().len() < 4000, "{} chars", spoken().len());
+        assert!(spoken().len() < 5000, "{} chars", spoken().len());
     }
 
     /// Carl is called a helper that remembers, and until this was added his memory directory
@@ -130,6 +140,10 @@ mod tests {
         assert!(
             IDENTITY.contains(crate::remember::FORGET),
             "and how to drop it again, since a wrong note is worse than no note"
+        );
+        assert!(
+            IDENTITY.contains(crate::remember::SEEN),
+            "and where a game state goes, which is not permanent memory"
         );
         let lower = IDENTITY.to_lowercase();
         assert!(lower.contains("strict"), "and told to be sparing about it");

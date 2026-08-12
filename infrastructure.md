@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-200 tests, clippy clean at deny warnings.
+211 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -586,3 +586,29 @@ test did, and it had been shown to him as proof the feature worked.
 **The binary was stale, twice.** `cargo clippy` and `cargo test` do not relink
 `target/debug/carl`, so a real run was exercising old code and the conclusion drawn from it
 was wrong. Third time in this project.
+
+## a fact and a state are different things
+
+Carl has two kinds of memory now and keeping them apart is the point.
+
+| | example | how long it is true | where it goes |
+|---|---|---|---|
+| a fact | JJ's mentor is Hunter | next month as well | `memory/`, forever, one file each |
+| a state | JJ is on blue science | about an hour | `game/<name>.md`, one file, replaced |
+
+Putting a state in permanent memory fills it with things that are quietly false, and a wrong
+note is worse than a missing one because it comes back on every turn and gets stated with
+confidence. So a game picture is one file per game, replaced rather than appended. There is
+exactly one current picture and the newest wins.
+
+It is also what makes a second look worth taking. Without it every screenshot was a fresh
+stranger, and "is that better than before" could not be answered at all.
+
+The first version only worked when Carl looked at the screen, because that is what the
+instruction said, and JJ told him the state in words instead so nothing was recorded. The
+trigger is now learning something, however he learned it, and the marker is explained
+alongside the other two rather than buried in the game section.
+
+Proven across conversations. Told about red and green science and no oil in one thread, he
+answered correctly in a different thread that shares nothing but the picture, and when told
+oil was running he rewrote the whole thing rather than appending a contradiction.

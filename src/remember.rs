@@ -31,6 +31,13 @@ pub const MARKER: &str = "[remember]";
 /// old one sits there contradicting it.
 pub const FORGET: &str = "[forget]";
 
+/// And to record what the game currently looks like.
+///
+/// Separate from [remember] because a state is not a fact. "JJ is on blue science" is true
+/// for an hour, and permanent memory full of things that are quietly false is worse than
+/// empty memory.
+pub const SEEN: &str = "[seen]";
+
 /// What Carl decided to do with his memory this turn.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Kept {
@@ -39,6 +46,11 @@ pub struct Kept {
     pub keep: Vec<String>,
     /// Notes to drop, named either by their filename or by what they said.
     pub drop: Vec<String>,
+    /// The current picture of the game, replacing whatever was there.
+    ///
+    /// One, not many. If Carl writes several the last wins, because they are all meant to be
+    /// the same picture and the newest is the one he actually meant.
+    pub seen: Option<String>,
 }
 
 /// A short, stable filename for a note.
@@ -87,6 +99,9 @@ pub fn split(answer: &str) -> Kept {
             if !note.is_empty() {
                 kept.drop.push(note.to_string());
             }
+        } else if let Some(picture) = t.strip_prefix(SEEN) {
+            // An empty one is meaningful here, unlike a note: it clears the picture.
+            kept.seen = Some(picture.trim().to_string());
         } else {
             said.push(line);
         }
@@ -102,7 +117,7 @@ pub fn split(answer: &str) -> Kept {
 /// before the whole line has arrived.
 pub fn is_note(line: &str) -> bool {
     let t = line.trim_start();
-    t.starts_with(MARKER) || t.starts_with(FORGET)
+    t.starts_with(MARKER) || t.starts_with(FORGET) || t.starts_with(SEEN)
 }
 
 #[cfg(test)]
@@ -183,6 +198,34 @@ mod tests {
     fn the_answer_does_not_end_in_the_gap_the_note_left() {
         let Kept { text, .. } = split("All done.\n\n[remember] something\n");
         assert_eq!(text, "All done.");
+    }
+
+    /// What makes a second look worth taking. Without it every screenshot is a fresh
+    /// stranger and "is that better than before" cannot be answered.
+    #[test]
+    fn a_picture_of_the_game_is_taken_out_too() {
+        let k = split("You need more coal.\n[seen] Red and green science running, no oil yet.");
+        assert_eq!(k.text, "You need more coal.");
+        assert_eq!(
+            k.seen.as_deref(),
+            Some("Red and green science running, no oil yet.")
+        );
+        assert!(k.keep.is_empty(), "a picture is not a permanent fact");
+    }
+
+    /// They are all meant to be the same picture, so the newest is the one he meant.
+    #[test]
+    fn the_last_picture_wins() {
+        let k = split("ok\n[seen] first go\n[seen] no wait, this");
+        assert_eq!(k.seen.as_deref(), Some("no wait, this"));
+    }
+
+    /// Unlike a note, an empty one means something: the picture is out of date and there is
+    /// nothing to replace it with.
+    #[test]
+    fn an_empty_picture_is_a_deliberate_clearing() {
+        let k = split("Closed the game then.\n[seen]");
+        assert_eq!(k.seen.as_deref(), Some(""));
     }
 
     /// A wrong note is worse than a missing one, because it comes back on every turn and is

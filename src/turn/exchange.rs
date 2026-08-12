@@ -111,11 +111,27 @@ impl Exchange<'_> {
         // first real question: "I need more iron plates" contains none of them, so Carl
         // answered about stone furnaces to somebody playing Sea Block, where there are no
         // ores to smelt. Recency is a fact and keyword lists are a guess.
-        if let Some(found) = carl::game::playing()
-            && let Some(brief) = carl::game::brief(&found)
+        let game = carl::game::playing();
+        if let Some(found) = &game
+            && let Some(brief) = carl::game::brief(found)
         {
             extra_system.push_str("\n\n");
             extra_system.push_str(&brief);
+
+            // What he made of it last time. Without this every look starts over and a
+            // question like "is that better than before" has no answer available.
+            match carl::game::seen::read(self.home, found.name) {
+                Some(picture) => {
+                    extra_system.push_str(&format!(
+                        "\n\nWhere they were up to when you last heard, which may be out of \
+                         date:\n{picture}"
+                    ));
+                }
+                None => extra_system.push_str(
+                    "\n\nYou do not know where they are up to in this game yet. The moment \
+                     you find out, from a screenshot or from them saying so, record it.",
+                ),
+            }
         }
 
         // Claude Code runs with this as its working directory, so anything it writes lands
@@ -149,6 +165,14 @@ impl Exchange<'_> {
                         Ok(false) => eprintln!("  nothing to forget matching: {note}"),
                         Err(e) => eprintln!("  could not forget a note: {e}"),
                     }
+                }
+
+                // Written before the notes, because it is the cheap one and cannot fail in a
+                // way worth abandoning the rest for.
+                if let (Some(picture), Some(found)) = (&kept.seen, &game)
+                    && let Err(e) = carl::game::seen::write(self.home, found.name, picture)
+                {
+                    eprintln!("  could not keep what was seen: {e}");
                 }
 
                 for note in &kept.keep {

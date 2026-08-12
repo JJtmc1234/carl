@@ -15,6 +15,7 @@
 use std::process::Command;
 
 pub mod factorio;
+pub mod seen;
 
 /// A game Carl knows how to notice.
 struct Known {
