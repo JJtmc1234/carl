@@ -12,7 +12,11 @@ use serde::Deserialize;
 
 use crate::{Error, Result, SessionId};
 
+mod pool;
+mod session;
 mod stream;
+pub use pool::{KEEP_OPEN, Pool};
+pub use session::Session;
 pub use stream::{Chunk, Flow, chunk_of};
 
 /// One turn: what to say, and which conversation to say it in.
@@ -96,6 +100,23 @@ impl Runner {
     pub fn allowing(mut self, tools: Vec<String>) -> Self {
         self.allowed = tools;
         self
+    }
+
+    pub(crate) fn program(&self) -> &Path {
+        &self.program
+    }
+
+    /// The allow list as arguments, or nothing at all when it is empty.
+    ///
+    /// Nothing rather than an empty flag, because some argument parsers read an empty allow
+    /// list as allowing everything, which is the opposite of what an empty list means.
+    pub(crate) fn allowed_args(&self) -> Vec<String> {
+        if self.allowed.is_empty() {
+            return Vec::new();
+        }
+        let mut args = vec!["--allowedTools".to_string()];
+        args.extend(self.allowed.iter().cloned());
+        args
     }
 
     pub fn args_for(&self, turn: &Turn<'_>) -> Vec<String> {

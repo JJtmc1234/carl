@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
 use anyhow::Result;
+use carl::claude::{Pool, Runner};
 use carl::slack::{self, Api, Ask, Directory, Pace, Patience, Tokens};
 
 use crate::turn;
@@ -53,6 +54,15 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
         // somebody as U0BNSU5N96X is worse than not greeting them.
         let mut directory = Directory::new();
 
+        // One process per Slack conversation, kept open. The pool closes the least recently
+        // used, so a thread nobody has touched in a while pays for its own restart and the
+        // ones in active use do not.
+        let mut pool = Pool::new(
+            Runner::default(),
+            home.join("workspace"),
+            carl::brief::IDENTITY,
+        );
+
         for ask in rx {
             let who = if ask.from_agent { "agent" } else { "person" };
             eprintln!("  [{}] {who}: {}", ask.thread, ask.text);
@@ -91,7 +101,7 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
                 .map_err(|e| eprintln!("  could not post a placeholder: {e}"))
                 .ok();
 
-            let reply = match answer(&home, &ask, &speaker, live.as_deref(), &api) {
+            let reply = match answer(&mut pool, &home, &ask, &speaker, live.as_deref(), &api) {
                 Ok(text) if !text.trim().is_empty() => text,
                 Ok(_) => "I had nothing to say to that, which is probably a bug.".to_string(),
                 // Said out loud rather than only logged. Somebody is waiting in a channel,
@@ -136,7 +146,14 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
 ///
 /// No spoken brief. Slack is read, not heard, and the two sentence rule that makes a good
 /// spoken answer makes a uselessly thin written one.
-fn answer(home: &Path, ask: &Ask, speaker: &str, live: Option<&str>, api: &Api) -> Result<String> {
+fn answer(
+    pool: &mut Pool,
+    home: &Path,
+    ask: &Ask,
+    speaker: &str,
+    live: Option<&str>,
+    api: &Api,
+) -> Result<String> {
     // Carl needs telling that he is in Slack. Without it he reasons about whether he has a
     // Slack connector authorised, decides he has not, and explains that he cannot reply, in
     // a message that is itself posted to Slack.
@@ -150,14 +167,16 @@ fn answer(home: &Path, ask: &Ask, speaker: &str, live: Option<&str>, api: &Api) 
         );
     }
 
-    // Nothing to rewrite, so there is no reason to stream.
+    // Nothing to rewrite, so there is no reason to pace anything, but the answer still goes
+    // through the same held open process.
     let Some(ts) = live else {
-        let answer = turn::respond_extra(
+        let answer = turn::stream_in(
+            pool,
             home,
             &ask.thread,
-            &ask.text,
-            Some(ask.user.clone()),
-            Some(&context),
+            &format!("{context}\n\n---\n\n{}", ask.text),
+            None,
+            &mut |_| carl::Flow::Continue,
         )?;
         return Ok(answer.text);
     };
@@ -180,24 +199,21 @@ fn answer(home: &Path, ask: &Ask, speaker: &str, live: Option<&str>, api: &Api) 
         carl::Flow::Continue
     };
 
+    // The Slack context goes in front of the question rather than in the system prompt,
+    // because the process is held open and a system prompt is fixed when it starts.
+    let asked = format!("{context}\n\n---\n\n{}", ask.text);
+
     let answer = if carl::needs_screen(&ask.text) {
-        turn::look_streaming(
+        turn::look_in(
+            pool,
             home,
             &ask.thread,
-            &ask.text,
+            &asked,
             carl::Area::Screen,
-            Some(&context),
             &mut show,
         )?
     } else {
-        turn::stream(
-            home,
-            &ask.thread,
-            &ask.text,
-            None,
-            Some(&context),
-            &mut show,
-        )?
+        turn::stream_in(pool, home, &ask.thread, &asked, None, &mut show)?
     };
     Ok(answer.text)
 }

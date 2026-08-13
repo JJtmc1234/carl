@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-218 tests, clippy clean at deny warnings.
+225 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -645,3 +645,34 @@ as well, which is worse than the gap.
 The CLI startup is the next real target. Every turn starts a new `claude` process, which
 reads its config and connects its servers before a single token is asked for. A session held
 open across turns would remove it outright.
+
+## one process per task, alive for the whole run
+
+Every turn used to start a new `claude`. Measured, that costs about 0.8 seconds before a
+single token is asked for, spent reading config and connecting servers, and then the model
+starts cold. Held open, the same question reaches its first token in 0.97 seconds where a
+fresh process takes 2.8.
+
+A task here is a thread. The voice is one, so it keeps one process for the whole run and
+never pays startup again. Every Slack conversation is one, and the pool keeps four open and
+closes the least recently used, because each process peaked around 195MB and holding one per
+thread forever would eventually be every thread anybody opened. The voice is used constantly,
+so least recently used means it is never the one closed.
+
+### what this forced
+
+A system prompt is fixed when a process starts and cannot be changed afterwards. Carl's
+memory grows, his picture of the game is rewritten, and the game itself starts and stops, so
+none of that could stay where it was.
+
+So a turn is now split by how long each piece stays true. Who Carl is goes in the system
+prompt, once, for the life of the process. Everything that varies arrives in front of the
+question. A one shot process could have kept it all together and used to, and keeping the two
+apart costs nothing there.
+
+### and what it has to survive
+
+A process that lives for hours has time to be killed, run out of memory, or be restarted
+underneath. A dead one is reopened and the question retried once, and the reopen resumes the
+conversation rather than starting a second one, which is the difference between a hiccup and
+losing everything said so far.

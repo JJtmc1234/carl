@@ -14,12 +14,12 @@
 //! bookkeeping would mean the streaming path quietly drifting out of step on the one thing
 //! that actually matters.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use carl::claude::{Answer, Turn};
-use carl::{Log, Memory, Registry, Speaker, ThreadId};
+use carl::claude::Answer;
+use carl::{Log, Memory, Registry, SessionId, Speaker, ThreadId};
 
 /// Drops a note, named either by its filename or by what it said.
 ///
@@ -73,9 +73,49 @@ pub struct Exchange<'a> {
     pub extra: Option<&'a str>,
 }
 
+/// One prepared turn, split by how long each piece stays true.
+///
+/// The split exists because a held open `claude` process fixes its system prompt when it
+/// starts and cannot be told anything new there afterwards. Who Carl is never changes, so it
+/// goes in the system prompt once. His memory grows, his picture of the game is rewritten,
+/// and the game itself starts and stops, so all of that has to arrive with the question.
+///
+/// A one shot process could put everything in the system prompt and used to. Keeping the two
+/// apart costs nothing there and is the only thing that makes a long lived process possible.
+pub struct Prepared<'a> {
+    pub session: SessionId,
+    /// False on the very first message of a thread, because there is nothing to resume yet.
+    pub resume: bool,
+    /// The question as asked.
+    pub prompt: &'a str,
+    /// Who Carl is. Fixed for the life of a process.
+    pub identity: String,
+    /// Everything that can change between turns.
+    pub context: Option<String>,
+    pub workdir: PathBuf,
+}
+
+impl Prepared<'_> {
+    /// The whole system addition, for a process that only lives for one turn.
+    pub fn all_in_system(&self) -> String {
+        match &self.context {
+            Some(c) => format!("{}\n\n{c}", self.identity),
+            None => self.identity.clone(),
+        }
+    }
+
+    /// The question with everything changeable in front of it, for a held open process.
+    pub fn question_with_context(&self) -> String {
+        match &self.context {
+            Some(c) => format!("{c}\n\n---\n\n{}", self.prompt),
+            None => self.prompt.to_string(),
+        }
+    }
+}
+
 impl Exchange<'_> {
     /// Records the question, prepares the turn, runs `ask`, records the outcome.
-    pub fn run(self, ask: impl FnOnce(&Turn<'_>) -> carl::Result<Answer>) -> Result<Answer> {
+    pub fn run(self, ask: impl FnOnce(&Prepared<'_>) -> carl::Result<Answer>) -> Result<Answer> {
         let mut log = Log::open(self.home.join("conversations.jsonl"))
             .context("cannot open the conversation record")?;
 
@@ -96,14 +136,17 @@ impl Exchange<'_> {
         // Who Carl is goes on every turn, not just spoken ones. The underlying binary
         // describes itself as a tool for software engineering, and without this Carl inherits
         // that and turns down questions about anything else.
-        let mut extra_system = carl::brief::IDENTITY.to_string();
-        if let Some(notes) = memory.assemble()? {
-            extra_system.push_str("\n\n");
-            extra_system.push_str(&notes);
-        }
+        let mut identity = carl::brief::IDENTITY.to_string();
         if let Some(extra) = self.extra {
-            extra_system.push_str("\n\n");
-            extra_system.push_str(extra);
+            identity.push_str("\n\n");
+            identity.push_str(extra);
+        }
+
+        // Everything from here changes between turns, so it cannot live in a system prompt
+        // that is fixed when a process starts.
+        let mut extra_system = String::new();
+        if let Some(notes) = memory.assemble()? {
+            extra_system.push_str(&notes);
         }
 
         // Whenever a game is up or was up recently, rather than when the question looks like
@@ -155,15 +198,18 @@ impl Exchange<'_> {
         // somewhere predictable rather than wherever carl happened to be started from.
         let workdir = self.home.join("workspace");
 
-        let outcome = ask(&Turn {
-            session: &session,
+        let prepared = Prepared {
+            session: session.clone(),
             // A brand new thread has nothing to resume. Getting this wrong is the difference
             // between continuing a conversation and starting a second one silently.
             resume: !is_new,
             prompt: self.sent.unwrap_or(self.said),
-            extra_system: Some(&extra_system),
-            workdir: &workdir,
-        });
+            identity,
+            context: (!extra_system.trim().is_empty()).then(|| extra_system.trim().to_string()),
+            workdir,
+        };
+
+        let outcome = ask(&prepared);
 
         match outcome {
             Ok(mut answer) => {

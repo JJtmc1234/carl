@@ -8,57 +8,11 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use carl::claude::{Answer, Flow, Runner};
+use carl::claude::{Answer, Flow, Pool, Runner, Turn};
 use carl::{Area, Camera, ThreadId};
 
 mod exchange;
 use exchange::Exchange;
-
-/// Handles one message and returns Carl's answer.
-///
-/// `author` names who spoke, for Slack. `None` means the local terminal.
-pub fn respond(
-    home: &Path,
-    thread: &ThreadId,
-    said: &str,
-    author: Option<String>,
-) -> Result<Answer> {
-    respond_with(&Runner::default(), home, thread, said, author)
-}
-
-/// Same, with the runner injected.
-///
-/// Split out so a test can point at a binary that does not exist without touching `PATH`,
-/// which is process wide and would break whatever else is running at the same time.
-pub fn respond_with(
-    runner: &Runner,
-    home: &Path,
-    thread: &ThreadId,
-    said: &str,
-    author: Option<String>,
-) -> Result<Answer> {
-    respond_full(runner, home, thread, said, None, author)
-}
-
-/// Waits for the whole answer, with standing instructions for this way of asking.
-pub fn respond_extra(
-    home: &Path,
-    thread: &ThreadId,
-    said: &str,
-    author: Option<String>,
-    extra: Option<&str>,
-) -> Result<Answer> {
-    let runner = Runner::default();
-    Exchange {
-        home,
-        thread,
-        said,
-        sent: None,
-        author,
-        extra,
-    }
-    .run(|turn| runner.ask(turn))
-}
 
 /// The full form, where what gets recorded and what gets sent can differ.
 pub fn respond_full(
@@ -77,7 +31,15 @@ pub fn respond_full(
         author,
         extra: None,
     }
-    .run(|turn| runner.ask(turn))
+    .run(|p| {
+        runner.ask(&Turn {
+            session: &p.session,
+            resume: p.resume,
+            prompt: p.prompt,
+            extra_system: Some(&p.all_in_system()),
+            workdir: &p.workdir,
+        })
+    })
 }
 
 /// Handles one message, handing each piece of the answer over as it arrives.
@@ -102,7 +64,68 @@ pub fn stream(
         author: None,
         extra,
     }
-    .run(|turn| runner.ask_streaming(turn, on_text))
+    .run(|p| {
+        runner.ask_streaming(
+            &Turn {
+                session: &p.session,
+                resume: p.resume,
+                prompt: p.prompt,
+                extra_system: Some(&p.all_in_system()),
+                workdir: &p.workdir,
+            },
+            on_text,
+        )
+    })
+}
+
+/// Handles one message through a process that is already running.
+///
+/// The same recording rules and the same ordering, but the conversation is held open between
+/// turns. Measured, a fresh process reaches its first token in 2.8 seconds and one that is
+/// already running reaches it in 0.97, which in a spoken exchange is most of the wait.
+///
+/// The identity is not sent here, because the pool set it when it opened the process and a
+/// system prompt cannot be changed afterwards. Everything that varies goes in front of the
+/// question instead.
+pub fn stream_in(
+    pool: &mut Pool,
+    home: &Path,
+    thread: &ThreadId,
+    said: &str,
+    sent: Option<&str>,
+    on_text: &mut dyn FnMut(&str) -> Flow,
+) -> Result<Answer> {
+    Exchange {
+        home,
+        thread,
+        said,
+        sent,
+        author: None,
+        // Static instructions belong to the process, which already has them.
+        extra: None,
+    }
+    .run(|p| {
+        pool.ask(
+            thread,
+            &p.session,
+            p.resume,
+            &p.question_with_context(),
+            on_text,
+        )
+    })
+}
+
+/// Take a picture of the screen, then ask about it, through a running process.
+pub fn look_in(
+    pool: &mut Pool,
+    home: &Path,
+    thread: &ThreadId,
+    question: &str,
+    area: Area,
+    on_text: &mut dyn FnMut(&str) -> Flow,
+) -> Result<Answer> {
+    let sent = shot(home, question, area)?;
+    stream_in(pool, home, thread, question, Some(&sent), on_text)
 }
 
 /// Take a picture of the screen, then ask about it.
@@ -116,19 +139,6 @@ pub fn look(home: &Path, thread: &ThreadId, question: &str, area: Area) -> Resul
         Some(&sent),
         None,
     )
-}
-
-/// Take a picture of the screen, then ask about it, speaking as the answer arrives.
-pub fn look_streaming(
-    home: &Path,
-    thread: &ThreadId,
-    question: &str,
-    area: Area,
-    extra: Option<&str>,
-    on_text: &mut dyn FnMut(&str) -> Flow,
-) -> Result<Answer> {
-    let sent = shot(home, question, area)?;
-    stream(home, thread, question, Some(&sent), extra, on_text)
 }
 
 /// Takes the picture and writes the prompt that goes with it.
@@ -167,7 +177,14 @@ mod tests {
         let thread = ThreadId::new("cli").unwrap();
 
         let missing = Runner::at("/nonexistent/definitely-not-claude");
-        let result = respond_with(&missing, home.path(), &thread, "did you record this", None);
+        let result = respond_full(
+            &missing,
+            home.path(),
+            &thread,
+            "did you record this",
+            None,
+            None,
+        );
         assert!(result.is_err(), "the ask should have failed");
 
         let entries = carl::log::read(home.path().join("conversations.jsonl")).unwrap();
@@ -197,7 +214,18 @@ mod tests {
             author: None,
             extra: None,
         }
-        .run(|turn| missing.ask_streaming(turn, &mut |_| Flow::Continue));
+        .run(|p| {
+            missing.ask_streaming(
+                &Turn {
+                    session: &p.session,
+                    resume: p.resume,
+                    prompt: p.prompt,
+                    extra_system: Some(&p.all_in_system()),
+                    workdir: &p.workdir,
+                },
+                &mut |_| Flow::Continue,
+            )
+        });
         assert!(result.is_err());
 
         let entries = carl::log::read(home.path().join("conversations.jsonl")).unwrap();

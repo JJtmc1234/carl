@@ -15,6 +15,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use carl::aec::Devices;
 use carl::audio::Mic;
+use carl::claude::{Pool, Runner};
 use carl::{Heard, ThreadId, Tier, Voice, Whisper, heard};
 
 mod mouth;
@@ -47,6 +48,15 @@ pub struct Ear {
     devices: Devices,
 }
 
+/// Everything the loop needs that has to outlive one question.
+///
+/// The pool is the reason this exists. A held open `claude` process is what takes the wait
+/// from about four seconds to about two, and it only helps if the same one is still there
+/// when the next question arrives.
+pub struct Running {
+    pub pool: Pool,
+}
+
 impl Ear {
     pub fn new(thread: ThreadId, accurate: bool) -> Result<Self> {
         let devices = Devices::detect();
@@ -66,6 +76,17 @@ impl Ear {
 
     /// Runs until interrupted.
     pub fn run(&self, home: &Path, timing: Timing) -> Result<()> {
+        // One process for the whole run. The voice is a single conversation, so it is opened
+        // once and never closed, which is what removes the 0.8 seconds of startup and the cold
+        // model from every single thing said out loud.
+        let mut running = Running {
+            pool: Pool::new(
+                Runner::default(),
+                home.join("workspace"),
+                carl::brief::spoken(),
+            ),
+        };
+
         // Audio scratch lives in RAM. Nothing recorded ever reaches the disk, whether it is
         // kept or not, so the discard below is a real one.
         let mic = Mic::open(
@@ -130,7 +151,7 @@ impl Ear {
                         match question {
                             // Asked on the same breath, so answer it rather than making them
                             // say it twice.
-                            Some(q) => self.answer(&mic, home, &q, hush)?,
+                            Some(q) => self.answer(&mut running, &mic, home, &q, hush)?,
                             None => {
                                 self.mouth.say(&mic, "Yes?", hush)?;
                             }
@@ -151,19 +172,19 @@ impl Ear {
 
             match heard::interpret(&text, true) {
                 Heard::End => {
-                    self.remember(home)?;
+                    self.remember(&mut running, home)?;
                     self.mouth.say(&mic, "Alright. I'll remember that.", hush)?;
                     awake = false;
                     eprintln!("back to listening.");
                 }
-                Heard::Say(q) => self.answer(&mic, home, &q, hush)?,
+                Heard::Say(q) => self.answer(&mut running, &mic, home, &q, hush)?,
                 // Nothing usually means the utterance was noise, not speech. Staying awake
                 // rather than dropping out avoids the loop where a cough ends the
                 // conversation and you have to wake him again.
                 Heard::Nothing => continue,
                 Heard::Wake { question } => {
                     if let Some(q) = question {
-                        self.answer(&mic, home, &q, hush)?;
+                        self.answer(&mut running, &mic, home, &q, hush)?;
                     }
                 }
             }

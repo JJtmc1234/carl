@@ -5,13 +5,20 @@ use std::path::Path;
 use anyhow::Result;
 use carl::audio::Mic;
 
-use super::Ear;
 use super::narrate::Narration;
+use super::{Ear, Running};
 use crate::turn;
 
 impl Ear {
     /// Answers one question, looking at the screen only if the question needs it.
-    pub(super) fn answer(&self, mic: &Mic, home: &Path, question: &str, hush: f32) -> Result<()> {
+    pub(super) fn answer(
+        &self,
+        running: &mut Running,
+        mic: &Mic,
+        home: &Path,
+        question: &str,
+        hush: f32,
+    ) -> Result<()> {
         // Speaks each sentence as Claude writes it. The narration has to outlive the call so
         // the last sentence can finish playing, because dropping it kills the player mid word.
         let mut narration = Narration::new(&self.mouth, mic, hush);
@@ -19,21 +26,21 @@ impl Ear {
         let answer = {
             let mut on_text = |t: &str| narration.feed(t);
             if carl::needs_screen(question) {
-                turn::look_streaming(
+                turn::look_in(
+                    &mut running.pool,
                     home,
                     &self.thread,
                     question,
                     carl::Area::Screen,
-                    Some(carl::brief::SPOKEN),
                     &mut on_text,
                 )
             } else {
-                turn::stream(
+                turn::stream_in(
+                    &mut running.pool,
                     home,
                     &self.thread,
                     question,
                     None,
-                    Some(carl::brief::SPOKEN),
                     &mut on_text,
                 )
             }
@@ -68,7 +75,7 @@ impl Ear {
     /// This is still worth doing rather than dropping. The end of a conversation is the one
     /// moment when what mattered about it is obvious, and mid conversation Carl is answering
     /// a question rather than looking back at one.
-    pub(super) fn remember(&self, home: &Path) -> Result<()> {
+    pub(super) fn remember(&self, running: &mut Running, home: &Path) -> Result<()> {
         let asked = "This conversation is ending. Look back over it and keep anything \
              genuinely worth carrying into future conversations: preferences, decisions, \
              facts about me. Use your [remember] lines, one fact each. Skip anything you \
@@ -79,7 +86,14 @@ impl Ear {
         // way through, and the closing summary is not something anybody wants read aloud.
         // No extra brief. Exchange already adds the identity, which is where the [remember]
         // instruction lives, and sending it twice would just take up room saying it again.
-        if let Err(e) = turn::respond(home, &self.thread, asked, None) {
+        if let Err(e) = turn::stream_in(
+            &mut running.pool,
+            home,
+            &self.thread,
+            asked,
+            None,
+            &mut |_| carl::Flow::Continue,
+        ) {
             eprintln!("could not look back over the conversation: {e:#}");
         }
         Ok(())
