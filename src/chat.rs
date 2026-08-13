@@ -171,11 +171,13 @@ fn answer(
     // through the same held open process.
     let Some(ts) = live else {
         let answer = turn::stream_in(
-            pool,
-            home,
-            &ask.thread,
-            &format!("{context}\n\n---\n\n{}", ask.text),
-            None,
+            turn::Asking {
+                pool,
+                home,
+                thread: &ask.thread,
+                said: &ask.text,
+                sent: Some(&format!("{context}\n\n---\n\n{}", ask.text)),
+            },
             &mut |_| carl::Flow::Continue,
             &mut || carl::Flow::Continue,
         )?;
@@ -202,14 +204,15 @@ fn answer(
 
     // The Slack context goes in front of the question rather than in the system prompt,
     // because the process is held open and a system prompt is fixed when it starts.
-    let asked = format!("{context}\n\n---\n\n{}", ask.text);
-
     let answer = if carl::needs_screen(&ask.text) {
         turn::look_in(
-            pool,
-            home,
-            &ask.thread,
-            &asked,
+            turn::Asking {
+                pool,
+                home,
+                thread: &ask.thread,
+                said: &ask.text,
+                sent: Some(&context),
+            },
             carl::Area::Screen,
             &mut show,
             // Nothing interrupts a Slack answer. There is no microphone, and a message
@@ -218,11 +221,13 @@ fn answer(
         )?
     } else {
         turn::stream_in(
-            pool,
-            home,
-            &ask.thread,
-            &asked,
-            None,
+            turn::Asking {
+                pool,
+                home,
+                thread: &ask.thread,
+                said: &ask.text,
+                sent: Some(&format!("{context}\n\n---\n\n{}", ask.text)),
+            },
             &mut show,
             &mut || carl::Flow::Continue,
         )?

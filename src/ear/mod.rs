@@ -55,6 +55,13 @@ pub struct Ear {
 /// when the next question arrives.
 pub struct Running {
     pub pool: Pool,
+    /// What was said last, on both sides.
+    ///
+    /// Kept so the next thing said can be read against it. "No, I meant the other one" only
+    /// means anything next to what it is answering, and asking the same question twice only
+    /// counts if the first one is remembered.
+    pub last_said: String,
+    pub last_answer: String,
     /// Rendered once at startup, because synthesising a noise on demand costs 0.29 seconds,
     /// which is most of the gap the noise exists to cover.
     pub filler: Option<carl::speech::Filler>,
@@ -89,6 +96,8 @@ impl Ear {
                 carl::brief::spoken(),
             ),
             filler: None,
+            last_said: String::new(),
+            last_answer: String::new(),
         };
 
         // Audio scratch lives in RAM. Nothing recorded ever reaches the disk, whether it is

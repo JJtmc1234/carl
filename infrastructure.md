@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-237 tests, clippy clean at deny warnings.
+245 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -758,3 +758,35 @@ on. Giving work to the slow cores makes the whole batch wait for them.
 
 Three quarters of the machine, as a rule rather than the number twelve, because the next
 machine will have a different count and the same shape of problem.
+
+## noticing that an answer did not land
+
+Carl had no idea when he got something wrong. He answered, the answer was useless, and the
+next question arrived as though the exchange had gone fine.
+
+The person who knows it went wrong is the one who has to say so, and they usually already did,
+immediately, in the next thing they said. Two signals, both ordinary conversation rather than
+anything anybody has to learn.
+
+Saying no. "No, I meant the other one" only gets said when an answer missed.
+
+Saying it again. Asking the same thing twice in a row means the first answer did not count,
+whatever the words were. Compared as sets of words rather than as strings, because nobody
+repeats themselves exactly.
+
+The trap is that "no" is also the ordinary answer to a question, and Carl asks plenty of
+them. So a bare no only counts when the last thing Carl said did not end in a question mark.
+Without that, every "no, I have not unlocked steel" would read as being told off.
+
+What it does with it is the cheap part. The next turn is told the last one missed, and told
+what to do about it: do not repeat it, do not defend it, work out what was actually meant.
+Being told only that you were wrong invites saying the same thing more firmly.
+
+### and a regression it turned up
+
+Passing the note meant putting something in front of the question, which is how it was
+noticed that the pool work had started passing Carl's own scaffolding as what somebody said.
+The Slack context was going straight into the permanent record.
+
+`said` and `sent` have been different fields since the first week for exactly this reason, and
+eight positional arguments in a row is how they got swapped. They are a struct now.

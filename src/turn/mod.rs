@@ -78,6 +78,21 @@ pub fn stream(
     })
 }
 
+/// Everything one question needs, gathered up.
+///
+/// A struct rather than eight arguments, because eight arguments in a row is how `said` and
+/// `sent` end up swapped and the record quietly fills with Carl's own scaffolding instead of
+/// what somebody actually said.
+pub struct Asking<'a> {
+    pub pool: &'a mut Pool,
+    pub home: &'a Path,
+    pub thread: &'a ThreadId,
+    /// What the person said. This is what goes in the record.
+    pub said: &'a str,
+    /// What Carl is told, when it differs. Never recorded.
+    pub sent: Option<&'a str>,
+}
+
 /// Handles one message through a process that is already running.
 ///
 /// The same recording rules and the same ordering, but the conversation is held open between
@@ -88,15 +103,19 @@ pub fn stream(
 /// system prompt cannot be changed afterwards. Everything that varies goes in front of the
 /// question instead.
 pub fn stream_in(
-    pool: &mut Pool,
-    home: &Path,
-    thread: &ThreadId,
-    said: &str,
-    sent: Option<&str>,
+    asking: Asking<'_>,
     on_text: &mut dyn FnMut(&str) -> Flow,
     // Called while nothing is arriving, so a turn can be given up on before its first word.
     while_waiting: &mut dyn FnMut() -> Flow,
 ) -> Result<Answer> {
+    let Asking {
+        pool,
+        home,
+        thread,
+        said,
+        sent,
+    } = asking;
+
     Exchange {
         home,
         thread,
@@ -120,21 +139,24 @@ pub fn stream_in(
 
 /// Take a picture of the screen, then ask about it, through a running process.
 pub fn look_in(
-    pool: &mut Pool,
-    home: &Path,
-    thread: &ThreadId,
-    question: &str,
+    asking: Asking<'_>,
     area: Area,
     on_text: &mut dyn FnMut(&str) -> Flow,
     while_waiting: &mut dyn FnMut() -> Flow,
 ) -> Result<Answer> {
-    let sent = shot(home, question, area)?;
+    // The picture is described to Carl and never recorded, so anything the caller wanted said
+    // goes in front of that description rather than in front of the question.
+    let shot = shot(asking.home, asking.said, area)?;
+    let sent = match asking.sent {
+        Some(p) => format!("{p}\n\n---\n\n{shot}"),
+        None => shot,
+    };
+
     stream_in(
-        pool,
-        home,
-        thread,
-        question,
-        Some(&sent),
+        Asking {
+            sent: Some(&sent),
+            ..asking
+        },
         on_text,
         while_waiting,
     )

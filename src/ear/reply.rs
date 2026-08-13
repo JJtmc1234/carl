@@ -29,6 +29,18 @@ impl Ear {
             running.filler.as_mut().map(|f| f.arm()),
         );
 
+        // Read against what was said last, before anything is sent. Carl otherwise has no
+        // idea he got something wrong: the answer is useless, and the next question arrives
+        // as though the exchange had gone fine.
+        let missed = carl::pushback::missed(question, &running.last_answer)
+            .or_else(|| carl::pushback::repeated(question, &running.last_said));
+
+        let sent = missed.map(|m| {
+            eprintln!("  that did not land: {m:?}");
+            format!("{}\n\n---\n\n{question}", m.note())
+        });
+        running.last_said = question.to_string();
+
         // Watched while nothing is arriving, which is when changing your mind actually
         // happens. Interrupting him mid sentence already worked, and interrupting him mid
         // thought did not, so the question you abandoned still got answered at you.
@@ -45,21 +57,28 @@ impl Ear {
             let mut on_text = |t: &str| narration.feed(t);
             if carl::needs_screen(question) {
                 turn::look_in(
-                    &mut running.pool,
-                    home,
-                    &self.thread,
-                    question,
+                    turn::Asking {
+                        pool: &mut running.pool,
+                        home,
+                        thread: &self.thread,
+                        said: question,
+                        sent: sent.as_deref(),
+                    },
                     carl::Area::Screen,
                     &mut on_text,
                     &mut waiting,
                 )
             } else {
                 turn::stream_in(
-                    &mut running.pool,
-                    home,
-                    &self.thread,
-                    question,
-                    None,
+                    turn::Asking {
+                        pool: &mut running.pool,
+                        home,
+                        thread: &self.thread,
+                        said: question,
+                        // What Carl is told, which is not what JJ said. The record keeps the
+                        // question, not the scaffolding around it.
+                        sent: sent.as_deref(),
+                    },
                     &mut on_text,
                     &mut waiting,
                 )
@@ -70,6 +89,7 @@ impl Ear {
         match answer {
             Ok(a) => {
                 println!("{}", a.text);
+                running.last_answer = a.text.clone();
                 if a.interrupted {
                     eprintln!("  (interrupted)");
                 }
@@ -107,11 +127,13 @@ impl Ear {
         // No extra brief. Exchange already adds the identity, which is where the [remember]
         // instruction lives, and sending it twice would just take up room saying it again.
         if let Err(e) = turn::stream_in(
-            &mut running.pool,
-            home,
-            &self.thread,
-            asked,
-            None,
+            turn::Asking {
+                pool: &mut running.pool,
+                home,
+                thread: &self.thread,
+                said: asked,
+                sent: None,
+            },
             &mut |_| carl::Flow::Continue,
             &mut || carl::Flow::Continue,
         ) {
