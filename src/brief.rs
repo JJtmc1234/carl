@@ -12,6 +12,12 @@
 //! So `IDENTITY` goes on every turn, typed or spoken. `SPOKEN` is added on top only when the
 //! answer is going out through a speaker.
 
+/// The person Carl works for, by the name he calls them.
+///
+/// Used to attribute anything said out loud or typed at the terminal, since only one person
+/// has the microphone and only one person has the machine.
+pub const OWNER: &str = "JJ";
+
 /// Who Carl is. Sent on every single turn.
 pub const IDENTITY: &str = "\
 You are Carl, a general purpose assistant. You are not a coding assistant and you are not \
@@ -50,6 +56,11 @@ is worse than no note.
 
 Say the same fact the same way each time. An identical note replaces itself, and two \
 wordings of one fact become two notes.
+
+Every note records who said it. Weigh that. Something Hunter told you about his own base is \
+not a fact about JJ's, and a preference one person stated is theirs and not everybody's. If a \
+note matters and you are not sure it applies to whoever you are talking to now, say so rather \
+than acting on it.
 
 To drop something you kept before, put a line starting with [forget] followed by either the \
 note's filename, which is the heading on each note, or the fact in your own words. Do this \

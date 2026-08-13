@@ -63,6 +63,7 @@ impl Ear {
                         thread: &self.thread,
                         said: question,
                         sent: sent.as_deref(),
+                        said_by: Some(carl::brief::OWNER),
                     },
                     carl::Area::Screen,
                     &mut on_text,
@@ -78,6 +79,7 @@ impl Ear {
                         // What Carl is told, which is not what JJ said. The record keeps the
                         // question, not the scaffolding around it.
                         sent: sent.as_deref(),
+                        said_by: Some(carl::brief::OWNER),
                     },
                     &mut on_text,
                     &mut waiting,
@@ -133,6 +135,7 @@ impl Ear {
                 thread: &self.thread,
                 said: asked,
                 sent: None,
+                said_by: Some(carl::brief::OWNER),
             },
             &mut |_| carl::Flow::Continue,
             &mut || carl::Flow::Continue,

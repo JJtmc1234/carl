@@ -93,6 +93,23 @@ impl Memory {
         Ok(path)
     }
 
+    /// Writes a note and records who said it.
+    ///
+    /// Memory is one pile and everybody who can reach Carl writes into it. Without a source,
+    /// something Hunter mentioned about his own base comes back later as a fact about JJ's,
+    /// stated with the same confidence as anything JJ said himself.
+    ///
+    /// Kept as a line in the note rather than in the filename or a separate index. The note is
+    /// handed to a model as text, so the attribution has to survive as text, and a second file
+    /// to keep in step is a second file to get out of step.
+    pub fn write_from(&self, name: &str, body: &str, source: &str) -> Result<PathBuf> {
+        let source = source.trim();
+        if source.is_empty() {
+            return self.write(name, body);
+        }
+        self.write(name, &format!("{}\n\n(said by {source})", body.trim()))
+    }
+
     pub fn forget(&self, name: &str) -> Result<bool> {
         let path = self.path_for(name)?;
         match std::fs::remove_file(&path) {
@@ -134,6 +151,48 @@ impl Memory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Memory is one pile and everybody who can reach Carl writes into it. Without a source,
+    /// something Hunter said about his own base comes back later as a fact about JJ's.
+    #[test]
+    fn a_note_records_who_said_it() {
+        let d = tempfile::tempdir().unwrap();
+        let m = Memory::open(d.path()).unwrap();
+
+        let p = m
+            .write_from("blue-science", "The base is on blue science", "Hunter")
+            .unwrap();
+        let body = std::fs::read_to_string(&p).unwrap();
+
+        assert!(body.contains("The base is on blue science"));
+        assert!(body.contains("said by Hunter"), "{body}");
+    }
+
+    /// It has to survive being read back and handed to a model, because that is the only
+    /// place it is ever used.
+    #[test]
+    fn the_source_comes_back_in_the_assembled_memory() {
+        let d = tempfile::tempdir().unwrap();
+        let m = Memory::open(d.path()).unwrap();
+        m.write_from("a-fact", "Something", "Hunter").unwrap();
+
+        let assembled = m.assemble().unwrap().unwrap();
+        assert!(assembled.contains("said by Hunter"), "{assembled}");
+    }
+
+    /// No source is not the string "said by nobody". A note from an unknown speaker is still
+    /// a note.
+    #[test]
+    fn an_unknown_speaker_leaves_the_note_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let m = Memory::open(d.path()).unwrap();
+
+        for source in ["", "   "] {
+            let p = m.write_from("plain", "Just a fact", source).unwrap();
+            let body = std::fs::read_to_string(&p).unwrap();
+            assert_eq!(body.trim(), "Just a fact", "{body}");
+        }
+    }
 
     fn memory() -> (Memory, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();

@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-245 tests, clippy clean at deny warnings.
+248 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -790,3 +790,27 @@ The Slack context was going straight into the permanent record.
 
 `said` and `sent` have been different fields since the first week for exactly this reason, and
 eight positional arguments in a row is how they got swapped. They are a struct now.
+
+## every note says who said it
+
+Memory is one pile and everybody who can reach Carl writes into it. Hunter is in the
+workspace, so something he mentioned about his own base would come back a week later as a
+fact about JJ's, stated with exactly the confidence of anything JJ said himself.
+
+So a note carries its source, as a line in the note rather than in the filename or a separate
+index. The note is handed to a model as text, so the attribution has to survive as text, and a
+second file to keep in step is a second file to get out of step.
+
+```
+JJ prefers short answers.
+
+(said by JJ)
+```
+
+Carl is told to weigh it. A preference one person stated is theirs and not everybody's, and
+if a note might not apply to whoever is talking now, saying so beats acting on it.
+
+Wiring it turned up that the Slack path had stopped recording an author at all when it moved
+to the held open process, and that the terminal never had one. Both are fixed, and the
+terminal is attributed to JJ because only one person has that terminal and it is the same
+person who has the microphone.

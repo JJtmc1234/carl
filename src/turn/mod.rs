@@ -61,7 +61,10 @@ pub fn stream(
         thread,
         said,
         sent,
-        author: None,
+        // Only one person has this terminal, and it is the same person who has the
+        // microphone. A note written from here with no source reads later as if nobody said
+        // it.
+        author: Some(carl::brief::OWNER.to_string()),
         extra,
     }
     .run(|p| {
@@ -91,6 +94,12 @@ pub struct Asking<'a> {
     pub said: &'a str,
     /// What Carl is told, when it differs. Never recorded.
     pub sent: Option<&'a str>,
+    /// Who is speaking, by name.
+    ///
+    /// Goes in the record and on any note written this turn. Memory is one pile and everybody
+    /// who can reach Carl writes into it, so a fact with no source comes back later as if it
+    /// were JJ's own.
+    pub said_by: Option<&'a str>,
 }
 
 /// Handles one message through a process that is already running.
@@ -114,6 +123,7 @@ pub fn stream_in(
         thread,
         said,
         sent,
+        said_by,
     } = asking;
 
     Exchange {
@@ -121,7 +131,7 @@ pub fn stream_in(
         thread,
         said,
         sent,
-        author: None,
+        author: said_by.map(str::to_owned),
         // Static instructions belong to the process, which already has them.
         extra: None,
     }

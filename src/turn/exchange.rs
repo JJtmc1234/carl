@@ -116,6 +116,11 @@ impl Prepared<'_> {
 impl Exchange<'_> {
     /// Records the question, prepares the turn, runs `ask`, records the outcome.
     pub fn run(self, ask: impl FnOnce(&Prepared<'_>) -> carl::Result<Answer>) -> Result<Answer> {
+        // Kept before the author is handed to the log, which consumes it. Notes written this
+        // turn are attributed to whoever is speaking, since memory is one pile and everybody
+        // who can reach Carl writes into it.
+        let speaker = self.author.clone().unwrap_or_default();
+
         let mut log = Log::open(self.home.join("conversations.jsonl"))
             .context("cannot open the conversation record")?;
 
@@ -244,7 +249,7 @@ impl Exchange<'_> {
                         eprintln!("  a note with no words in it was skipped: {note:?}");
                         continue;
                     }
-                    match memory.write(&name, note) {
+                    match memory.write_from(&name, note, &speaker) {
                         Ok(path) => eprintln!("  remembered: {}", path.display()),
                         // Never fatal. Failing to keep a note must not lose the answer that
                         // came with it, which somebody is waiting for.
