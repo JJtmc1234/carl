@@ -80,6 +80,10 @@ pub enum Said {
 }
 
 impl Mouth {
+    pub fn voice(&self) -> &Voice {
+        &self.voice
+    }
+
     pub fn new(voice: Voice, duplex: bool) -> Self {
         Self { voice, duplex }
     }

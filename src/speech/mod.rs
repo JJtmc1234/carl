@@ -14,8 +14,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
+mod filler;
 mod sentences;
 mod words;
+pub use filler::{Armed, Filler, PHRASES, WAIT};
 pub use sentences::Sentences;
 pub use words::speakable;
 
@@ -216,6 +218,50 @@ impl Voice {
 
     pub fn model(&self) -> &Path {
         &self.model
+    }
+
+    pub fn player_path(&self) -> &Path {
+        &self.player
+    }
+
+    pub fn sink_name(&self) -> Option<&str> {
+        self.sink.as_deref()
+    }
+
+    /// Synthesises once to a file, for something that has to be instant later.
+    ///
+    /// Piper takes 0.29 seconds to start, which is most of the gap a filler exists to cover,
+    /// so the only way to be quick when it matters is to have done the work already.
+    pub fn render(&self, text: &str, to: &Path) -> Result<()> {
+        let text = speakable(text);
+        if text.is_empty() {
+            return Err(Error::Refused("nothing to render".into()));
+        }
+
+        let mut piper = Command::new(&self.piper)
+            .args([
+                "--model".to_string(),
+                self.model.to_string_lossy().into_owned(),
+                "--output_file".to_string(),
+                to.to_string_lossy().into_owned(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| Error::Refused(format!("cannot run piper: {e}")))?;
+
+        piper
+            .stdin
+            .take()
+            .ok_or_else(|| Error::Refused("no stdin on piper".into()))?
+            .write_all(text.as_bytes())?;
+
+        let done = piper.wait()?;
+        if !done.success() {
+            return Err(Error::Refused(format!("piper failed: {done}")));
+        }
+        Ok(())
     }
 }
 

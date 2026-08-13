@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-225 tests, clippy clean at deny warnings.
+230 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -676,3 +676,26 @@ A process that lives for hours has time to be killed, run out of memory, or be r
 underneath. A dead one is reopened and the question retried once, and the reopen resumes the
 conversation rather than starting a second one, which is the difference between a hiccup and
 losing everything said so far.
+
+## the noise a person makes while thinking
+
+Carl takes a second or two to answer. That is fast for a model and long for a silence, and
+silence after a question reads as not having been heard.
+
+A person asked something does not go quiet. They say "mm" and then answer, and the sound
+carries no information at all. Knowing you were heard is the whole of it.
+
+Two things decide whether this helps or makes it worse.
+
+It has to be instant, so it cannot be synthesised when it is wanted. Piper takes 0.29 seconds
+to start, which is most of the gap being covered. The phrases are rendered once at startup
+into `/dev/shm` and playing one afterwards costs only starting `aplay`.
+
+And it must not fire when the answer is quick, because a noise followed immediately by the
+answer sounds like a stutter and is worse than the silence it replaced. So it is armed rather
+than played: a thread holds a 450 millisecond timer and the first word of the answer cancels
+it. Dropping it cancels it too, so no path can leave one to fire late.
+
+None of the phrases promise anything. "Let me check" is a claim about what Carl is doing, and
+he is not doing it, he is waiting. "Mm" is only an acknowledgement, which is all this is for,
+and there is a test that keeps it that way.

@@ -21,7 +21,12 @@ impl Ear {
     ) -> Result<()> {
         // Speaks each sentence as Claude writes it. The narration has to outlive the call so
         // the last sentence can finish playing, because dropping it kills the player mid word.
-        let mut narration = Narration::new(&self.mouth, mic, hush);
+        let mut narration = Narration::new(
+            &self.mouth,
+            mic,
+            hush,
+            running.filler.as_mut().map(|f| f.arm()),
+        );
 
         let answer = {
             let mut on_text = |t: &str| narration.feed(t);

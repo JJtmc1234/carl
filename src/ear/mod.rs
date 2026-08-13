@@ -55,6 +55,9 @@ pub struct Ear {
 /// when the next question arrives.
 pub struct Running {
     pub pool: Pool,
+    /// Rendered once at startup, because synthesising a noise on demand costs 0.29 seconds,
+    /// which is most of the gap the noise exists to cover.
+    pub filler: Option<carl::speech::Filler>,
 }
 
 impl Ear {
@@ -85,6 +88,7 @@ impl Ear {
                 home.join("workspace"),
                 carl::brief::spoken(),
             ),
+            filler: None,
         };
 
         // Audio scratch lives in RAM. Nothing recorded ever reaches the disk, whether it is
@@ -111,6 +115,14 @@ impl Ear {
         eprint!("measuring the room... ");
         let hush = mic.calibrate(1.5);
         eprintln!("quiet is below {hush:.3}");
+
+        // Rendered after the room is measured rather than before, so the first thing that
+        // happens on startup is still listening. A filler that fails to render costs nothing:
+        // Carl without one is the Carl that existed before it.
+        let filler = carl::speech::Filler::prepare(self.mouth.voice(), Path::new("/dev/shm/carl"));
+        if filler.is_ready() {
+            running.filler = Some(filler);
+        }
 
         eprintln!("listening. say \"hey carl\" to start, \"end conversation\" to finish.");
 

@@ -9,13 +9,19 @@
 
 use carl::Flow;
 use carl::audio::Mic;
-use carl::speech::{Sentences, Speaking};
+use carl::speech::{Armed, Sentences, Speaking};
 
 use super::mouth::{Barge, Mouth, RECENT_SECS, Said, wait_out};
 
 pub struct Narration<'a> {
     mouth: &'a Mouth,
     mic: &'a Mic,
+    /// A noise waiting to be made, cancelled the moment the answer starts.
+    ///
+    /// Carl takes a second or two, which is fast for a model and long for a silence. A person
+    /// asked a question says "mm" and then answers, and the sound is not the point. The point
+    /// is knowing you were heard.
+    filler: Option<Armed>,
     barge: Barge,
     /// The sentence currently coming out of the speakers, if any.
     speaking: Option<Speaking>,
@@ -24,10 +30,11 @@ pub struct Narration<'a> {
 }
 
 impl<'a> Narration<'a> {
-    pub fn new(mouth: &'a Mouth, mic: &'a Mic, hush: f32) -> Self {
+    pub fn new(mouth: &'a Mouth, mic: &'a Mic, hush: f32, filler: Option<Armed>) -> Self {
         Self {
             mouth,
             mic,
+            filler,
             barge: Barge::new(hush),
             speaking: None,
             pending: Sentences::new(),
@@ -44,6 +51,10 @@ impl<'a> Narration<'a> {
         if self.cut_off {
             return Flow::Stop;
         }
+        // The first words have arrived, so the noise is no longer wanted. Cancelled before
+        // anything is spoken, because a filler landing on top of the answer is the exact
+        // failure this is meant to avoid.
+        self.filler.take();
         self.pending.feed(text);
 
         while let Some(sentence) = self.pending.take() {
