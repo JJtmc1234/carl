@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-236 tests, clippy clean at deny warnings.
+237 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -732,3 +732,29 @@ nothing else.
 
 Worth remembering as a rule rather than a Factorio style one off. A test that cannot fail is
 worse than no test, because it is counted.
+
+## the thread count was worth more than the resident model
+
+Keeping whisper loaded looked like the obvious next saving, and measuring it first was worth
+doing. Of 913 milliseconds for a short question, only 151 is loading the model. The other 591
+is the encoding, which happens either way. So a resident whisper is worth about 200
+milliseconds, not the half second it was billed as.
+
+The thread count turned out to matter more, and in the opposite direction to the guess in the
+code.
+
+| threads | time |
+|---|---|
+| 4 | 845ms |
+| 8 | 709ms |
+| 12 | 636ms |
+| 16 | 685ms |
+
+Carl was using every core but one, on the reasoning that leaving one free is polite to
+whatever else is running. That is slower, by ninety milliseconds, and the reason is that this
+machine does not have sixteen of the same core. It has fast ones and slow ones, whisper
+splits its work into equal pieces, and every piece finishes at the speed of the core it landed
+on. Giving work to the slow cores makes the whole batch wait for them.
+
+Three quarters of the machine, as a rule rather than the number twelve, because the next
+machine will have a different count and the same shape of problem.

@@ -14,6 +14,10 @@
 //! | `small.en` | 2.84s | the conversation with `--accurate` |
 //! | `large-v3-turbo` | 13.9s for 11s of speech | nothing. Too slow on CPU to sit in a loop. |
 //!
+//! Of that 0.89 seconds, only 0.15 is loading the model and 0.59 is the actual encoding, so
+//! keeping whisper resident would save less than it looks like. The thread count was worth
+//! more, see `threads`.
+//!
 //! `base.en` rather than `small.en` for the conversation, which is a two second saving on
 //! every single thing you say. Two seconds is a long time to wait having already finished
 //! talking, and on clean audio the better model was not buying anything. The echo canceller
@@ -95,12 +99,8 @@ impl Whisper {
             // No timestamps, no progress chatter. Just the words.
             "--no-timestamps".into(),
             "--no-prints".into(),
-            // One thread short of the machine, so transcribing does not starve the game.
             "--threads".into(),
-            std::thread::available_parallelism()
-                .map(|n| (n.get().saturating_sub(1)).max(1))
-                .unwrap_or(4)
-                .to_string(),
+            threads().to_string(),
         ]
     }
 
@@ -155,6 +155,32 @@ pub fn clean(raw: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// How many threads to transcribe with.
+///
+/// Three quarters of the machine, which was measured rather than reasoned about. The first
+/// version used every core but one, on the theory that leaving one free is polite. On this
+/// machine that is slower, and not slightly.
+///
+/// | threads | time |
+/// |---|---|
+/// | 4 | 845ms |
+/// | 8 | 709ms |
+/// | 12 | 636ms |
+/// | 16 | 685ms |
+///
+/// The reason is that a modern desktop chip does not have sixteen of the same core. This one
+/// has fast cores and slow ones, and whisper splits its work into equal pieces, so every
+/// piece finishes at the speed of the slowest core it landed on. Handing work to the slow
+/// cores makes the whole batch wait for them.
+///
+/// Three quarters is a rule rather than the number 12, because the next machine will have a
+/// different count and the same shape of problem.
+pub fn threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| (n.get() * 3 / 4).max(2))
+        .unwrap_or(4)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,18 +203,28 @@ mod tests {
         assert!(!args.iter().any(|a| a.contains("large")), "{args:?}");
     }
 
+    /// Measured, not reasoned about. Using every core is slower on a machine with fast and
+    /// slow cores mixed, because whisper splits its work evenly and the batch finishes at the
+    /// speed of the slowest piece.
     #[test]
-    fn transcription_leaves_at_least_one_core_free() {
-        let args = w().args_for(Tier::Wake, Path::new("/dev/shm/a.wav"));
-        let at = args.iter().position(|a| a == "--threads").unwrap();
-        let threads: usize = args[at + 1].parse().unwrap();
-        assert!(threads >= 1);
-        if let Ok(n) = std::thread::available_parallelism() {
-            assert!(
-                threads < n.get() || n.get() == 1,
-                "the game needs a core too"
-            );
+    fn transcription_uses_three_quarters_of_the_machine() {
+        let cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let t = threads();
+        assert!(t >= 2, "always at least two");
+        assert!(t <= cores, "never more than the machine has");
+        if cores >= 8 {
+            assert!(t < cores, "using every core measured slower");
         }
+    }
+
+    #[test]
+    fn the_thread_count_reaches_the_command_line() {
+        let w = Whisper::with_paths("/opt/whisper", "/opt/models");
+        let args = w.args_for(Tier::Talk, Path::new("/tmp/a.wav"));
+        let at = args.iter().position(|a| a == "--threads").unwrap();
+        assert_eq!(args[at + 1], threads().to_string());
     }
 
     /// Whisper writes [BLANK_AUDIO] over silence. Passed through, it is just words, and words
