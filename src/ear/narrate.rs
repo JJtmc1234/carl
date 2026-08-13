@@ -11,7 +11,7 @@ use carl::Flow;
 use carl::audio::Mic;
 use carl::speech::{Sentences, Speaking};
 
-use super::mouth::{Barge, Mouth, Said, wait_out};
+use super::mouth::{Barge, Mouth, RECENT_SECS, Said, wait_out};
 
 pub struct Narration<'a> {
     mouth: &'a Mouth,
@@ -69,32 +69,69 @@ impl<'a> Narration<'a> {
         {
             return Said::CutOff;
         }
+
         match self.speaking.take() {
-            Some(mut s) => wait_out(&mut s, self.mic, &mut self.barge),
+            Some(mut s) => {
+                // Closing the input is what tells piper the answer is over. Without it the
+                // stream waits forever for a sentence that is never coming.
+                s.close_input();
+                wait_out(&mut s, self.mic, &mut self.barge)
+            }
             None => Said::Fully,
         }
     }
 
-    /// Queues one sentence, waiting out whatever is already playing.
+    /// Hands one sentence to the voice.
+    ///
+    /// The voice is opened once and kept open, so a sentence is a line written to something
+    /// already running rather than a new pair of processes. Piper takes 0.29 seconds to load
+    /// its model, measured, and paying that per sentence put an audible gap between every one
+    /// of them.
     fn speak(&mut self, sentence: &str) -> Said {
-        if let Some(mut current) = self.speaking.take()
-            && wait_out(&mut current, self.mic, &mut self.barge) == Said::CutOff
-        {
-            self.cut_off = true;
-            return Said::CutOff;
+        if !self.mouth.duplex {
+            // No canceller, so the microphone must be off for the whole sentence and nothing
+            // can interrupt. A stream that stays open would keep it deaf between sentences
+            // too, which is worse, so this path still speaks one at a time.
+            if let Err(e) = self.mic.deaf_while(|| self.mouth.voice.say(sentence)) {
+                eprintln!("could not speak: {e}");
+            }
+            return Said::Fully;
         }
 
-        if self.mouth.duplex {
-            match self.mouth.voice.start(sentence) {
-                Ok(started) => self.speaking = started,
-                // A player that will not start is not worth abandoning the answer over. The
-                // text is still printed and still recorded.
-                Err(e) => eprintln!("could not speak: {e}"),
+        // Opened on the first sentence, not before the answer, because a voice held open with
+        // nothing to say holds the audio device against everything else on the machine.
+        if self.speaking.is_none() {
+            match self.mouth.voice.open() {
+                Ok(v) => self.speaking = Some(v),
+                Err(e) => {
+                    eprintln!("could not open a voice: {e}");
+                    return Said::Fully;
+                }
             }
-        } else if let Err(e) = self.mic.deaf_while(|| self.mouth.voice.say(sentence)) {
-            // No canceller, so the microphone has to be off for the whole sentence. Nothing
-            // can interrupt, and the next sentence simply waits.
+        }
+
+        if let Some(voice) = self.speaking.as_mut()
+            && let Err(e) = voice.add(sentence)
+        {
             eprintln!("could not speak: {e}");
+        }
+
+        // Checked after handing it over rather than before, so the next sentence is already
+        // queued and the words run together the way speech does.
+        self.watch_for_interruption()
+    }
+
+    /// Watches for somebody talking over him, without waiting for the sentence to end.
+    ///
+    /// The old version waited out each sentence before queueing the next, which is what put a
+    /// gap between them. Now the queue runs ahead and this only looks for a reason to stop.
+    fn watch_for_interruption(&mut self) -> Said {
+        if self.barge.saw(self.mic.recent(RECENT_SECS)) {
+            if let Some(v) = self.speaking.as_mut() {
+                v.stop();
+            }
+            self.cut_off = true;
+            return Said::CutOff;
         }
         Said::Fully
     }

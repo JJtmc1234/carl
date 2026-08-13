@@ -112,6 +112,15 @@ impl Exchange<'_> {
         // answered about stone furnaces to somebody playing Sea Block, where there are no
         // ores to smelt. Recency is a fact and keyword lists are a guess.
         let game = carl::game::playing();
+
+        // A game in a browser tab cannot be detected at all, so it is named by being told and
+        // kept under this name instead. Carl writing "they are playing Slither" is the only
+        // signal available, and it is a good one.
+        let picture_name = game
+            .as_ref()
+            .map(|g| g.name.clone())
+            .unwrap_or_else(|| "current".to_string());
+
         if let Some(found) = &game
             && let Some(brief) = carl::game::brief(found)
         {
@@ -120,7 +129,7 @@ impl Exchange<'_> {
 
             // What he made of it last time. Without this every look starts over and a
             // question like "is that better than before" has no answer available.
-            match carl::game::seen::read(self.home, found.name) {
+            match carl::game::seen::read(self.home, &picture_name) {
                 Some(picture) => {
                     extra_system.push_str(&format!(
                         "\n\nWhere they were up to when you last heard, which may be out of \
@@ -132,6 +141,14 @@ impl Exchange<'_> {
                      you find out, from a screenshot or from them saying so, record it.",
                 ),
             }
+        } else if let Some(picture) = carl::game::seen::read(self.home, &picture_name) {
+            // Nothing detectable is running, but something was recorded. Almost always a
+            // browser game, since a page in a tab leaves no trace anywhere a program can look.
+            extra_system.push_str(&format!(
+                "\n\n# The game\n\nNo game was detected running, which usually means it is in \
+                 a browser tab. What you were told or last saw, which may be out of date:\n\
+                 {picture}"
+            ));
         }
 
         // Claude Code runs with this as its working directory, so anything it writes lands
@@ -169,8 +186,8 @@ impl Exchange<'_> {
 
                 // Written before the notes, because it is the cheap one and cannot fail in a
                 // way worth abandoning the rest for.
-                if let (Some(picture), Some(found)) = (&kept.seen, &game)
-                    && let Err(e) = carl::game::seen::write(self.home, found.name, picture)
+                if let Some(picture) = &kept.seen
+                    && let Err(e) = carl::game::seen::write(self.home, &picture_name, picture)
                 {
                     eprintln!("  could not keep what was seen: {e}");
                 }

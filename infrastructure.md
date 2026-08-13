@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-211 tests, clippy clean at deny warnings.
+218 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -612,3 +612,36 @@ alongside the other two rather than buried in the game section.
 Proven across conversations. Told about red and green science and no oil in one thread, he
 answered correctly in a different thread that shares nothing but the picture, and when told
 oil was running he rewrote the whole thing rather than appending a contradiction.
+
+## one voice per answer, not one per sentence
+
+Piper takes 0.29 seconds to start, measured, and that is per process. Carl started a fresh
+piper and a fresh player for every sentence, so a three sentence answer paid it three times
+and left an audible gap between each one.
+
+Now one stream is opened on the first sentence and stays open, and each sentence is a line
+written to something already running. Measured on three sentences, 1.015 seconds became
+0.719. The number matters less than the gaps disappearing, because a pause between every
+sentence is the thing that makes a voice sound like a machine reading a list.
+
+Closing the input is what ends it. Piper reads until end of file, so a stream with its input
+still open is not finished, it is waiting, and anything asking whether it is done waits
+forever.
+
+The half duplex path still speaks one sentence at a time. Without a canceller the microphone
+has to be deaf while Carl talks, and a stream held open would keep it deaf between sentences
+as well, which is worse than the gap.
+
+## where the remaining delay actually is
+
+| step | time |
+|---|---|
+| quiet before he decides you stopped | 0.4s |
+| whisper `base.en` | 0.9s |
+| claude, starting the CLI | 0.8s |
+| claude, to its first word | 2.0s |
+| piper, first sound | 0.3s, now once per answer rather than per sentence |
+
+The CLI startup is the next real target. Every turn starts a new `claude` process, which
+reads its config and connects its servers before a single token is asked for. A session held
+open across turns would remove it outright.

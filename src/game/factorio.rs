@@ -29,6 +29,51 @@ pub fn home() -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
+/// The lines worth telling Carl about a Factorio install.
+///
+/// Lives here rather than in the general brief, because expansions and mods change what a
+/// correct answer is and nothing generic can know that. Every other game gets its name and
+/// whatever Carl can see on the screen.
+pub fn detail(f: &Facts) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if let Some(v) = &f.version {
+        lines.push(format!("Version {v}."));
+    }
+    if !f.expansions.is_empty() {
+        lines.push(format!(
+            "Expansions: {}. The tech tree is not the base one, so do not answer as though it \
+             were.",
+            f.expansions.join(", ")
+        ));
+    }
+    if f.mods.is_empty() {
+        lines.push("No mods enabled, so the recipes and tech tree are as the game ships.".into());
+    } else {
+        let (overhauls, total) = overhauls(&f.mods);
+        if overhauls.is_empty() {
+            lines.push(format!(
+                "{total} mods enabled: {}. None are overhauls, so the recipes and tech tree are \
+                 as the game ships.",
+                f.mods.join(", ")
+            ));
+        } else {
+            lines.push(format!(
+                "{total} mods enabled, including {}. This is not the base game. Recipes, costs \
+                 and the whole tech tree are different, and a lot of standard advice is simply \
+                 wrong here. Say when you are not sure whether something applies.",
+                overhauls.join(", plus ")
+            ));
+        }
+    }
+    if let Some(save) = f.saves.first() {
+        lines.push(format!(
+            "Most recent save: \"{save}\". The name is often the best clue about progress."
+        ));
+    }
+    lines
+}
+
 /// Whether the game was last played within this long.
 ///
 /// The log is rewritten every launch, so its age is the age of the last session. Reading a

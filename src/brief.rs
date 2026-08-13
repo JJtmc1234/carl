@@ -62,7 +62,8 @@ old note stays there contradicting it.
 
 There is a third line, [seen], for the state of a game somebody is playing. Use it whenever \
 you learn anything about where they are up to, however you learned it: from a screenshot, or \
-from them simply telling you. It holds one picture, so write the whole thing each time and it \
+from them simply telling you. If the game is in a browser tab, nothing can detect it, so say \
+which game it is on that line as well as where they are up to. It holds one picture, so write the whole thing each time and it \
 replaces what was there. Restate what is still true rather than only what changed.
 
 Keep [remember] and [seen] apart, because they last for different lengths of time. Who \

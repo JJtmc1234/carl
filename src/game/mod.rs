@@ -16,44 +16,20 @@ use std::process::Command;
 
 pub mod factorio;
 pub mod seen;
-
-/// A game Carl knows how to notice.
-struct Known {
-    /// What the process is called. Matched exactly, because a substring match on something
-    /// short catches the wrong thing.
-    process: &'static str,
-    name: &'static str,
-}
-
-const KNOWN: &[Known] = &[
-    Known {
-        process: "factorio",
-        name: "Factorio",
-    },
-    Known {
-        process: "Minecraft",
-        name: "Minecraft",
-    },
-    Known {
-        process: "stardew",
-        name: "Stardew Valley",
-    },
-    Known {
-        process: "FactoryGame",
-        name: "Satisfactory",
-    },
-];
+pub mod steam;
 
 /// What Carl can say about the game, if there is one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Playing {
-    pub name: &'static str,
-    /// True when the game is running now, false when this is the last one played.
+    pub name: String,
+    /// True when it is running now, false when it is the last one played.
     pub running: bool,
-    pub facts: factorio::Facts,
+    /// Anything specific worth knowing, one line each. Empty for a game Carl knows nothing
+    /// about beyond its name, which is still worth saying.
+    pub detail: Vec<String>,
 }
 
-/// How long after quitting a game still counts as the game being played.
+/// How long after quitting a game still counts as being played.
 ///
 /// Half the questions arrive in the ten minutes after closing the window, and a Carl who
 /// forgets the instant it shuts is less use than one who says what he last saw. A day later
@@ -62,101 +38,97 @@ pub struct Playing {
 const RECENT: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
 /// Looks for a game, running or played within the last few hours.
+///
+/// Steam first, because it covers everything bought through it without a table of names that
+/// goes stale the moment something new is installed. Factorio is then asked for its own extra
+/// detail, since expansions and mods change what a correct answer is and nothing generic can
+/// know that.
+///
+/// A game in a browser tab cannot be found this way at all. Chrome's renderer processes do
+/// not carry the page in their arguments, Wayland will not say what a window is called, and
+/// reading the browser's own session files is somebody else's data. So a web game is named by
+/// being told, and kept in the same picture as everything else.
 pub fn playing() -> Option<Playing> {
-    let processes = running_processes();
-    let found = KNOWN
-        .iter()
-        .find(|k| processes.iter().any(|p| p == k.process));
+    let args = command_lines();
+    let apps = steam::library()
+        .map(|d| steam::installed(&d))
+        .unwrap_or_default();
 
-    match found {
-        Some(k) if k.process == "factorio" => Some(Playing {
-            name: k.name,
-            running: true,
-            facts: factorio::home()
-                .map(|d| factorio::facts(&d))
-                .unwrap_or_default(),
-        }),
-        Some(k) => Some(Playing {
-            name: k.name,
-            running: true,
-            facts: factorio::Facts::default(),
-        }),
-        // Nothing running. Factorio leaves enough behind to be worth mentioning, but only
-        // while it is still recent.
-        None => {
-            let dir = factorio::home()?;
-            factorio::played_within(&dir, RECENT).then(|| Playing {
-                name: "Factorio",
-                running: false,
-                facts: factorio::facts(&dir),
-            })
+    if let Some(app) = steam::running(&apps, &args) {
+        return Some(described(&app.name, true));
+    }
+    if let Some(name) = other_running(&args) {
+        return Some(described(name, true));
+    }
+
+    let recent = apps.first().filter(|a| within(a.last_played, RECENT))?;
+    Some(described(&recent.name, false))
+}
+
+/// Games worth noticing that Steam does not know about.
+///
+/// Short on purpose. Anything bought through Steam is already covered, so this is only for
+/// things installed another way.
+fn other_running(args: &str) -> Option<&'static str> {
+    for (needle, name) in [
+        ("net.minecraft", "Minecraft"),
+        ("PrismLauncher", "Minecraft"),
+        ("minecraft-launcher", "Minecraft"),
+    ] {
+        if args.contains(needle) {
+            return Some(name);
         }
+    }
+    None
+}
+
+/// Adds whatever is known about this particular game.
+fn described(name: &str, running: bool) -> Playing {
+    let mut detail = Vec::new();
+    if name == "Factorio"
+        && let Some(dir) = factorio::home()
+    {
+        detail = factorio::detail(&factorio::facts(&dir));
+    }
+    Playing {
+        name: name.to_string(),
+        running,
+        detail,
     }
 }
 
-fn running_processes() -> Vec<String> {
-    let Ok(out) = Command::new("ps").args(["-eo", "comm="]).output() else {
-        return Vec::new();
-    };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .collect()
+fn within(unix_seconds: u64, window: std::time::Duration) -> bool {
+    if unix_seconds == 0 {
+        return false;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|now| now.as_secs().saturating_sub(unix_seconds) < window.as_secs())
+        .unwrap_or(false)
 }
 
-/// What Carl is told about the game, if anything is worth telling him.
-///
-/// Returns `None` rather than an empty section. A heading with nothing under it invites a
-/// model to fill the gap, and inventing a mod list is worse than having none.
-pub fn brief(found: &Playing) -> Option<String> {
-    let f = &found.facts;
-    let mut lines = Vec::new();
+/// Full command lines, not process names, because `ps` truncates a name to fifteen characters
+/// and plenty of games are called something longer.
+fn command_lines() -> String {
+    let Ok(out) = Command::new("ps").args(["-eo", "args="]).output() else {
+        return String::new();
+    };
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
 
+/// What Carl is told about the game.
+///
+/// Always something when a game was found, even if only the name. Knowing somebody is playing
+/// The Planet Crafter is worth having, and saying so lets them correct him, which beats him
+/// quietly guessing.
+pub fn brief(found: &Playing) -> Option<String> {
     let state = if found.running {
         "running now"
     } else {
         "not running at the moment, this is the last game played"
     };
-    match &f.version {
-        Some(v) => lines.push(format!("{} {v}, {state}.", found.name)),
-        None => lines.push(format!("{}, {state}.", found.name)),
-    }
-
-    if !f.expansions.is_empty() {
-        lines.push(format!(
-            "Expansions: {}. The tech tree is not the vanilla one, so do not answer as though \
-             it were.",
-            f.expansions.join(", ")
-        ));
-    }
-    if !f.mods.is_empty() {
-        let (overhauls, total) = factorio::overhauls(&f.mods);
-        if overhauls.is_empty() {
-            lines.push(format!(
-                "{total} mods enabled: {}. None of them are overhauls, so the recipes and the \
-                 tech tree are the ones the game ships with.",
-                f.mods.join(", ")
-            ));
-        } else {
-            lines.push(format!(
-                "{total} mods enabled, including {}. This is not the base game. Recipes, costs \
-                 and the whole tech tree are different, and a lot of standard advice is simply \
-                 wrong here. Say when you are not sure whether something applies.",
-                overhauls.join(", plus ")
-            ));
-        }
-    }
-    if let Some(save) = f.saves.first() {
-        lines.push(format!(
-            "Most recent save: \"{save}\". The name is often the best clue about how far in \
-             they are."
-        ));
-    }
-
-    // One line is only the name, which the question would have said anyway.
-    if lines.len() < 2 {
-        return None;
-    }
+    let mut lines = vec![format!("{}, {state}.", found.name)];
+    lines.extend(found.detail.iter().cloned());
     Some(format!("# The game\n\n{}", lines.join("\n")))
 }
 
@@ -164,106 +136,57 @@ pub fn brief(found: &Playing) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn facts() -> factorio::Facts {
-        factorio::Facts {
-            version: Some("2.0.77".into()),
-            expansions: vec!["space-age".into()],
-            mods: vec![
-                "bobplates".into(),
-                "angelsrefining".into(),
-                "SeaBlockPack".into(),
-                "squeak through 2".into(),
-            ],
-            saves: vec!["Space Age but the Vanilla Nauvis Part is Done".into()],
-        }
-    }
-
-    /// The whole reason this exists. Carl advised somebody on vanilla while they played Space
-    /// Age with Bob's mods, and neither fact was visible in a screenshot.
+    /// A game Carl knows nothing about beyond its name is still worth mentioning. Saying so
+    /// lets somebody correct him, which beats him quietly guessing.
     #[test]
-    fn the_brief_says_it_is_not_vanilla() {
+    fn a_game_with_no_detail_is_still_announced() {
         let b = brief(&Playing {
-            name: "Factorio",
+            name: "The Planet Crafter".into(),
             running: true,
-            facts: facts(),
+            detail: Vec::new(),
         })
-        .expect("there is plenty to say");
-
-        assert!(b.contains("2.0.77"), "{b}");
-        assert!(b.contains("space-age"), "{b}");
-        assert!(b.contains("not the vanilla one"), "{b}");
-        assert!(b.contains("Bob's"), "{b}");
-        assert!(b.contains("Sea Block"), "the one that changes everything");
-        assert!(!b.contains("squeak"), "quality of life mods are noise");
-        assert!(b.contains("Nauvis"), "the save name is a real clue");
+        .expect("the name alone is worth saying");
+        assert!(b.contains("The Planet Crafter"), "{b}");
+        assert!(b.contains("running now"), "{b}");
     }
 
-    /// A heading with nothing under it invites a model to fill the gap, and an invented mod
-    /// list is worse than no mod list.
-    #[test]
-    fn nothing_worth_saying_produces_no_section() {
-        assert_eq!(
-            brief(&Playing {
-                name: "Minecraft",
-                running: true,
-                facts: factorio::Facts::default(),
-            }),
-            None
-        );
-    }
-
-    /// Half the questions arrive just after quitting, and saying so is better than pretending
-    /// the game is up or saying nothing at all.
+    /// Half the questions arrive just after quitting, and saying so beats pretending the game
+    /// is up or saying nothing.
     #[test]
     fn a_game_that_has_stopped_is_described_as_stopped() {
         let b = brief(&Playing {
-            name: "Factorio",
+            name: "Factorio".into(),
             running: false,
-            facts: facts(),
+            detail: vec!["Expansions: space-age.".into()],
         })
         .unwrap();
         assert!(b.contains("last game played"), "{b}");
+        assert!(b.contains("space-age"), "detail must survive");
     }
 
-    /// Over eighty mods installed, and four of them decide whether an answer is right. The
-    /// rest are noise that would cost more context than the whole rest of the brief.
+    /// Zero means Steam never recorded a play, which is not the same as playing in 1970.
     #[test]
-    fn only_the_overhauls_are_named() {
-        let many: Vec<String> = (0..80).map(|i| format!("some mod {i}")).collect();
-        let (found, total) = factorio::overhauls(&many);
-        assert!(found.is_empty());
-        assert_eq!(total, 80);
-
-        let mut with = many.clone();
-        with.push("bobores".into());
-        let (found, total) = factorio::overhauls(&with);
-        assert_eq!(found, vec!["Bob's"]);
-        assert_eq!(total, 81, "the count still says how many there really are");
+    fn never_played_is_not_recently_played() {
+        assert!(!within(0, RECENT));
+        assert!(!within(1_000_000, RECENT));
     }
 
-    /// Sea Block has no ores on the map at all, so every answer about mining is wrong unless
-    /// Carl knows. It is the clearest case for naming the overhaul rather than the mods.
     #[test]
-    fn sea_block_says_what_makes_it_different() {
-        let (found, _) = factorio::overhauls(&["SeaBlockPack".to_string()]);
-        assert_eq!(found.len(), 1);
-        assert!(found[0].contains("no ores"), "{found:?}");
+    fn something_played_a_moment_ago_is_recent() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert!(within(now - 60, RECENT));
     }
 
-    /// A vanilla install must not be told it has expansions it does not have.
+    /// Minecraft is not on Steam, so it needs its own rule, and the launcher is what shows up.
     #[test]
-    fn vanilla_is_not_given_an_expansion_it_does_not_have() {
-        let b = brief(&Playing {
-            name: "Factorio",
-            running: true,
-            facts: factorio::Facts {
-                version: Some("1.1.109".into()),
-                saves: vec!["freeplay".into()],
-                ..factorio::Facts::default()
-            },
-        })
-        .unwrap();
-        assert!(!b.contains("Expansions"), "{b}");
-        assert!(!b.contains("vanilla one"), "{b}");
+    fn a_game_outside_steam_is_still_found() {
+        assert_eq!(
+            other_running("/usr/lib/jvm/bin/java -cp x net.minecraft.client.main.Main"),
+            Some("Minecraft")
+        );
+        assert_eq!(other_running("/usr/bin/chrome --type=renderer"), None);
     }
 }
