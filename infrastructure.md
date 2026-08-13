@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-230 tests, clippy clean at deny warnings.
+236 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -699,3 +699,36 @@ it. Dropping it cancels it too, so no path can leave one to fire late.
 None of the phrases promise anything. "Let me check" is a claim about what Carl is doing, and
 he is not doing it, he is waiting. "Mm" is only an acknowledgement, which is all this is for,
 and there is a test that keeps it that way.
+
+## interrupting him while he thinks
+
+Talking over Carl mid sentence already worked. Changing your mind before he had said anything
+did not, so the question you abandoned still got answered at you.
+
+The reason was structural. A turn was read by blocking on the channel, and the only chance to
+give up was inside the callback that receives words, which does not run while there are no
+words. So the read now waits in tenth of a second steps and asks a second callback whether to
+carry on. The microphone is watched during exactly the gap where changing your mind happens.
+
+### the trap underneath it
+
+The model does not stop because the listener walked away. The rest of that answer is still
+being written and still arriving, so the next question would be handed the tail of the one
+before it.
+
+So an abandoned turn is marked, and the next question clears the leftovers before sending
+anything. The clearing is bounded at twenty seconds: a session that will never produce its
+ending must not hang the next question forever, and one stale fragment is survivable where
+Carl never speaking again is not.
+
+### the test that proved nothing
+
+The first version of `tests/session.rs` passed with the clearing deleted.
+
+The stand in for `claude` gave every answer the same words, so an answer left over from an
+abandoned turn read exactly like a fresh one and the assertion could not tell them apart.
+Numbering the turns fixed it, and now removing the clearing fails exactly that test and
+nothing else.
+
+Worth remembering as a rule rather than a Factorio style one off. A test that cannot fail is
+worse than no test, because it is counted.

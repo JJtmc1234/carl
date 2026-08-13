@@ -94,6 +94,8 @@ pub fn stream_in(
     said: &str,
     sent: Option<&str>,
     on_text: &mut dyn FnMut(&str) -> Flow,
+    // Called while nothing is arriving, so a turn can be given up on before its first word.
+    while_waiting: &mut dyn FnMut() -> Flow,
 ) -> Result<Answer> {
     Exchange {
         home,
@@ -111,6 +113,7 @@ pub fn stream_in(
             p.resume,
             &p.question_with_context(),
             on_text,
+            while_waiting,
         )
     })
 }
@@ -123,9 +126,18 @@ pub fn look_in(
     question: &str,
     area: Area,
     on_text: &mut dyn FnMut(&str) -> Flow,
+    while_waiting: &mut dyn FnMut() -> Flow,
 ) -> Result<Answer> {
     let sent = shot(home, question, area)?;
-    stream_in(pool, home, thread, question, Some(&sent), on_text)
+    stream_in(
+        pool,
+        home,
+        thread,
+        question,
+        Some(&sent),
+        on_text,
+        while_waiting,
+    )
 }
 
 /// Take a picture of the screen, then ask about it.

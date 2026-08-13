@@ -177,6 +177,7 @@ fn answer(
             &format!("{context}\n\n---\n\n{}", ask.text),
             None,
             &mut |_| carl::Flow::Continue,
+            &mut || carl::Flow::Continue,
         )?;
         return Ok(answer.text);
     };
@@ -211,9 +212,20 @@ fn answer(
             &asked,
             carl::Area::Screen,
             &mut show,
+            // Nothing interrupts a Slack answer. There is no microphone, and a message
+            // arriving mid answer is a new question rather than a change of mind.
+            &mut || carl::Flow::Continue,
         )?
     } else {
-        turn::stream_in(pool, home, &ask.thread, &asked, None, &mut show)?
+        turn::stream_in(
+            pool,
+            home,
+            &ask.thread,
+            &asked,
+            None,
+            &mut show,
+            &mut || carl::Flow::Continue,
+        )?
     };
     Ok(answer.text)
 }

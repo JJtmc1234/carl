@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::Result;
 use carl::audio::Mic;
 
+use super::mouth::Barge;
 use super::narrate::Narration;
 use super::{Ear, Running};
 use crate::turn;
@@ -28,6 +29,18 @@ impl Ear {
             running.filler.as_mut().map(|f| f.arm()),
         );
 
+        // Watched while nothing is arriving, which is when changing your mind actually
+        // happens. Interrupting him mid sentence already worked, and interrupting him mid
+        // thought did not, so the question you abandoned still got answered at you.
+        let mut interrupt = Barge::new(hush);
+        let mut waiting = || {
+            if interrupt.saw(mic.recent(0.3)) {
+                carl::Flow::Stop
+            } else {
+                carl::Flow::Continue
+            }
+        };
+
         let answer = {
             let mut on_text = |t: &str| narration.feed(t);
             if carl::needs_screen(question) {
@@ -38,6 +51,7 @@ impl Ear {
                     question,
                     carl::Area::Screen,
                     &mut on_text,
+                    &mut waiting,
                 )
             } else {
                 turn::stream_in(
@@ -47,6 +61,7 @@ impl Ear {
                     question,
                     None,
                     &mut on_text,
+                    &mut waiting,
                 )
             }
         };
@@ -98,6 +113,7 @@ impl Ear {
             asked,
             None,
             &mut |_| carl::Flow::Continue,
+            &mut || carl::Flow::Continue,
         ) {
             eprintln!("could not look back over the conversation: {e:#}");
         }

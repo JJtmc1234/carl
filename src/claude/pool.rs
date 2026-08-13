@@ -77,13 +77,14 @@ impl Pool {
         resume: bool,
         prompt: &str,
         on_text: &mut dyn FnMut(&str) -> Flow,
+        while_waiting: &mut dyn FnMut() -> Flow,
     ) -> Result<Answer> {
         self.ensure(thread, session, resume)?;
         self.touch(thread);
 
         let attempt = {
             let live = self.session_for(thread).expect("just ensured");
-            live.ask(prompt, on_text)
+            live.ask(prompt, on_text, while_waiting)
         };
 
         match attempt {
@@ -97,7 +98,7 @@ impl Pool {
                 self.close(thread);
                 self.ensure(thread, session, true)?;
                 let live = self.session_for(thread).expect("just reopened");
-                live.ask(prompt, on_text)
+                live.ask(prompt, on_text, while_waiting)
             }
         }
     }
@@ -225,9 +226,14 @@ mod tests {
     fn a_session_that_cannot_start_says_so() {
         let mut p = pool(2);
         let s = SessionId::fresh().unwrap();
-        let err = p.ask(&thread("voice"), &s, false, "hello", &mut |_| {
-            Flow::Continue
-        });
+        let err = p.ask(
+            &thread("voice"),
+            &s,
+            false,
+            "hello",
+            &mut |_| Flow::Continue,
+            &mut || Flow::Continue,
+        );
         assert!(err.is_err());
         assert_eq!(p.open_count(), 0, "nothing should be left half open");
     }

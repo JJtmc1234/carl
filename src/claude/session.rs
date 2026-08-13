@@ -18,10 +18,21 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::thread::JoinHandle;
 
 use serde_json::json;
+
+/// How often to look up from waiting.
+///
+/// Short enough that giving up feels immediate, long enough that it is not a spin.
+const TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// How long to spend clearing an abandoned answer before giving up on it.
+///
+/// A session that will never produce its ending must not hang the next question forever. One
+/// stale fragment is survivable. Carl never speaking again is not.
+const DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 use super::{Answer, Chunk, Flow, Runner, chunk_of};
 use crate::{Error, Result, SessionId};
@@ -31,6 +42,12 @@ pub struct Session {
     stdin: Option<ChildStdin>,
     chunks: Receiver<Chunk>,
     reader: Option<JoinHandle<()>>,
+    /// True when a turn was abandoned before its answer finished.
+    ///
+    /// The model does not stop because the listener walked away. The rest of that answer is
+    /// still coming down the pipe, and without this the next question would read it and hand
+    /// back the end of the previous one.
+    unfinished: bool,
 }
 
 impl Runner {
@@ -119,6 +136,7 @@ impl Runner {
             stdin: Some(stdin),
             chunks,
             reader: Some(reader),
+            unfinished: false,
         })
     }
 }
@@ -126,13 +144,25 @@ impl Runner {
 impl Session {
     /// Asks one question and reads the answer.
     ///
-    /// Blocks until the answer is finished or `on_text` asks to stop.
-    pub fn ask(&mut self, prompt: &str, on_text: &mut dyn FnMut(&str) -> Flow) -> Result<Answer> {
+    /// `on_text` sees the words as they arrive. `while_waiting` is called every tenth of a
+    /// second whether anything has arrived or not, which is what makes it possible to give up
+    /// on an answer that has not started yet. Without it, changing your mind halfway through
+    /// asking meant listening to the answer to the question you abandoned.
+    pub fn ask(
+        &mut self,
+        prompt: &str,
+        on_text: &mut dyn FnMut(&str) -> Flow,
+        while_waiting: &mut dyn FnMut() -> Flow,
+    ) -> Result<Answer> {
         if prompt.trim().is_empty() {
             return Err(Error::Claude(
                 "refusing to ask claude an empty question".into(),
             ));
         }
+
+        // Anything left over from a turn somebody walked away from, cleared before asking, so
+        // this answer cannot be the tail of the last one.
+        self.drain_unfinished();
 
         let message = json!({
             "type": "user",
@@ -152,32 +182,66 @@ impl Session {
 
         let mut said = String::new();
 
-        // Blocks on the channel rather than polling. The reader thread is the only thing that
-        // knows when a line has arrived, and a session that has been asked something always
-        // answers or dies, both of which end this loop.
-        while let Ok(chunk) = self.chunks.recv() {
-            match chunk {
-                Chunk::Text(t) => {
+        loop {
+            // A short wait rather than a blocking one, so giving up is possible before a
+            // single word has arrived. That is the whole difference between interrupting Carl
+            // while he talks, which already worked, and interrupting him while he thinks.
+            match self.chunks.recv_timeout(TICK) {
+                Ok(Chunk::Text(t)) => {
                     said.push_str(&t);
                     if on_text(&t) == Flow::Stop {
-                        // Deliberately not killed. This is one turn of a conversation that is
-                        // still going, and the words already spoken are the answer as far as
-                        // anybody heard it.
-                        return Ok(Answer {
-                            text: said,
-                            interrupted: true,
-                            session_id: None,
-                            cost_usd: None,
-                        });
+                        return Ok(self.abandon(said));
                     }
                 }
-                Chunk::Final(answer) => return Ok(*answer),
+                Ok(Chunk::Final(answer)) => return Ok(*answer),
+                Err(RecvTimeoutError::Timeout) => {
+                    if while_waiting() == Flow::Stop {
+                        return Ok(self.abandon(said));
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
 
         Err(Error::Claude(
             "the session ended without answering, so it needs reopening".into(),
         ))
+    }
+
+    /// Walks away from an answer without killing the conversation.
+    ///
+    /// The model carries on writing, which is fine, and the rest arrives with nobody reading
+    /// it. Marked so the next question clears it out first rather than being handed the tail
+    /// of this one.
+    fn abandon(&mut self, said: String) -> Answer {
+        self.unfinished = true;
+        Answer {
+            text: said,
+            interrupted: true,
+            session_id: None,
+            cost_usd: None,
+        }
+    }
+
+    /// Throws away the remains of an answer nobody waited for.
+    ///
+    /// Bounded, because a session that will never produce its ending must not hang the next
+    /// question forever. Giving up on the drain is survivable: the worst case is one stale
+    /// fragment, and the alternative is Carl never speaking again.
+    fn drain_unfinished(&mut self) {
+        if !self.unfinished {
+            return;
+        }
+        let until = std::time::Instant::now() + DRAIN_LIMIT;
+        while std::time::Instant::now() < until {
+            match self.chunks.recv_timeout(TICK) {
+                Ok(Chunk::Final(_)) => break,
+                Ok(Chunk::Text(_)) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        self.unfinished = false;
     }
 
     /// Whether the process is still alive.
