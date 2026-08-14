@@ -114,10 +114,10 @@ clients and there is no microphone to listen to when nobody is logged in. Slack 
 session but user services stop at logout by default, so surviving that needs
 `sudo loginctl enable-linger`, which is JJ's to run.
 
-**Python is shell access.** Carl can run `python3`, which can call `os.system`, write files
-and open sockets. Anyone who can message him in Slack can ask him to run something.
-`~/.carl/workspace` is a working directory and not a sandbox, and it is not described as one
-anywhere.
+**Python is sandboxed now.** It was shell access wearing a hat, and it is now the same
+interpreter inside a namespace with no home directory, no network, and one writable folder.
+Verified it cannot read the Slack tokens, list the home directory, open a socket, or see the
+machine's processes.
 
 ## next
 

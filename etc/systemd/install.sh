@@ -20,7 +20,10 @@ cargo build --release
 
 mkdir -p "$HOME/.local/bin" "$units"
 install -m755 "$repo/target/release/carl" "$HOME/.local/bin/carl"
-echo "installed $HOME/.local/bin/carl"
+# The sandboxed interpreter. Carl only allows this one, so without it here he can compute
+# nothing at all and says so rather than falling back to the real python.
+install -m755 "$repo/etc/carl-python" "$HOME/.local/bin/carl-python"
+echo "installed $HOME/.local/bin/carl and carl-python"
 
 for unit in carl-aec carl-listen carl-slack; do
   install -m644 "$here/$unit.service" "$units/$unit.service"

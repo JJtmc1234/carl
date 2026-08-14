@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Python for Carl, with the rest of the machine taken away.
+#
+# Carl needs to be able to work something out rather than guess at it, and arithmetic is what
+# a model is most confidently wrong about. Granting `python3` did that, and granted rather more
+# besides: python can call os.system, read any file the user can read, write any file the user
+# can write, and open a socket to anywhere. Anybody who can message Carl in Slack could ask him
+# to do all of it.
+#
+# So python runs inside a namespace where almost nothing exists.
+#
+#   the system, read only        so python itself, and its standard library, still work
+#   one writable directory       ~/.carl/workspace, which is the only thing it can change
+#   no network                   nothing can be fetched, and nothing can be sent out
+#   no other process             it cannot see or signal anything else on the machine
+#   a new session                so it cannot reach the terminal Carl was started from
+#
+# What it cannot do is make a wrong answer right. It is a boundary on damage, not on
+# correctness.
+#
+# Deliberately a script rather than something inside Carl. The thing being confined is a
+# child process, the tool that confines it is bubblewrap, and putting the arguments anywhere
+# other than next to each other would make them harder to check.
+set -euo pipefail
+
+WORKSPACE="${CARL_WORKSPACE:-$HOME/.carl/workspace}"
+mkdir -p "$WORKSPACE"
+
+# Nothing is visible unless it is named here, and the home directory is not named.
+#
+# The first version mounted all of `/` read only and one writable directory inside it. That
+# stops python changing anything, and does nothing at all about reading. It could still open
+# ~/.carl/slack.json and print the Slack tokens, which anybody who can message Carl could have
+# asked it to do. Read only is not the same as not there.
+#
+# So only the system directories are bound, and on this distribution /bin, /lib, /lib64 and
+# /sbin are all symlinks into /usr, so /usr covers them.
+exec bwrap \
+  --ro-bind /usr /usr \
+  --symlink usr/bin /bin \
+  --symlink usr/lib /lib \
+  --symlink usr/lib64 /lib64 \
+  --symlink usr/sbin /sbin \
+  --ro-bind /etc/alternatives /etc/alternatives \
+  --dev /dev \
+  --proc /proc \
+  --tmpfs /tmp \
+  --bind "$WORKSPACE" "$WORKSPACE" \
+  --chdir "$WORKSPACE" \
+  --unshare-net \
+  --unshare-pid \
+  --unshare-uts \
+  --unshare-ipc \
+  --new-session \
+  --die-with-parent \
+  --setenv HOME "$WORKSPACE" \
+  --setenv PYTHONDONTWRITEBYTECODE 1 \
+  /usr/bin/python3 "$@"

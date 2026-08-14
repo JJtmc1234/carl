@@ -281,11 +281,26 @@ Carl can also run python, and is told to use it rather than estimate anything wi
 two digits in it. Guessing at a sum and being confidently wrong is worse than taking a second
 to work it out.
 
-Worth being straight about what that grants. `python3` can call `os.system`, write files and
-open sockets, so it is shell access wearing a hat, not a calculator. Anyone who can message
-Carl in Slack can ask him to run something. He works in `~/.carl/workspace` and that is a
-working directory, not a sandbox, and it should not be described as one. To take it away,
-`Runner::default().allowing(vec![])`.
+That python runs inside a sandbox, which it did not at first. `etc/carl-python` is the same
+interpreter in a namespace where the home directory does not exist, the network is gone, and
+one directory is writable.
+
+Checked rather than assumed:
+
+| tried | result |
+|---|---|
+| `2**64 - 1` | works |
+| write in the workspace | works |
+| read `~/.carl/slack.json` | `FileNotFoundError` |
+| list the home directory | `FileNotFoundError` |
+| open a socket | `OSError` |
+| see other processes | 2, not the machine's |
+
+The first version bound the whole filesystem read only, which stops python changing anything
+and does nothing about reading. It could still print the Slack tokens. Read only is not the
+same as not there.
+
+To take it away entirely, `Runner::default().allowing(vec![])`.
 
 ### what he will not do
 

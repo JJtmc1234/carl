@@ -72,12 +72,17 @@ pub struct Runner {
 
 /// Running python, which is what makes Carl able to work something out rather than guess.
 ///
-/// Worth being clear about what this grants. `python3` can call `os.system`, write files and
-/// open sockets, so this is shell access wearing a hat, not a calculator. It is granted
-/// because a helper that cannot compute anything is not much of a helper, and because the
-/// working directory is `~/.carl/workspace`. It is not a sandbox and should not be described
-/// as one.
-pub const PYTHON: &str = "Bash(python3:*)";
+/// Not `python3` itself. `etc/carl-python` is the same interpreter inside a namespace where
+/// the home directory does not exist, the network is gone, and one directory is writable.
+/// Verified: it cannot read `~/.carl/slack.json`, cannot list the home directory, cannot open
+/// a socket, and can see two processes rather than the machine's.
+///
+/// Bare `python3` was granted first and was shell access wearing a hat. It could read any
+/// file the user could read, and anybody able to message Carl in Slack could ask it to.
+pub const PYTHON: &str = "Bash(carl-python:*)";
+
+/// Where the sandboxed interpreter lives, relative to the repository.
+pub const PYTHON_SCRIPT: &str = "etc/carl-python";
 
 impl Default for Runner {
     fn default() -> Self {

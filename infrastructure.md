@@ -814,3 +814,32 @@ Wiring it turned up that the Slack path had stopped recording an author at all w
 to the held open process, and that the terminal never had one. Both are fixed, and the
 terminal is attributed to JJ because only one person has that terminal and it is the same
 person who has the microphone.
+
+## python, with the rest of the machine taken away
+
+Carl needs to work something out rather than guess, because arithmetic is what a model is
+most confidently wrong about. Granting `python3` did that and granted a great deal besides:
+it could read any file the user could read, write any file the user could write, and open a
+socket to anywhere. Anybody who could message Carl in Slack could ask for all of it.
+
+`etc/carl-python` is the same interpreter under bubblewrap. The system is bound read only,
+one directory is writable, and the network, the process table and the home directory are
+simply not there.
+
+| tried | result |
+|---|---|
+| `2**64 - 1` | works |
+| write in the workspace | works |
+| read `~/.carl/slack.json` | `FileNotFoundError` |
+| list the home directory | `FileNotFoundError` |
+| open a socket | `OSError` |
+| count visible processes | 2 |
+
+The first attempt bound all of `/` read only with one writable directory inside it. That
+stops python changing anything and does nothing whatever about reading, so it could still
+open the Slack tokens and print them. Read only is not the same as not there, and the fix was
+to name what python may see rather than what it may write.
+
+Carl and AOS now agree. AOS refuses to have a shell because a shell is every tier at once and
+cannot be described to a policy. Carl has an interpreter, which is the same problem, and the
+answer is the same: bound what it can reach rather than trusting what it will do.
