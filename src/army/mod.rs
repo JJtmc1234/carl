@@ -44,7 +44,7 @@ pub use event::{Event, Journal, Record};
 pub use org::{Agent, Rank, check_delegation, check_may_implement, may_delegate};
 pub use report::{Report, Summary};
 pub use roster::{Role, Roster, brief_for, department, heads, roles};
-pub use task::{Status, Task, TaskId, Verification};
+pub use task::{MAX_ATTEMPTS, Status, Task, TaskId, Verification, may_take_on};
 
 /// How many agents may be working at once.
 ///

@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "file_purpose": "Shared recent-change feed for Carl and all AOS agents.",
+  "intended_path": "/home/jj_tmc/Projects/carl/recent_changes.json",
+  "updated_at": "2026-08-15T11:35:00-07:00",
+  "read_policy": {
+    "who_reads": "Carl and every enlisted agent",
+    "when": [
+      "when an agent starts",
+      "when an agent is newly enlisted",
+      "before beginning a new assigned task",
+      "when notified that this file changed"
+    ],
+    "rule": "Read only the recent changes relevant to the agent's role and current task, but remain aware of organization-wide governance changes."
+  },
+  "write_policy": {
+    "normal_writer": "Carl",
+    "other_agents": "May propose changes through the chain of command; they do not directly rewrite organization-wide change history unless explicitly authorized.",
+    "jj_override": "JJ may edit or replace any entry at any time."
+  },
+  "recent_changes": [
+    {
+      "id": "aos-2026-08-15-001",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "organization",
+      "importance": "critical",
+      "title": "JJ is ultimate authority",
+      "summary": "JJ has final authority over AOS and may override Carl completely. All decisions crossing the big-decision boundary must be escalated to JJ."
+    },
+    {
+      "id": "aos-2026-08-15-002",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "carl",
+      "importance": "critical",
+      "title": "Carl is CEO only",
+      "summary": "Carl manages, delegates, reviews department reports, reprioritizes work, and governs agents. Carl never performs implementation or worker-level building."
+    },
+    {
+      "id": "aos-2026-08-15-003",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "hierarchy",
+      "importance": "high",
+      "title": "Initial command chain",
+      "summary": "Initial working chain is JJ -> Carl -> Adrian -> Mason -> Nora. Worker communication follows the chain of command in v1."
+    },
+    {
+      "id": "aos-2026-08-15-004",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "coding",
+      "importance": "high",
+      "title": "Coding task isolation",
+      "summary": "Each coding task uses a separate Git worktree and branch. Workers self-test; leads independently verify before approval; workers integrate after approval."
+    },
+    {
+      "id": "aos-2026-08-15-005",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "workers",
+      "importance": "high",
+      "title": "One active task per worker",
+      "summary": "Workers receive one task at a time. After completion they report to their lead, wait for review, and receive the next task only after approval."
+    },
+    {
+      "id": "aos-2026-08-15-006",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "review",
+      "importance": "high",
+      "title": "Two retries before escalation",
+      "summary": "If a lead rejects worker output, the worker gets two correction attempts. A third rejection escalates upward with the full task and review history."
+    },
+    {
+      "id": "aos-2026-08-15-007",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "memory",
+      "importance": "high",
+      "title": "Layered memory design",
+      "summary": "AOS memory is layered across agent, sub-department, department, and organization/Carl levels. Workers may maintain local memory; leads control promotion into shared memory; Carl controls organization-level promotion."
+    },
+    {
+      "id": "aos-2026-08-15-008",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "verification",
+      "importance": "critical",
+      "title": "Verify instead of assuming",
+      "summary": "Agents should not silently rely on assumptions. Verify relevant facts when possible. If uncertainty remains after investigation, state exactly what is known and unknown and escalate when needed."
+    },
+    {
+      "id": "aos-2026-08-15-009",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "security",
+      "importance": "critical",
+      "title": "No sudo for agents",
+      "summary": "Agents receive no sudo or admin permissions and may not expand their own privileges. Unsafe or materially risky cybersecurity actions are big decisions and must be escalated."
+    },
+    {
+      "id": "aos-2026-08-15-010",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "governance",
+      "importance": "critical",
+      "title": "Major-rule violation policy",
+      "summary": "Ordinary agents get one lifetime appeal after a major-rule violation. Carl judges the appeal; removal is performed by JJ. Carl is exempt from this removal system and instead receives a stern correction plus updated governance memory."
+    },
+    {
+      "id": "aos-2026-08-15-011",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "agents",
+      "importance": "high",
+      "title": "Per-agent folders",
+      "summary": "Each agent gets a dedicated folder containing identity, role, context, configuration, authority limits, state, relevant memory, and agent-specific code or metadata."
+    },
+    {
+      "id": "aos-2026-08-15-012",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "onboarding",
+      "importance": "medium",
+      "title": "New-agent enlistment notification",
+      "summary": "When a new agent is enlisted, all agents are notified. Relevant agents share important project context, conventions, warnings, dependencies, priorities, and ownership information with the newcomer."
+    },
+    {
+      "id": "aos-2026-08-15-013",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "scheduling",
+      "importance": "high",
+      "title": "Global queue and dependency-aware scheduling",
+      "summary": "Carl owns the global priority queue and may reprioritize it as conditions change. Tasks may declare dependencies; blocked tasks remain queued while ready work continues."
+    },
+    {
+      "id": "aos-2026-08-15-014",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "operations",
+      "importance": "high",
+      "title": "Continuous approved-project work",
+      "summary": "Departments keep working inside approved projects. They may generate useful follow-up tasks within scope, but new projects or material scope expansion require JJ approval."
+    },
+    {
+      "id": "aos-2026-08-15-015",
+      "timestamp": "2026-08-15T11:35:00-07:00",
+      "scope": "reporting",
+      "importance": "medium",
+      "title": "Reporting cadence",
+      "summary": "Department leads report to Carl every 30 minutes and immediately for completion, blockers, serious failures, major discoveries, cross-department needs, or decisions requiring escalation."
+    }
+  ]
+}

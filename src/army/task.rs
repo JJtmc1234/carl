@@ -91,10 +91,25 @@ impl Verification {
     }
 }
 
+/// How many times a worker may submit before it goes over the lead's head.
+///
+/// From the governance feed: a worker gets two correction attempts after the first try, and a
+/// third rejection escalates upward with the whole history.
+///
+/// The number lives here rather than in whoever writes the retry loop, because two people
+/// each picking a sensible number is two different numbers, and the one that matters is the
+/// one somebody is counting against.
+pub const MAX_ATTEMPTS: u32 = 3;
+
 /// Where a task has got to.
 ///
 /// Deliberately small. Every extra state is another edge somebody has to get right, and the
 /// ones here are the only distinctions anybody has needed so far.
+///
+/// Escalation is deliberately not a state. A task that has run out of attempts is still
+/// somebody's problem in `ChangesRequested`, and escalating is something a lead *does* about
+/// it rather than somewhere the task goes. Making it a state would mean every reader has to
+/// handle a seventh case to answer questions that have nothing to do with escalation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     /// Handed to its owner, not started.
@@ -262,6 +277,43 @@ impl Task {
     pub fn settled(&self) -> bool {
         self.status.settled()
     }
+
+    /// Whether this has been sent back too many times and belongs above its lead now.
+    ///
+    /// True only when it is actually sitting rejected. A task on its third attempt that has
+    /// not been reviewed yet has not failed three times, it has been tried three times, and
+    /// escalating it early takes it off the person who is about to finish it.
+    pub fn must_escalate(&self) -> bool {
+        self.status == Status::ChangesRequested && self.attempts >= MAX_ATTEMPTS
+    }
+
+    /// How many more goes the owner has before it goes over the lead's head.
+    pub fn attempts_left(&self) -> u32 {
+        MAX_ATTEMPTS.saturating_sub(self.attempts)
+    }
+}
+
+/// Whether this worker may pick up another task.
+///
+/// From the governance feed: one active task per worker, and the next only after the last is
+/// approved. The rule lives here rather than in whoever assigns work, because a worker holding
+/// two tasks is the sort of thing each caller would check slightly differently.
+///
+/// `held` is every task that worker owns, however you are storing them.
+pub fn may_take_on(worker: &str, held: &[Task]) -> Result<()> {
+    let busy: Vec<&Task> = held
+        .iter()
+        .filter(|t| t.owner == worker && t.status == Status::InHand)
+        .collect();
+
+    match busy.first() {
+        None => Ok(()),
+        Some(t) => Err(Error::Refused(format!(
+            "{worker} already has {} in hand. A worker takes one task at a time, and the next \
+             only once that one is approved.",
+            t.id
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -400,6 +452,67 @@ mod tests {
 
         assert_eq!(small.parent.as_ref(), Some(&big.id));
         assert!(big.parent.is_none());
+    }
+
+    /// The governance rule, and the reason it is a shared constant. Two people each picking a
+    /// sensible number is two different numbers, and only one of them is being counted.
+    #[test]
+    fn a_third_rejection_goes_over_the_leads_head() {
+        let mut t = task();
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            t.advance("nora", Status::InHand).unwrap();
+            t.advance("nora", Status::Submitted).unwrap();
+            assert_eq!(t.attempts, attempt);
+
+            // Submitted and not yet judged is not a failure.
+            assert!(!t.must_escalate(), "attempt {attempt} was not rejected yet");
+            t.advance("mason", Status::ChangesRequested).unwrap();
+        }
+
+        assert!(t.must_escalate(), "three rejections should go upward");
+        assert_eq!(t.attempts_left(), 0);
+    }
+
+    /// Escalating early takes the task off somebody who is about to finish it.
+    #[test]
+    fn a_task_still_being_worked_on_is_not_escalated() {
+        let mut t = task();
+        t.advance("nora", Status::InHand).unwrap();
+        t.advance("nora", Status::Submitted).unwrap();
+        t.advance("mason", Status::ChangesRequested).unwrap();
+
+        assert!(!t.must_escalate(), "one rejection is not three");
+        assert_eq!(t.attempts_left(), MAX_ATTEMPTS - 1);
+    }
+
+    /// One active task per worker, and the next only after the last is approved.
+    #[test]
+    fn a_worker_takes_one_task_at_a_time() {
+        let mut first = task();
+        first.advance("nora", Status::InHand).unwrap();
+
+        let err = may_take_on("nora", std::slice::from_ref(&first))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already has"), "{err}");
+        assert!(err.contains("one task at a time"), "{err}");
+
+        // Submitted and waiting on review does not count as in hand, because she is not
+        // working on it and is free to be given the next one once it is approved.
+        first.advance("nora", Status::Submitted).unwrap();
+        first.advance("mason", Status::Accepted).unwrap();
+        assert!(may_take_on("nora", std::slice::from_ref(&first)).is_ok());
+    }
+
+    /// Somebody else being busy says nothing about this worker.
+    #[test]
+    fn another_workers_task_does_not_block_you() {
+        let mut mine = Task::assign("adrian", "mason", "lead something", verification()).unwrap();
+        mine.advance("mason", Status::InHand).unwrap();
+
+        assert!(may_take_on("nora", std::slice::from_ref(&mine)).is_ok());
+        assert!(may_take_on("mason", std::slice::from_ref(&mine)).is_err());
     }
 
     #[test]

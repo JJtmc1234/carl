@@ -65,10 +65,15 @@ pub struct Verification { must: Vec<String> }  // refuses an empty list
 pub enum Status { Assigned, InHand, Submitted, ChangesRequested, Accepted, Abandoned }
 pub struct Task { id, goal, verification, status, owner, created_by, parent, attempts, workspace }
 
+pub const MAX_ATTEMPTS: u32 = 3;
+
 Task::assign(created_by, owner, goal, verification) -> Result<Task>
 Task::split_from(parent, created_by, owner, goal, verification) -> Result<Task>
 task.advance(by, next) -> Result<()>
+task.must_escalate() -> bool
+task.attempts_left() -> u32
 Status::may_become(next) -> bool
+may_take_on(worker, held) -> Result<()>
 ```
 
 - `Task::assign` calls `check_delegation` itself. There is one place work is created and one
@@ -81,6 +86,25 @@ Status::may_become(next) -> bool
   a new task, so the old one's history stays true.
 - `workspace: Option<String>` is carried now and filled when coding tasks get their own
   worktree and branch, so that change does not touch this type or its callers.
+
+### the two governance rules that live here
+
+Both come from `recent_changes.json`, and both are in the shared layer because two people
+each picking a sensible number is two different numbers, and only one of them is being
+counted.
+
+- **Two corrections, then escalate.** `MAX_ATTEMPTS` is 3. `must_escalate()` is true only when
+  the task is sitting in `ChangesRequested` with three attempts spent. A task on its third
+  attempt that has not been judged yet has been *tried* three times, not *failed* three times,
+  and escalating it early takes it off somebody about to finish it.
+
+  Escalation is deliberately **not** a status. It is something a lead does about a task, not
+  somewhere the task goes, and a seventh state would make every reader handle a case that has
+  nothing to do with their question. Process 2 decides what escalating does.
+
+- **One task at a time.** `may_take_on(worker, held)` refuses if that worker already has
+  something `InHand`. Submitted and awaiting review does not count, because she is not working
+  on it and is free to be handed the next one once it is approved.
 
 ### `event.rs`, what happened
 
@@ -136,6 +160,20 @@ yourself.
 Agent local state should live under `<home>/army/<agent>/`, one directory per agent, named by
 `Agent::name`. Names are already lowercase and safe for a filename, but validate anything that
 arrives from outside the table.
+
+## the governance feed
+
+`recent_changes.json` now lives at the repository root, which is the path the file itself
+names. It is the shared record of organisation wide decisions, Carl is the normal writer, and
+JJ may replace any entry at any time.
+
+Read it when you start and before a new task. Several entries describe things neither of you
+should build yet, and they are listed below rather than removed, because knowing a rule is
+coming changes how you shape what you build now.
+
+Of the fifteen entries, three constrain the shared types and are already implemented:
+two corrections before escalation, one task at a time, and no administrator rights. The rest
+are yours to be aware of and not to act on.
 
 ## what neither of you should build yet
 
