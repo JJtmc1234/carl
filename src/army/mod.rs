@@ -35,6 +35,8 @@ use crate::{Result, SessionId};
 mod campaign;
 pub mod event;
 pub mod org;
+/// Per agent folders that survive a restart.
+pub mod personnel;
 mod report;
 mod roster;
 pub mod task;
