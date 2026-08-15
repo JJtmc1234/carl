@@ -24,7 +24,10 @@ pub fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 /// Writes to a neighbouring temporary file and renames.
 pub fn write_json<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
     let staging = path.with_extension("json.writing");
-    std::fs::write(&staging, format!("{}\n", serde_json::to_string_pretty(value)?))?;
+    std::fs::write(
+        &staging,
+        format!("{}\n", serde_json::to_string_pretty(value)?),
+    )?;
     std::fs::rename(&staging, path)?;
     Ok(())
 }
@@ -60,7 +63,9 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_there_says_so() {
-        let err = read_json::<u8>(Path::new("/nonexistent/thing.json")).unwrap_err().to_string();
+        let err = read_json::<u8>(Path::new("/nonexistent/thing.json"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("cannot read"), "{err}");
     }
 }

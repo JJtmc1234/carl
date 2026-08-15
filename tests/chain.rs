@@ -259,3 +259,94 @@ fn who_may_actually_write_code() {
         "no emergency makes the chief executive an implementer"
     );
 }
+
+/// The retry rule is decided in two places, and they have to say the same thing.
+///
+/// `Task::must_escalate` is what the task record believes. `chain::after_review` is what the
+/// running chain does about it. For a day these were two separate constants, both 3, and
+/// nothing anywhere would have failed if one of them changed. Walking a real task through every
+/// attempt and comparing the two answers is the check that has teeth, because it does not care
+/// how either side arrives at its number.
+#[test]
+fn the_task_record_and_the_running_chain_agree_on_when_to_give_up() {
+    use carl::army::chain::{Next, after_review};
+
+    let mut t = Task::assign("mason", "nora", "cache the lookup", verification()).unwrap();
+
+    // One past the limit, so the check covers the boundary from both sides.
+    for _ in 0..=MAX_ATTEMPTS {
+        t.advance("nora", Status::InHand).unwrap();
+        t.advance("nora", Status::Submitted).unwrap();
+
+        let chain_says = after_review(false, t.attempts);
+        t.advance("mason", Status::ChangesRequested).unwrap();
+        let record_says = t.must_escalate();
+
+        assert_eq!(
+            chain_says == Next::GiveUp,
+            record_says,
+            "attempt {}: the chain says {chain_says:?} and the record says must_escalate is \
+             {record_says}",
+            t.attempts
+        );
+
+        if record_says {
+            break;
+        }
+    }
+
+    assert!(t.must_escalate(), "it has to end somewhere");
+    assert_eq!(
+        after_review(true, t.attempts),
+        Next::Accept,
+        "accepted wins"
+    );
+}
+
+/// The join between the two halves, end to end, with no model anywhere.
+///
+/// The chain knows who is busy. The folders know who is busy. They were separate records of the
+/// same fact, and only one of them survived the process, so a chain that died halfway came back
+/// believing everybody was free and handed Nora a second task on top of her first.
+#[test]
+fn a_restarted_chain_still_knows_who_is_busy() {
+    use carl::army::chain::Chain;
+    use carl::army::personnel::{Personnel, found};
+
+    let home = tempfile::tempdir().unwrap();
+    let mut people = found(home.path(), 1).unwrap();
+
+    let t = Task::assign("mason", "nora", "cache the lookup", verification()).unwrap();
+    {
+        // A chain that hands Nora the task and then dies without finishing it.
+        let mut chain = Chain::new(
+            "/nonexistent",
+            home.path(),
+            home.path().join("events.jsonl"),
+        )
+        .unwrap()
+        .staffed_by(people);
+        chain.now_holding("nora", &t.id).unwrap();
+        assert!(chain.check_free("nora").is_err(), "she has it now");
+    }
+
+    people = Personnel::open(home.path()).unwrap();
+    assert_eq!(
+        people.state("nora").unwrap().holding.as_ref(),
+        Some(&t.id),
+        "the folder outlived the process"
+    );
+
+    let mut chain = Chain::new(
+        "/nonexistent",
+        home.path(),
+        home.path().join("events.jsonl"),
+    )
+    .unwrap()
+    .staffed_by(people);
+    assert_eq!(chain.holding("nora"), Some(&t.id), "picked back up");
+    assert!(
+        chain.check_free("nora").is_err(),
+        "a restart must not hand her a second task"
+    );
+}

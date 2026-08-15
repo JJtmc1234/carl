@@ -27,11 +27,20 @@
 mod drive;
 mod handback;
 mod run;
+mod staffing;
 mod words;
 
 pub use drive::campaign;
 pub use handback::{Handback, Verdict, read_handback, read_must, read_verdict};
-pub use run::{Chain, DEADLINE, MAX_ATTEMPTS, Next, Passage, after_review};
+pub use run::{Chain, DEADLINE, Next, Passage, after_review};
+pub use staffing::{check_rule, outstanding};
+
+/// Re-exported rather than redefined.
+///
+/// There were two of these for a day, both 3, in `task.rs` and here. Two constants that agree
+/// today are one edit away from `task.must_escalate` saying a task is finished while
+/// `after_review` sends it round again, and nothing would have failed to say so.
+pub use crate::army::task::MAX_ATTEMPTS;
 
 use super::org::{Agent, Rank, reports_of};
 

@@ -13,10 +13,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use super::staffing;
 use super::words;
-use super::{brief_for, read_must, tools_for};
+use super::{read_must, tools_for};
 use crate::army::event::{Event, Journal};
 use crate::army::org;
+use crate::army::personnel::Personnel;
 use crate::army::task::{Status, Task, TaskId, Verification};
 use crate::claude::{Flow, Runner, Session};
 use crate::{Error, Result, SessionId};
@@ -44,6 +46,12 @@ pub struct Chain {
     open: Vec<(String, TaskId)>,
     /// Whether to print the chain walking past. On for a real run, off in tests.
     aloud: bool,
+    /// The agent folders, if this chain has been given them.
+    ///
+    /// Optional because a chain has to be runnable against a temporary directory with no army
+    /// founded in it, which is how every test here works. With folders it uses each agent's own
+    /// deadline and rules, and who is holding what survives the process.
+    people: Option<Personnel>,
 }
 
 /// The path one request actually took, for whoever has to see that it worked.
@@ -81,12 +89,28 @@ impl Chain {
             voices: Vec::new(),
             open: Vec::new(),
             aloud: false,
+            people: None,
         })
     }
 
     pub fn deadline(mut self, d: Duration) -> Self {
         self.deadline = d;
         self
+    }
+
+    /// Runs this chain against real agent folders.
+    ///
+    /// Anything the folders say is still outstanding is picked up here, so a chain restarted
+    /// after a crash does not hand Nora a second task while the first is still open. That is the
+    /// only reason the held task was ever worth writing to disk.
+    pub fn staffed_by(mut self, people: Personnel) -> Self {
+        self.open = staffing::outstanding(&people);
+        self.people = Some(people);
+        self
+    }
+
+    fn folder(&self, who: &str) -> Option<&crate::army::personnel::Folder> {
+        self.people.as_ref().and_then(|p| p.get(who))
     }
 
     pub fn aloud(mut self, on: bool) -> Self {
@@ -111,11 +135,14 @@ impl Chain {
             // The tool list is the rank. An empty one becomes no flag at all rather than an
             // empty flag, which some parsers read as allowing everything.
             let runner = Runner::at(&self.program).allowing(tools_for(agent.rank));
-            let open = runner.open_session(&session, &self.workdir, &brief_for(agent), false)?;
+            // Built before the session opens, so a folder rule that tries to grant authority
+            // stops the agent starting rather than being spoken and then regretted.
+            let brief = staffing::brief(agent, self.folder(who))?;
+            let open = runner.open_session(&session, &self.workdir, &brief, false)?;
             self.voices.push((who.to_string(), open));
         }
 
-        let deadline = self.deadline;
+        let deadline = staffing::deadline(self.folder(who), self.deadline);
         let began = Instant::now();
         let voice = self
             .voices
@@ -165,6 +192,7 @@ impl Chain {
             .append(by, Event::moved(&task.id, from, next))?;
         if next.settled() {
             self.open.retain(|(_, id)| *id != task.id);
+            self.put_down(&task.owner, &format!("{} {next}", task.id))?;
         }
         Ok(())
     }
@@ -224,7 +252,7 @@ impl Chain {
                 goal: task.goal.clone(),
             },
         )?;
-        self.now_holding(to, &task.id);
+        self.now_holding(to, &task.id)?;
         Ok((task, goal, must))
     }
 
@@ -284,9 +312,26 @@ impl Chain {
     }
 
     /// Records that somebody has been handed a task and has not finished it.
-    pub fn now_holding(&mut self, owner: &str, id: &TaskId) {
+    pub fn now_holding(&mut self, owner: &str, id: &TaskId) -> Result<()> {
         self.open.retain(|(n, _)| n != owner);
         self.open.push((owner.to_string(), id.clone()));
+
+        let now = crate::army::event::now();
+        if let Some(people) = self.people.as_mut() {
+            people.update_state(owner, |s| s.take_up(id, now))?;
+        }
+        Ok(())
+    }
+
+    /// The other half of `now_holding`, so the folder does not keep saying somebody is busy.
+    fn put_down(&mut self, owner: &str, why: &str) -> Result<()> {
+        let now = crate::army::event::now();
+        if let Some(people) = self.people.as_mut()
+            && people.get(owner).is_some_and(|f| f.state.holding.is_some())
+        {
+            people.update_state(owner, |s| s.put_down(why, now))?;
+        }
+        Ok(())
     }
 
     /// Refuses giving somebody a second task while they still hold one.

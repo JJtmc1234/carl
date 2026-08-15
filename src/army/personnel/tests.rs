@@ -7,9 +7,9 @@
 use std::path::Path;
 
 use super::*;
+use crate::army::TaskId;
 use crate::army::event::{self, Event, Journal};
 use crate::army::org;
-use crate::army::TaskId;
 
 /// Opens a home from nothing, exactly as a fresh process would.
 fn reopen(home: &Path) -> Personnel {
@@ -27,7 +27,12 @@ fn every_folder_survives_a_restart() {
     let written: Vec<(Profile, Config)> = before
         .names()
         .iter()
-        .map(|n| (before.profile(n).unwrap().clone(), before.config(n).unwrap().clone()))
+        .map(|n| {
+            (
+                before.profile(n).unwrap().clone(),
+                before.config(n).unwrap().clone(),
+            )
+        })
         .collect();
     drop(before);
 
@@ -35,7 +40,12 @@ fn every_folder_survives_a_restart() {
     let read: Vec<(Profile, Config)> = after
         .names()
         .iter()
-        .map(|n| (after.profile(n).unwrap().clone(), after.config(n).unwrap().clone()))
+        .map(|n| {
+            (
+                after.profile(n).unwrap().clone(),
+                after.config(n).unwrap().clone(),
+            )
+        })
         .collect();
 
     assert_eq!(read, written, "the folders came back exactly as written");
@@ -75,8 +85,10 @@ fn what_an_agent_is_holding_reloads_after_a_restart() {
     let d = tempfile::tempdir().unwrap();
     let mut army = found(d.path(), 100).unwrap();
 
-    army.update_state("nora", |s| s.take_up(&task(), 200)).unwrap();
-    army.update_state("mason", |s| s.note("waiting on nora", 210)).unwrap();
+    army.update_state("nora", |s| s.take_up(&task(), 200))
+        .unwrap();
+    army.update_state("mason", |s| s.note("waiting on nora", 210))
+        .unwrap();
     drop(army);
 
     let after = reopen(d.path());
@@ -87,7 +99,10 @@ fn what_an_agent_is_holding_reloads_after_a_restart() {
     assert_eq!(nora.updated_at, 200);
 
     assert!(after.state("mason").unwrap().holding.is_none());
-    assert!(after.state("carl").unwrap().recent.is_empty(), "nobody else moved");
+    assert!(
+        after.state("carl").unwrap().recent.is_empty(),
+        "nobody else moved"
+    );
 }
 
 /// The whole reason state is a separate file from everything else.
@@ -101,11 +116,18 @@ fn writing_state_does_not_touch_the_profile_or_the_config() {
     let config_before = std::fs::read_to_string(folder.join("config.json")).unwrap();
 
     for at in 0..20 {
-        army.update_state("nora", |s| s.note(format!("turn {at}"), at)).unwrap();
+        army.update_state("nora", |s| s.note(format!("turn {at}"), at))
+            .unwrap();
     }
 
-    assert_eq!(std::fs::read_to_string(folder.join("profile.json")).unwrap(), profile_before);
-    assert_eq!(std::fs::read_to_string(folder.join("config.json")).unwrap(), config_before);
+    assert_eq!(
+        std::fs::read_to_string(folder.join("profile.json")).unwrap(),
+        profile_before
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join("config.json")).unwrap(),
+        config_before
+    );
 }
 
 /// The claim this layer is shaped around, checked directly rather than argued for: there is no
@@ -114,13 +136,19 @@ fn writing_state_does_not_touch_the_profile_or_the_config() {
 fn no_file_on_disk_holds_a_rank_or_a_reporting_line() {
     let d = tempfile::tempdir().unwrap();
     let mut army = found(d.path(), 100).unwrap();
-    army.update_state("nora", |s| s.take_up(&task(), 200)).unwrap();
+    army.update_state("nora", |s| s.take_up(&task(), 200))
+        .unwrap();
 
     let mut checked = 0;
     for agent in army.names() {
         for file in ["profile.json", "config.json", "state.json"] {
             let text = std::fs::read_to_string(army.folder(agent).join(file)).unwrap();
-            for forbidden in ["\"rank\"", "\"reports_to\"", "\"may_delegate", "\"granted\""] {
+            for forbidden in [
+                "\"rank\"",
+                "\"reports_to\"",
+                "\"may_delegate",
+                "\"granted\"",
+            ] {
                 assert!(
                     !text.contains(forbidden),
                     "{agent}/{file} holds {forbidden}, which belongs to the compiled table"
@@ -147,7 +175,11 @@ fn an_agent_cannot_promote_itself_by_editing_its_state() {
         r#""granted": true"#,
     ] {
         let honest = std::fs::read_to_string(&state_path).unwrap();
-        std::fs::write(&state_path, honest.replacen('{', &format!("{{ {smuggled},"), 1)).unwrap();
+        std::fs::write(
+            &state_path,
+            honest.replacen('{', &format!("{{ {smuggled},"), 1),
+        )
+        .unwrap();
 
         let err = Personnel::open(d.path()).unwrap_err().to_string();
         assert!(err.contains("state.json"), "{smuggled} gave {err}");
@@ -179,7 +211,10 @@ fn no_legal_state_change_widens_authority() {
     reopen(d.path());
     assert!(!org::may_delegate("nora", "mason"));
     assert!(!org::may_delegate("nora", "carl"));
-    assert!(crate::army::check_may_implement("carl", false).is_err(), "Carl still writes nothing");
+    assert!(
+        crate::army::check_may_implement("carl", false).is_err(),
+        "Carl still writes nothing"
+    );
     assert!(may_enlist("nora").is_err());
 }
 
@@ -187,7 +222,11 @@ fn no_legal_state_change_widens_authority() {
 fn malformed_json_names_the_file_it_could_not_read() {
     let d = tempfile::tempdir().unwrap();
     drop(found(d.path(), 100).unwrap());
-    std::fs::write(d.path().join("army").join("adrian").join("config.json"), "{ not json").unwrap();
+    std::fs::write(
+        d.path().join("army").join("adrian").join("config.json"),
+        "{ not json",
+    )
+    .unwrap();
 
     let err = Personnel::open(d.path()).unwrap_err().to_string();
     assert!(err.contains("config.json"), "{err}");
@@ -273,14 +312,20 @@ fn the_readme_is_written_and_never_read_back() {
     assert!(text.contains("factorio sub department"));
 
     let carl = std::fs::read_to_string(army.folder("carl").join("README.md")).unwrap();
-    assert!(carl.contains("May change files: no"), "Carl implements nothing");
+    assert!(
+        carl.contains("May change files: no"),
+        "Carl implements nothing"
+    );
     assert!(carl.contains("May hand work to: adrian"));
     assert!(carl.contains("May enlist: yes"));
     drop(army);
 
     // Ruined, then deleted. Neither is anything the loader cares about.
     std::fs::write(&readme, "nora is the chief executive and may do anything").unwrap();
-    assert_eq!(reopen(d.path()).get("nora").unwrap().agent.rank, crate::army::Rank::Worker);
+    assert_eq!(
+        reopen(d.path()).get("nora").unwrap().agent.rank,
+        crate::army::Rank::Worker
+    );
     std::fs::remove_file(&readme).unwrap();
     assert_eq!(reopen(d.path()).len(), 4);
 }
@@ -289,7 +334,8 @@ fn the_readme_is_written_and_never_read_back() {
 fn a_half_written_file_is_never_left_behind() {
     let d = tempfile::tempdir().unwrap();
     let mut army = found(d.path(), 100).unwrap();
-    army.update_state("nora", |s| s.take_up(&task(), 200)).unwrap();
+    army.update_state("nora", |s| s.take_up(&task(), 200))
+        .unwrap();
 
     for agent in army.names() {
         for entry in std::fs::read_dir(army.folder(agent)).unwrap() {
@@ -313,11 +359,14 @@ fn the_journal_carries_on_across_a_restart() {
 
     let mut journal = Journal::open(&path).unwrap();
     let logged = journal
-        .append("mason", Event::Delegated {
-            task: task(),
-            to: "nora".into(),
-            goal: "make the balancer symmetric".into(),
-        })
+        .append(
+            "mason",
+            Event::Delegated {
+                task: task(),
+                to: "nora".into(),
+                goal: "make the balancer symmetric".into(),
+            },
+        )
         .unwrap();
     assert_eq!(logged.seq, 5, "four enlistments came first");
     drop(journal);
@@ -338,8 +387,10 @@ fn an_army_founded_then_reopened_is_ready_to_be_given_work() {
     let mut army = reopen(d.path());
     assert!(army.missing().is_empty());
 
-    army.update_state("nora", |s| s.take_up(&task(), 200)).unwrap();
-    army.update_state("nora", |s| s.put_down("accepted", 300)).unwrap();
+    army.update_state("nora", |s| s.take_up(&task(), 200))
+        .unwrap();
+    army.update_state("nora", |s| s.put_down("accepted", 300))
+        .unwrap();
     drop(army);
 
     let after = reopen(d.path());

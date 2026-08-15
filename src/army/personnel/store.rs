@@ -25,8 +25,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::army::org::{self, Agent};
 use crate::army::Rank;
+use crate::army::org::{self, Agent};
 use crate::{Error, Result};
 
 use super::config::Config;
@@ -163,7 +163,10 @@ impl Personnel {
             return Err(Error::Refused(format!("{name} has no folder yet")));
         };
         record.state = state;
-        write_json(&self.home.join("army").join(agent.name).join("state.json"), &record.state)
+        write_json(
+            &self.home.join("army").join(agent.name).join("state.json"),
+            &record.state,
+        )
     }
 
     /// Changes one agent's state in place and writes it.
@@ -226,4 +229,3 @@ fn load(agent: &'static Agent, folder: &Path) -> Result<Folder> {
     record.config.check()?;
     Ok(record)
 }
-

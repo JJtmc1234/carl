@@ -92,7 +92,10 @@ mod tests {
 
     #[test]
     fn a_model_is_written_as_the_id_the_cli_wants() {
-        assert_eq!(serde_json::to_string(&Model::Opus).unwrap(), "\"claude-opus-5\"");
+        assert_eq!(
+            serde_json::to_string(&Model::Opus).unwrap(),
+            "\"claude-opus-5\""
+        );
         assert_eq!(Model::Opus.id(), "claude-opus-5");
     }
 

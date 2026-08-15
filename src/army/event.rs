@@ -193,7 +193,9 @@ pub fn about(records: &[Record], task: &TaskId) -> Vec<Record> {
         .collect()
 }
 
-fn now() -> u64 {
+/// Unix seconds. `pub(crate)` because the chain writes the same clock into agent folders, and
+/// two clocks would let a journal entry and a state file disagree about when something happened.
+pub(crate) fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

@@ -16,9 +16,9 @@
 //! can do at runtime. This is the mechanism the organisation is notified through, and it is
 //! the hook onboarding will attach to. It is not a way to grow the army from inside it.
 
+use crate::army::Rank;
 use crate::army::event::{Event, Journal, Record as Logged};
 use crate::army::org::{self, Agent};
-use crate::army::Rank;
 use crate::{Error, Result};
 
 use super::config::Config;
@@ -70,7 +70,13 @@ pub fn found(home: impl Into<std::path::PathBuf>, now: u64) -> Result<Personnel>
             config: Config::default(),
             state: State::fresh(now),
         })?;
-        journal.append("jj", Event::Decided { task: None, what: said })?;
+        journal.append(
+            "jj",
+            Event::Decided {
+                task: None,
+                what: said,
+            },
+        )?;
     }
 
     Ok(army)
@@ -100,7 +106,13 @@ pub fn enlist(
         state: State::fresh(now),
     })?;
 
-    journal.append(actor, Event::Decided { task: None, what: said })
+    journal.append(
+        actor,
+        Event::Decided {
+            task: None,
+            what: said,
+        },
+    )
 }
 
 /// What the rest of the army is told about a newcomer.
@@ -136,7 +148,10 @@ mod tests {
         assert_eq!(army.len(), 4, "carl, adrian, mason and nora");
         assert!(army.get("jj").is_none(), "JJ is not an agent");
         assert!(!d.path().join("army").join("jj").exists());
-        assert!(army.missing().is_empty(), "nobody in the table was left out");
+        assert!(
+            army.missing().is_empty(),
+            "nobody in the table was left out"
+        );
     }
 
     #[test]
@@ -148,7 +163,8 @@ mod tests {
         assert_eq!(all.len(), 4);
         assert!(all.iter().all(|r| r.actor == "jj"), "founding is JJ's act");
         assert!(
-            all.iter().any(|r| matches!(&r.event, Event::Decided { what, .. } if what.contains("nora"))),
+            all.iter()
+                .any(|r| matches!(&r.event, Event::Decided { what, .. } if what.contains("nora"))),
             "and every one of them is named"
         );
     }
@@ -190,7 +206,11 @@ mod tests {
         .to_string();
 
         assert!(err.contains("may not enlist"), "{err}");
-        assert_eq!(event::read(army.journal_path()).unwrap().len(), 4, "nothing announced");
+        assert_eq!(
+            event::read(army.journal_path()).unwrap().len(),
+            4,
+            "nothing announced"
+        );
     }
 
     #[test]
@@ -231,7 +251,10 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("no agent called piper"), "{err}");
-        assert!(err.contains("organisation is"), "and it says who does exist: {err}");
+        assert!(
+            err.contains("organisation is"),
+            "and it says who does exist: {err}"
+        );
     }
 
     /// The enlistment path in full, on an agent whose folder was removed.

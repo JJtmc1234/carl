@@ -30,11 +30,7 @@ pub struct Profile {
 }
 
 impl Profile {
-    pub fn new(
-        department: Option<&str>,
-        sub_department: Option<&str>,
-        does_not: &[&str],
-    ) -> Self {
+    pub fn new(department: Option<&str>, sub_department: Option<&str>, does_not: &[&str]) -> Self {
         Self {
             department: department.map(str::to_string),
             sub_department: sub_department.map(str::to_string),
@@ -78,7 +74,11 @@ mod tests {
     fn a_sub_department_needs_a_department() {
         let orphan = Profile::new(None, Some("factorio"), &[]);
         assert!(orphan.check().is_err());
-        assert!(Profile::new(Some("coding"), Some("factorio"), &[]).check().is_ok());
+        assert!(
+            Profile::new(Some("coding"), Some("factorio"), &[])
+                .check()
+                .is_ok()
+        );
     }
 
     #[test]

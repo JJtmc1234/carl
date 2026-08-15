@@ -117,7 +117,7 @@ fn nobody_holds_two_tasks_at_once() {
     let first = Task::assign("mason", "nora", "the first job", verification()).unwrap();
 
     assert!(c.check_free("nora").is_ok(), "she starts with nothing");
-    c.now_holding("nora", &first.id);
+    c.now_holding("nora", &first.id).unwrap();
 
     let err = c.check_free("nora").unwrap_err().to_string();
     assert!(err.contains("one task at a time"), "{err}");
@@ -129,7 +129,7 @@ fn nobody_holds_two_tasks_at_once() {
 fn a_task_that_settles_releases_its_owner() {
     let (mut c, _d) = chain();
     let mut t = Task::assign("mason", "nora", "the job", verification()).unwrap();
-    c.now_holding("nora", &t.id);
+    c.now_holding("nora", &t.id).unwrap();
 
     c.advance(&mut t, "nora", Status::InHand).unwrap();
     c.advance(&mut t, "nora", Status::Submitted).unwrap();
@@ -187,7 +187,7 @@ fn a_third_rejection_gives_up_rather_than_trying_again() {
 fn three_attempts_end_in_a_task_nobody_still_holds() {
     let (mut c, _d) = chain();
     let mut t = Task::assign("mason", "nora", "the job", verification()).unwrap();
-    c.now_holding("nora", &t.id);
+    c.now_holding("nora", &t.id).unwrap();
 
     for attempt in 1..=MAX_ATTEMPTS {
         c.advance(&mut t, "nora", Status::InHand).unwrap();
@@ -366,7 +366,7 @@ fn a_brief_names_only_the_agents_directly_below() {
 fn the_record_shows_what_was_stopped_as_well_as_what_happened() {
     let (mut c, d) = chain();
     let mut t = Task::assign("mason", "nora", "the job", verification()).unwrap();
-    c.now_holding("nora", &t.id);
+    c.now_holding("nora", &t.id).unwrap();
     c.advance(&mut t, "nora", Status::InHand).unwrap();
     c.advance(&mut t, "nora", Status::Submitted).unwrap();
 

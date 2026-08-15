@@ -100,7 +100,11 @@ pub fn describe(folder: &Folder) -> String {
         } else {
             "no, this rank states outcomes and judges them"
         },
-        if may_enlist(agent.name).is_ok() { "yes, subject to JJ" } else { "no" },
+        if may_enlist(agent.name).is_ok() {
+            "yes, subject to JJ"
+        } else {
+            "no"
+        },
         folder.config.model,
         folder.config.deadline_secs,
     ));
