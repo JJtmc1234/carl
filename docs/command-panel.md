@@ -55,8 +55,16 @@ carl-panel --toggle
 That flips a running panel and exits. Bind it in Settings, Keyboard, Custom Shortcuts, and the
 key becomes global.
 
-**This step is deliberately not faked.** A shortcut that silently only works when you are
-already looking at the window is worse than one that says it needs a line of setup, because
+**One shortcut opens it whether or not it is running.** A desktop shortcut can only run a
+command, so a `--toggle` that merely flipped a live panel would do nothing on the first press
+of the day, which is exactly when somebody wants it. It now starts one if none is up.
+
+A pid file in the temp directory says which process is the panel, and the liveness check reads
+the command line as well as the id: process ids are reused, and a stale file naming a stranger
+would send the flip somewhere no panel would ever appear.
+
+**The Wayland grab is deliberately not faked.** A shortcut that silently only works when you
+are already looking at the window is worse than one that says it needs a line of setup, because
 the first kind is discovered while Factorio is fullscreen and the panel will not come.
 
 Restoring keeps the tab, the selected agent, the selected project, the open workspace, both
@@ -212,6 +220,26 @@ deliberate where tiny type reads as cramped.
 
 Motion is reserved for meaning. A row that just changed carries a dim left bar for two seconds
 and nothing else animates.
+
+**The text was invisible for three commits, and it was never a colour.**
+
+`eframe` is declared `default-features = false`, and `default_fonts` is one of those defaults.
+Without it egui has no fonts at all. Every shape still draws, so the panel came up with the
+right colours, borders, status pips and hairlines and not one glyph, which looks exactly like
+black text on a black background and is nothing of the sort.
+
+Three wrong diagnoses before anyone looked at the manifest. The desktop theme was blamed, then
+the OpenGL backend, and wgpu changed nothing because the renderer was never involved. What
+solved it was a screenshot: shapes present, glyphs absent, identical under two renderers, which
+is a font question and not a colour one.
+
+The check that missed it inspected the colour each text shape asked for, which was always
+correct, and so never noticed there was nothing to paint in it.
+`there_are_fonts_and_they_produce_actual_glyphs` lays out four letters in every text role and
+both families and counts the glyphs, and it fails without `default_fonts`.
+
+`glow` is the default renderer. `--features wgpu` is kept for a machine where OpenGL genuinely
+is at fault, which this one was not.
 
 **The panel forces dark and stops following the desktop.** JJ's desktop is in light mode, egui
 follows the desktop by default and reapplies that preference every frame, and the first build
