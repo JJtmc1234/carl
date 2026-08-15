@@ -16,6 +16,43 @@ Every bug of consequence, and the test that stops it coming back. No entry witho
 
 | 9 | Mods were read from the directory rather than from `mod-list.json`, so mods present but switched off were reported as active. | 88 mods on disk and 4 enabled, so Carl was told a vanilla Space Age save was Sea Block with Angel's and Bob's, and answered a smelting question with ore processing that does not exist in that game | `only_the_mods_that_are_switched_on_are_reported` |
 
+| 10 | `eframe` was declared `default-features = false`, and `default_fonts` is one of those defaults, so egui had no fonts at all. Every shape drew and there were no glyphs to paint. | "text is STILL black", three times, and it was never black and was never text | `there_are_fonts_and_they_produce_actual_glyphs`, and `both_font_families_are_present` |
+
+## bug 10, in full
+
+The Command Panel came up with the right background, the right accent, borders, status pips and
+hairlines all correct, and not one letter anywhere on it. JJ reported it as black text on a
+black background, which is exactly what it looks like, and it was neither black nor text.
+
+Three wrong diagnoses before anybody read the manifest, and the wrong turns are the useful part.
+
+**The desktop theme.** The machine is in light mode, egui follows the desktop and reapplies
+that every frame, so setting visuals once loses a fraction of a second later. That is a real
+bug and it was fixed and it was not this one. `theme::install` now sets `ThemePreference::Dark`
+and runs every frame.
+
+**The renderer.** Shapes drawing and glyphs not drawing is the signature of a font atlas that
+never reached the GPU, so the OpenGL backend was blamed and the whole thing was rebuilt on
+wgpu. It changed nothing, because the renderer was never involved.
+
+**The colours.** A headless check walked the render output and confirmed the panel painted text
+at `#D6DEE9` on `#06080B`. That check was correct and useless: it inspected the colour each
+text shape asked for, and by construction it cannot see that there were no glyphs to paint in
+it. A test that cannot fail for the real reason is worse than no test, because it is evidence
+pointing the wrong way.
+
+What solved it was a screenshot. Shapes present, glyphs absent, identical under two different
+renderers, which is a font question and not a colour one and never was.
+
+The guard measures glyphs rather than intent. It lays out four letters in every text role and
+in both families, and asserts the laid out width, the height and the glyph count. Removing
+`default_fonts` was tried again afterwards to be sure it bites: it fails with "laid out no
+width, which means no font is loaded", and passes with the feature restored.
+
+The general lesson is about `default-features = false`. It is reached for to keep a dependency
+small, and it silently drops things that were never thought of as optional. Fonts are not a
+feature of a graphical toolkit in any sense a person would recognise.
+
 ## bug 9, in full
 
 The worst kind, because the fix made the thing worse than before and was reported as working.
