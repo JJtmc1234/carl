@@ -9,10 +9,9 @@
 //! the snapshot and the stream join up exactly: subscribe from it and the next frame is the
 //! next record, with nothing repeated and nothing skipped.
 
+use super::facts::Facts;
 use super::tasks;
-use super::view::{
-    AgentView, CarlView, DiagnosticView, LastEvent, Maybe, PanelSnapshot, Pending, ProjectView,
-};
+use super::view::{AgentView, CarlView, LastEvent, Maybe, PanelSnapshot, Pending};
 use crate::army::event::{self, Event, Record};
 use crate::army::org;
 use crate::army::personnel::Personnel;
@@ -30,14 +29,14 @@ const RECENT: usize = 10;
 pub fn build(home: &std::path::Path) -> Result<PanelSnapshot> {
     let people = Personnel::open(home)?;
     let records = event::read(people.journal_path())?;
-    build_from(&people, &records)
+    build_from(&people, &records, &Facts::army_only())
 }
 
 /// The same, from state already in hand.
 ///
 /// Split out so a test can build a snapshot without a directory, and so the server can reuse
 /// records it has already read rather than reading the file twice on every connection.
-pub fn build_from(people: &Personnel, records: &[Record]) -> Result<PanelSnapshot> {
+pub fn build_from(people: &Personnel, records: &[Record], facts: &Facts) -> Result<PanelSnapshot> {
     let seq = records.last().map_or(0, |r| r.seq);
     let tasks = tasks::fold(records);
 
@@ -97,11 +96,11 @@ pub fn build_from(people: &Personnel, records: &[Record]) -> Result<PanelSnapsho
         },
         agents,
         tasks,
-        // Carl has no project model and no diagnostics collectors. Empty rather than invented:
-        // milestones guessed from git commits would be a made up answer that looks like a real
-        // one. Process 3 owns both providers.
-        projects: Vec::<ProjectView>::new(),
-        diagnostics: Vec::<DiagnosticView>::new(),
+        // From the providers, or empty when there are none. Empty is still never invented: a
+        // project with no recorded milestones has none, and a machine nobody sampled has no
+        // readings rather than zeroes.
+        projects: facts.projects.clone(),
+        diagnostics: facts.diagnostics.all().into_iter().cloned().collect(),
     })
 }
 
@@ -179,7 +178,7 @@ fn objectives(records: &[Record]) -> Vec<String> {
 /// One agent's folder and its recent record, for the inspect command.
 pub fn inspect(people: &Personnel, records: &[Record], agent: &str) -> Result<AgentView> {
     let agent = org::require(agent)?;
-    let snapshot = build_from(people, records)?;
+    let snapshot = build_from(people, records, &Facts::army_only())?;
     snapshot
         .agents
         .into_iter()

@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
 use super::command::{self, PanelCommand};
+use super::facts::Facts;
 use super::snapshot;
 use super::view::Maybe;
 use super::wire::{Ask, Frame, Reply, Request, VERSION};
@@ -46,6 +47,7 @@ fn a_real_run(journal: &mut Journal) -> Task {
                 goal: t.goal.clone(),
                 parent: t.parent.clone(),
                 must: t.verification.must.clone(),
+                project: None,
             },
         )
         .unwrap();
@@ -75,7 +77,7 @@ fn a_real_run(journal: &mut Journal) -> Task {
 fn the_snapshot_shows_the_real_organisation() {
     let dir = tempfile::tempdir().unwrap();
     let people = army(dir.path());
-    let snap = snapshot::build_from(&people, &[]).unwrap();
+    let snap = snapshot::build_from(&people, &[], &Facts::army_only()).unwrap();
 
     let names: Vec<&str> = snap.agents.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, vec!["carl", "adrian", "mason", "nora"]);
@@ -106,7 +108,7 @@ fn the_snapshot_reflects_what_the_folder_says_she_is_holding() {
         .unwrap();
 
     let records = event::read(people.journal_path()).unwrap();
-    let snap = snapshot::build_from(&people, &records).unwrap();
+    let snap = snapshot::build_from(&people, &records, &Facts::army_only()).unwrap();
     let nora = snap.agents.iter().find(|a| a.name == "nora").unwrap();
 
     assert_eq!(nora.holding.as_deref(), Some(t.id.as_str()));
@@ -408,8 +410,28 @@ fn a_panel_connects_and_gets_the_real_organisation_over_the_socket() {
     match panel.next().body {
         Reply::Snapshot { snapshot } => {
             assert_eq!(snapshot.agents.len(), 4);
-            assert!(snapshot.projects.is_empty(), "not invented");
-            assert!(snapshot.diagnostics.is_empty(), "not invented");
+            // No project has been created in this home, so there are none. Empty because nothing
+            // was written rather than because nothing was asked.
+            assert!(snapshot.projects.is_empty(), "none were created");
+            // Diagnostics are real now, and the two kinds have to stay apart on the wire.
+            assert!(
+                !snapshot.diagnostics.is_empty(),
+                "the providers are wired in"
+            );
+            assert!(
+                snapshot
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == crate::providers::Kind::Sampled && d.measured_at.is_some()),
+                "a sampled reading carries when it was read"
+            );
+            assert!(
+                snapshot
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.kind == crate::providers::Kind::EventDriven),
+                "and army state does not pretend to have been measured at an instant"
+            );
         }
         other => panic!("wrong reply: {other:?}"),
     }

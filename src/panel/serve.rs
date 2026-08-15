@@ -17,15 +17,20 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::command::{self, PanelCommand};
+use super::facts::Facts;
 use super::listen::Bound;
 use super::snapshot;
 use super::wire::{Ask, Frame, PanelEvent, Reply, Request, VERSION};
 use crate::army::event::{self, Intervention, Journal, Record};
 use crate::army::personnel::Personnel;
 use crate::army::task::TaskId;
+use crate::panel::view::PanelSnapshot;
+use crate::providers::Diagnostics;
+use crate::providers::projects::Projects;
 use crate::{Result, ThreadId};
 
 /// How often the journal is checked for new lines while a panel is subscribed.
@@ -41,11 +46,21 @@ pub const THREAD: &str = "panel";
 
 pub struct Server {
     home: PathBuf,
+    /// One sampler for the whole process, shared by every connection.
+    ///
+    /// Shared because the rate limit lives inside it. A `Diagnostics` per request would resample
+    /// the machine on every snapshot, which is exactly the render rate polling that must not
+    /// happen, and each one would start with an empty cache so the limit would never bite.
+    machine: Arc<Mutex<Diagnostics>>,
 }
 
 impl Server {
     pub fn new(home: impl Into<PathBuf>) -> Self {
-        Self { home: home.into() }
+        let home = home.into();
+        Self {
+            machine: Arc::new(Mutex::new(Diagnostics::new(&home))),
+            home,
+        }
     }
 
     /// Serves until the socket is dropped, which removes it. One thread per connection.
@@ -60,8 +75,9 @@ impl Server {
                 Err(_) => continue,
             };
             let home = self.home.clone();
+            let machine = Arc::clone(&self.machine);
             std::thread::spawn(move || {
-                let _ = talk(&home, stream);
+                let _ = talk(&home, &machine, stream);
             });
         }
         Ok(())
@@ -69,7 +85,7 @@ impl Server {
 }
 
 /// One connected panel, until it goes away.
-pub fn talk(home: &Path, stream: UnixStream) -> Result<()> {
+pub fn talk(home: &Path, machine: &Mutex<Diagnostics>, stream: UnixStream) -> Result<()> {
     let mut out = stream.try_clone()?;
     let reader = BufReader::new(stream);
 
@@ -109,7 +125,7 @@ pub fn talk(home: &Path, stream: UnixStream) -> Result<()> {
         let id = Some(request.id.clone());
         match request.body {
             Ask::Ping => send(&mut out, &Frame::to(id, Reply::Pong))?,
-            Ask::Snapshot => match snapshot::build(home) {
+            Ask::Snapshot => match everything(home, machine) {
                 Ok(s) => send(
                     &mut out,
                     &Frame::to(
@@ -135,6 +151,27 @@ pub fn talk(home: &Path, stream: UnixStream) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The whole world, army and providers together.
+///
+/// The task fold happens once here and is handed to the providers, because the project join
+/// needs it and the snapshot needs it, and folding twice would be the same work for the same
+/// answer.
+fn everything(home: &Path, machine: &Mutex<Diagnostics>) -> Result<PanelSnapshot> {
+    let people = Personnel::open(home)?;
+    let records = event::read(people.journal_path())?;
+    let tasks = super::tasks::fold(&records);
+
+    let facts = {
+        // Held only while sampling. A slow read of /proc must not stop another panel taking a
+        // snapshot of the army, which costs nothing and is what it usually wants.
+        let mut machine = machine.lock().map_err(|_| {
+            crate::Error::Refused("the diagnostics sampler panicked in another thread".into())
+        })?;
+        Facts::gather(&mut machine, &Projects::open(home), &tasks)
+    };
+    snapshot::build_from(&people, &records, &facts)
 }
 
 fn send(out: &mut UnixStream, frame: &Frame) -> Result<()> {
