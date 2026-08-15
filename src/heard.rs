@@ -149,14 +149,101 @@ pub fn needs_screen(question: &str) -> bool {
     if SCREEN_WORDS.iter().any(|w| text.contains(w)) {
         return true;
     }
-    // A pointer word on its own, as a whole word rather than inside another one, so "there"
-    // does not trip on "therefore" and "this" does not trip on "thistle".
-    text.split_whitespace().any(|w| POINTERS.contains(&w))
+    points_at_something(&text)
+}
+
+/// Words that make whatever follows them a thing being pointed at.
+const AIMED: &[&str] = &[
+    "at", "on", "in", "to", "over", "under", "near", "beside", "behind", "from", "with", "about",
+    "around", "of",
+];
+
+/// How short a question has to be for a bare pointer to mean the screen.
+///
+/// "is this right" is about the screen. "remember that my mentor is called Hunter Zhang" is
+/// not, and the only cheap difference between them is length.
+const SHORT: usize = 4;
+
+/// Whether a pointer word in this sentence is actually pointing at anything.
+///
+/// The first version treated any pointer word as deictic, which is wrong about English and
+/// cost a screenshot every time. "That" is overwhelmingly a conjunction: "remember that",
+/// "make sure that", "I think that". Carl flashed the screen and read a black image because
+/// somebody said "remember that my mentor is called Hunter Zhang", which is in the record.
+///
+/// A pointer genuinely points when it ends the sentence, when a preposition aims at it, or
+/// when the whole question is short enough that there is nothing else it could mean.
+fn points_at_something(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+
+    for (i, word) in words.iter().enumerate() {
+        // Whole words only, so "there" does not trip on "therefore" and "this" not on
+        // "thistle".
+        if !POINTERS.contains(word) {
+            continue;
+        }
+        if i + 1 == words.len() {
+            return true;
+        }
+        if i > 0 && AIMED.contains(&words[i - 1]) {
+            return true;
+        }
+        if words.len() <= SHORT {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sentence that actually did this, taken from the record. Carl flashed the screen,
+    /// captured a black image, and spent vision tokens describing it, because English uses
+    /// "that" as a conjunction far more than as a pointer.
+    #[test]
+    fn a_conjunction_is_not_somebody_pointing_at_the_screen() {
+        for said in [
+            "remember that my mentor is called Hunter Zhang",
+            "make sure that the belt is connected",
+            "I think that this approach works better",
+            "it turns out that the furnace was starved",
+            "tell him that I said hello",
+            "the thing that broke was the inserter",
+        ] {
+            assert!(!needs_screen(said), "should not have looked: {said}");
+        }
+    }
+
+    /// And the ones that genuinely are pointing still work, because a wrong no only costs a
+    /// sentence asking what you meant.
+    #[test]
+    fn somebody_actually_pointing_still_gets_a_look() {
+        for said in [
+            "should I put it here",
+            "what about this",
+            "is this right",
+            "what do you think of that",
+            "look at that",
+            "put the assembler over here",
+            "what is this",
+        ] {
+            assert!(needs_screen(said), "should have looked: {said}");
+        }
+    }
+
+    /// A long sentence with a pointer at the end is still pointing. Length only decides the
+    /// ambiguous middle case.
+    #[test]
+    fn length_alone_does_not_decide_it() {
+        assert!(needs_screen(
+            "I have been staring at this for ten minutes and I cannot work out what is wrong              with that"
+        ));
+        assert!(!needs_screen(
+            "I have been reading that the new expansion changes the recipe for green circuits"
+        ));
+    }
 
     #[test]
     fn punctuation_and_case_do_not_matter() {

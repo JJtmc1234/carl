@@ -37,6 +37,28 @@ JJ caught it, not a test, and not the person who wrote it. The lesson is not abo
 A file being on disk is not the same as it being in use, and the difference is exactly the
 kind of thing that produces a confident answer about something that is not there.
 
+| 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
+
+## bug 10, in full
+
+Found by reading the conversation record rather than by anything failing.
+
+`needs_screen` treated every pointer word as deictic. That is wrong about English by a wide
+margin: "that" is a conjunction far more often than it is a pointer. "Remember that", "make
+sure that", "I think that", "it turns out that".
+
+So an ordinary sentence took a screenshot. It flashed the display, which GNOME gives no way to
+suppress, captured a black image because the screen happened to be off, and then spent a few
+thousand vision tokens having Carl describe the black image back.
+
+The comment above the function already said it errs toward not looking, and the implementation
+did the opposite. A comment describing behaviour the code does not have is worse than none,
+because it stops anybody checking.
+
+A pointer now counts only when it genuinely points: at the end of the sentence, after a
+preposition aiming at it, or in a question short enough that there is nothing else it could
+mean. "is this right" looks. "remember that my mentor is called Hunter Zhang" does not.
+
 ## bug 7, in full
 
 The one worth reading, because every check said the audio was fine.
