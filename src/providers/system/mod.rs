@@ -41,10 +41,22 @@ pub struct Sampler {
 
 impl Sampler {
     /// Watches the root filesystem and wherever Carl keeps its data.
+    ///
+    /// The two are resolved and deduplicated, because a home of `/` would otherwise produce
+    /// two diagnostics with the same component id and the panel groups on that id. A path that
+    /// does not exist cannot be resolved and is kept as written, so it still produces an
+    /// honest unknown rather than disappearing.
     pub fn new(carl_home: impl Into<PathBuf>) -> Self {
+        let mut watched: Vec<PathBuf> = Vec::new();
+        for path in [PathBuf::from("/"), carl_home.into()] {
+            let resolved = path.canonicalize().unwrap_or(path);
+            if !watched.contains(&resolved) {
+                watched.push(resolved);
+            }
+        }
         Self {
             previous_cpu: None,
-            watched: vec![PathBuf::from("/"), carl_home.into()],
+            watched,
         }
     }
 
@@ -139,7 +151,8 @@ fn memory(at: u64) -> Diagnostic {
 }
 
 fn disk_diagnostic(path: &std::path::Path, at: u64) -> Diagnostic {
-    let component = format!("system.disk{}", path.display());
+    // A colon between the family and the path, so the id is unambiguous and stable.
+    let component = format!("system.disk:{}", path.display());
     let space = disk::space_for(path);
 
     // A full disk is a failure rather than a warning. Carl cannot append to the journal, and a

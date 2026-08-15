@@ -68,7 +68,7 @@ fn a_founded_army_reports_its_agents() {
     for who in ["carl", "adrian", "mason", "nora"] {
         let agent = taken
             .iter()
-            .find(|d| d.component == format!("agent.{who}"))
+            .find(|d| d.component == format!("army.agent.{who}"))
             .unwrap_or_else(|| panic!("{who} should be reported"));
         assert_eq!(agent.summary, "idle", "nobody has been given anything yet");
         assert_eq!(agent.kind, Kind::EventDriven);
@@ -85,7 +85,10 @@ fn an_agent_holding_a_task_says_which_one() {
     drop(people);
 
     let taken = Army::new(d.path()).snapshot(None);
-    let nora = taken.iter().find(|d| d.component == "agent.nora").unwrap();
+    let nora = taken
+        .iter()
+        .find(|d| d.component == "army.agent.nora")
+        .unwrap();
     assert!(nora.summary.contains("task-7"), "{}", nora.summary);
 }
 
@@ -250,7 +253,9 @@ fn the_carl_services_are_included_in_the_snapshot() {
     let taken = Army::new(d.path()).snapshot(None);
     for unit in services::CARL_UNITS {
         assert!(
-            taken.iter().any(|d| d.component == format!("carl.{unit}")),
+            taken
+                .iter()
+                .any(|d| d.component == format!("army.service.{unit}")),
             "{unit} should be reported"
         );
     }
@@ -262,7 +267,7 @@ fn claude_processes_are_counted_from_proc() {
     let taken = Army::new(d.path()).snapshot(None);
     let claude = taken
         .iter()
-        .find(|d| d.component == "claude.processes")
+        .find(|d| d.component == "army.claude.processes")
         .unwrap();
     assert!(matches!(claude.health, Health::Healthy | Health::Degraded));
     // Nothing is asserted about the count, because it depends on what is running. What is
@@ -294,4 +299,62 @@ fn a_long_silence_in_the_journal_is_noticeable() {
         !journal_is_quiet(&journal::Folded::default(), 9_999_999),
         "a journal with no entries has not gone quiet, it has never spoken"
     );
+}
+
+/// A visible `claude` process is a process and nothing more.
+///
+/// There is no authoritative mapping from a process to a named agent anywhere in this
+/// codebase. `Pool::open_count` knows how many sessions one process is holding, and only
+/// inside that process. So this reports a count and refuses to name anybody, because guessing
+/// that some `claude` on the machine is Nora would be a label the panel could not defend.
+#[test]
+fn a_claude_process_is_never_labelled_with_an_agent_name() {
+    let d = founded_home();
+    let taken = Army::new(d.path()).snapshot(None);
+    let claude = taken
+        .iter()
+        .find(|x| x.component == "army.claude.processes")
+        .unwrap();
+
+    for agent in crate::army::org::everyone() {
+        assert!(
+            !claude.summary.contains(agent.name),
+            "the process count named {}: {}",
+            agent.name,
+            claude.summary
+        );
+        for m in &claude.metrics {
+            assert!(
+                !m.rendered().contains(agent.name),
+                "metric {} named {}",
+                m.name,
+                agent.name
+            );
+        }
+    }
+
+    // What it does say is a count of processes, which is a fact.
+    assert!(
+        claude.summary.contains("claude process"),
+        "{}",
+        claude.summary
+    );
+}
+
+/// The agent rows come from folders on disk, not from guessing which process is whose.
+#[test]
+fn an_agent_row_reports_only_what_its_folder_says() {
+    let d = founded_home();
+    let taken = Army::new(d.path()).snapshot(None);
+    let nora = taken
+        .iter()
+        .find(|x| x.component == "army.agent.nora")
+        .unwrap();
+
+    // No pid, because nothing can prove which process is hers.
+    assert!(
+        !nora.metrics.iter().any(|m| m.name.contains("pid")),
+        "an agent row claimed a process id"
+    );
+    assert_eq!(nora.summary, "idle", "which is what her folder says");
 }

@@ -115,8 +115,21 @@ impl Projects {
     }
 
     /// Accepted milestones, oldest first.
+    ///
+    /// Append order, which is also time order because the store only ever appends. Two
+    /// milestones recorded in the same second keep the order they were written in, so this is
+    /// deterministic rather than merely usually right.
     pub fn milestones(&self, id: &ProjectId) -> Result<Vec<Milestone>> {
-        read_lines(&self.folder(id).join("milestones.jsonl"))
+        Ok(read_lines(&self.folder(id).join("milestones.jsonl"))?.0)
+    }
+
+    /// How many lines of the milestone file could not be read.
+    ///
+    /// A line that will not parse is skipped so that one bad append cannot hide every
+    /// milestone after it. That is the right behaviour and it also means a caller never
+    /// learns it happened, so the count is available separately rather than being swallowed.
+    pub fn milestone_gaps(&self, id: &ProjectId) -> Result<usize> {
+        Ok(read_lines::<Milestone>(&self.folder(id).join("milestones.jsonl"))?.1)
     }
 
     /// The most recent milestones, newest first.
@@ -139,9 +152,18 @@ impl Projects {
             )));
         }
 
-        let seq = self.milestones(&new.project)?.len() + 1;
+        // Taken from the highest id already there rather than from a count. A count would
+        // repeat an id the moment one line failed to parse, and two milestones with the same
+        // id is a timeline that cannot be pointed at.
+        let existing = self.milestones(&new.project)?;
+        let seq = next_sequence(&new.project, &existing);
+        let id = format!("{}-{seq}", new.project);
+        if existing.iter().any(|m| m.id == id) {
+            return Err(Error::Refused(format!("{id} already exists")));
+        }
+
         let milestone = Milestone {
-            id: format!("{}-{seq}", new.project),
+            id,
             project: new.project.clone(),
             at: new.at,
             title: new.title,
@@ -174,7 +196,7 @@ impl Projects {
     }
 
     pub fn suggestions(&self, id: &ProjectId) -> Result<Vec<Suggestion>> {
-        read_lines(&self.folder(id).join("suggested.jsonl"))
+        Ok(read_lines(&self.folder(id).join("suggested.jsonl"))?.0)
     }
 
     /// A project with its recent history, ready to render.
@@ -184,6 +206,7 @@ impl Projects {
         };
         Ok(Some(ProjectView {
             milestones: self.recent_milestones(id, RECENT)?,
+            milestone_gaps: self.milestone_gaps(id)?,
             project,
             active_tasks: Vec::new(),
             active_agents: Vec::new(),
@@ -197,6 +220,8 @@ pub struct ProjectView {
     pub project: Project,
     /// Newest first.
     pub milestones: Vec<Milestone>,
+    /// Milestone lines that could not be read, so a hole in the history is visible.
+    pub milestone_gaps: usize,
     pub active_tasks: Vec<TaskId>,
     pub active_agents: Vec<String>,
 }
@@ -232,17 +257,35 @@ pub fn still_running(pid: u32) -> bool {
     process::read(pid).is_some()
 }
 
-fn read_lines<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Vec<T>> {
+/// Reads a JSON lines file, returning what parsed and how many lines did not.
+fn read_lines<T: serde::de::DeserializeOwned>(path: &Path) -> Result<(Vec<T>, usize)> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
         Err(e) => return Err(e.into()),
     };
-    Ok(text
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect())
+
+    let mut parsed = Vec::new();
+    let mut unreadable = 0;
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        match serde_json::from_str(line) {
+            Ok(value) => parsed.push(value),
+            Err(_) => unreadable += 1,
+        }
+    }
+    Ok((parsed, unreadable))
+}
+
+/// The next milestone number for a project, one past the highest already recorded.
+fn next_sequence(project: &ProjectId, existing: &[Milestone]) -> usize {
+    let prefix = format!("{project}-");
+    existing
+        .iter()
+        .filter_map(|m| m.id.strip_prefix(&prefix))
+        .filter_map(|n| n.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1
 }
 
 fn append_line(path: &Path, line: &str) -> Result<()> {

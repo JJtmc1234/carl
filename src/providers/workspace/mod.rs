@@ -14,11 +14,14 @@
 //! - `terminal`, a real pseudoterminal running JJ's shell.
 //! - `editor`, opening and saving one file without losing anybody's work.
 //! - `diff`, read only git plus a plain text comparison for an unsaved buffer.
+//! - `service`, one handle over the three so a user interface can hold sessions across frames.
 
 pub mod diff;
 pub mod editor;
+pub mod service;
 pub mod terminal;
 
 pub use diff::Change;
 pub use editor::{Mode, OpenFile};
+pub use service::{FileInfo, Investigation, SessionId, Workspace};
 pub use terminal::{Size, Terminal};

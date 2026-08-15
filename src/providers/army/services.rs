@@ -19,6 +19,9 @@ use crate::providers::health::{Diagnostic, Health, Kind, Metric, Reading};
 /// The units `etc/systemd/install.sh` installs.
 pub const CARL_UNITS: &[&str] = &["carl-aec", "carl-listen", "carl-slack"];
 
+/// The binary that answers about them.
+pub const SYSTEMCTL: &str = "systemctl";
+
 /// What systemd says about one unit.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Unit {
@@ -107,7 +110,16 @@ pub fn parse_show(name: &str, text: &str) -> Unit {
 /// `None` when systemctl is missing or refuses to answer, which is a different thing from a
 /// unit that is stopped and must not be reported as one.
 pub fn read(name: &str) -> Option<Unit> {
-    let out = Command::new("systemctl")
+    read_with(SYSTEMCTL, name)
+}
+
+/// The same, against a named binary.
+///
+/// Injectable so a test can point at something that is not there and prove the provider
+/// reports unknown rather than falling over, which is the same trick `Runner::at` and
+/// `Camera::at` use elsewhere in this codebase.
+pub fn read_with(program: &str, name: &str) -> Option<Unit> {
+    let out = Command::new(program)
         .args([
             "--user",
             "show",
@@ -128,11 +140,17 @@ pub fn read(name: &str) -> Option<Unit> {
 /// Event driven rather than sampled. A service either is running or is not, and that state is
 /// true until systemd changes it rather than being a number that goes stale.
 pub fn diagnostics(machine_uptime: Option<f64>) -> Vec<Diagnostic> {
+    diagnostics_with(SYSTEMCTL, machine_uptime)
+}
+
+/// The same, against a named binary, so a test can prove a missing systemctl degrades to
+/// unknown rather than taking the whole snapshot down.
+pub fn diagnostics_with(program: &str, machine_uptime: Option<f64>) -> Vec<Diagnostic> {
     CARL_UNITS
         .iter()
-        .map(|name| match read(name) {
+        .map(|name| match read_with(program, name) {
             None => Diagnostic::new(
-                &format!("carl.{name}"),
+                &format!("army.service.{name}"),
                 Health::Unknown,
                 "systemd did not answer",
                 Kind::EventDriven,
@@ -140,7 +158,7 @@ pub fn diagnostics(machine_uptime: Option<f64>) -> Vec<Diagnostic> {
             Some(unit) => {
                 let uptime = machine_uptime.and_then(|m| unit.uptime_secs(m));
                 Diagnostic::new(
-                    &format!("carl.{name}"),
+                    &format!("army.service.{name}"),
                     unit.health(),
                     unit.summary(),
                     Kind::EventDriven,
@@ -256,7 +274,7 @@ mod tests {
         for d in &found {
             assert_eq!(d.kind, Kind::EventDriven, "a service is not telemetry");
             assert_eq!(d.measured_at, None);
-            assert!(d.component.starts_with("carl."));
+            assert!(d.component.starts_with("army.service."));
         }
     }
 }
