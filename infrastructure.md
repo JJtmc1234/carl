@@ -142,7 +142,7 @@ Slack message can be longer than the argument limit and can contain anything at 
 | names, and calling JJ JJ | done | 3 |
 | python | done | 2 |
 
-248 tests, clippy clean at deny warnings.
+250 tests, clippy clean at deny warnings.
 
 ## measured, not estimated
 
@@ -843,3 +843,22 @@ to name what python may see rather than what it may write.
 Carl and AOS now agree. AOS refuses to have a shell because a shell is every tier at once and
 cannot be described to a policy. Carl has an interpreter, which is the same problem, and the
 answer is the same: bound what it can reach rather than trusting what it will do.
+
+## typing, without starting him again every line
+
+`carl ask` runs a whole process per question, which is right for one question inside a script
+and wrong for a conversation. Every line paid about 0.8 seconds of startup and then a cold
+model.
+
+`carl chat` holds one conversation open, which is what the voice already did and what every
+Slack thread already did. The only difference is where the words come from. Measured on three
+short questions, 12.8 seconds as three `ask` invocations against 6.5 seconds in one chat.
+
+Deliberately not a fancy terminal. No cursor control, no colours, no alternate screen. It has
+to work over ssh, inside a pipe and in whatever terminal is actually in use, and the way to be
+sure of that is not to try anything clever. Piping questions in and reading answers out works
+exactly as typing them does, which is also how it gets tested.
+
+`[remember]` lines are stripped before the terminal sees them rather than after, for the same
+reason Slack strips them before each rewrite: half a note appearing and then vanishing is
+worse than not streaming at all.

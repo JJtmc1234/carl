@@ -60,6 +60,18 @@ cargo test
 Everything lives under `~/.carl` by default. Point `--home` somewhere else to keep a
 separate brain.
 
+## typing at him
+
+```sh
+./target/debug/carl chat
+```
+
+One conversation, held open, so the second question costs nothing to set up. Measured on three
+short questions: 12.8 seconds as three separate `ask` invocations, 6.5 seconds in one chat.
+Control d or `exit` to finish.
+
+`ask` is still there and is still right for one question inside a script.
+
 ## talking to him
 
 ```sh

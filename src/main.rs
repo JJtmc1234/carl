@@ -8,6 +8,7 @@
 
 mod chat;
 mod ear;
+mod repl;
 mod turn;
 
 use std::path::PathBuf;
@@ -75,6 +76,15 @@ enum Command {
         /// the smaller model gave the identical transcript three times faster.
         #[arg(long)]
         accurate: bool,
+    },
+
+    /// Talk to Carl by typing, keeping one conversation open.
+    ///
+    /// Unlike `ask`, this holds the process between questions, so the second question costs
+    /// nothing to set up. Control d or "exit" to finish.
+    Chat {
+        #[arg(long, default_value = "cli")]
+        thread: String,
     },
 
     /// Answer in Slack until interrupted.
@@ -217,6 +227,8 @@ fn main() -> Result<()> {
             cap,
             accurate,
         } => ear::Ear::new(ThreadId::new(thread)?, accurate)?.run(&home, ear::Timing { hush, cap }),
+
+        Command::Chat { thread } => repl::run(&home, &thread),
 
         Command::Slack => chat::run(&home),
 
