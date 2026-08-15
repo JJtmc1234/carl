@@ -203,9 +203,18 @@ fn a_subscription_arrives_in_order_with_no_holes() {
     a_real_delegation(&mut journal);
 
     let mut seen = Vec::new();
-    for _ in 0..2 {
+    while seen.len() < 2 {
         match events.recv().unwrap() {
             Incoming::Event(e) => seen.push((e.seq, e.kind.clone())),
+            // Telemetry interleaves and must never move the resume point, because the resume
+            // point belongs to the journal and a sample is not a thing that happened.
+            Incoming::Telemetry { .. } => {
+                assert_eq!(
+                    events.last_seq(),
+                    caught_up + seen.len() as u64,
+                    "telemetry moved the sequence, which it must never do"
+                );
+            }
             other => panic!("wrong frame: {other:?}"),
         }
     }
@@ -252,6 +261,7 @@ fn the_live_panel_reconnects_after_the_backend_restarts_and_resumes_exactly() {
         match live.next_update() {
             Update::Event(e) => got.push((e.seq, e.kind.clone())),
             Update::Health(h) => healths.push(h),
+            Update::Telemetry { .. } => continue,
             Update::Resynced(_) => panic!("it could have resumed, so it should not have resynced"),
         }
     }
@@ -296,7 +306,7 @@ fn a_gap_becomes_a_fresh_snapshot_rather_than_a_guess() {
     let fresh = loop {
         match live.next_update() {
             Update::Resynced(s) => break s,
-            Update::Health(_) => continue,
+            Update::Health(_) | Update::Telemetry { .. } => continue,
             Update::Event(e) => panic!("nothing should have been resumable: {}", e.seq),
         }
     };
@@ -374,7 +384,10 @@ fn a_disconnected_panel_says_so_rather_than_looking_live() {
                     break;
                 }
             }
-            other => panic!("nothing was happening, so nothing should have arrived: {other:?}"),
+            // The machine keeps being sampled whether or not the army is busy, which is the
+            // point of it, so a telemetry frame here is ordinary rather than a surprise.
+            Update::Telemetry { .. } => continue,
+            other => panic!("nothing about the army was happening: {other:?}"),
         }
     }
     assert!(seen.contains(&Health::Disconnected), "{seen:?}");

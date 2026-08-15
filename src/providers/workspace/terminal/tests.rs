@@ -248,3 +248,37 @@ fn draining_returns_only_what_is_new() {
         "the same output came back twice"
     );
 }
+
+/// The scrub list is the reason a terminal started from inside a snap does not hand the shell
+/// a broken loader. Losing an entry would be silent and would only show up as system binaries
+/// dying with an undefined symbol, so the list itself is guarded.
+#[test]
+fn the_environment_scrub_list_is_intact() {
+    for must_go in [
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "SNAP",
+        "SNAP_NAME",
+        "SNAP_REVISION",
+        "GTK_PATH",
+        "GIO_MODULE_DIR",
+        "GSETTINGS_SCHEMA_DIR",
+    ] {
+        assert!(
+            SCRUB.contains(&must_go),
+            "{must_go} was dropped from the scrub list"
+        );
+    }
+}
+
+/// And the environment this module sets does reach the shell, which is what makes the removals
+/// above meaningful rather than decorative.
+#[test]
+fn the_environment_this_module_sets_reaches_the_shell() {
+    let d = tempfile::tempdir().unwrap();
+    let mut t = open_in(d.path());
+
+    t.send_line("echo TERM_IS=$TERM").unwrap();
+    let seen = wait_for(&mut t, "TERM_IS=xterm-256color");
+    assert!(seen.contains("TERM_IS=xterm-256color"), "{seen}");
+}

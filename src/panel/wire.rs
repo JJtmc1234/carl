@@ -113,6 +113,21 @@ pub enum Reply {
     Speaking {
         text: String,
     },
+    /// Fresh machine readings, pushed because nothing else would have said.
+    ///
+    /// **This frame carries no sequence, deliberately.** Army events are ordered by the journal
+    /// and that is the only ordering there is. A CPU number is not a thing that happened, it is
+    /// a thing that was true when somebody looked, and giving it a sequence would put it in a
+    /// line it does not belong in and let a panel believe telemetry and history are one stream.
+    ///
+    /// Sent only when the sampler actually took a new reading. Process 3's interval is the
+    /// refresh rate, so there is no second one here to disagree with it, and a panel that
+    /// receives one of these knows the numbers in it are genuinely newer than the last.
+    Telemetry {
+        /// When the sample was taken, which is not when this was sent.
+        at: u64,
+        diagnostics: Vec<crate::providers::health::Diagnostic>,
+    },
     /// The request was refused, and by what rule.
     ///
     /// Refusals are values here for the same reason they are events in the journal: a rule

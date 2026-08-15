@@ -137,7 +137,7 @@ fn the_real_numbers_from_this_machine_are_believable() {
 
     let root = taken
         .iter()
-        .find(|d| d.component == "system.disk/")
+        .find(|d| d.component == "system.disk:/")
         .expect("the root filesystem is watched");
     assert_ne!(
         root.health,

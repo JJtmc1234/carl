@@ -19,6 +19,9 @@ use std::process::Command;
 /// The thermal zone whose reading is the CPU package, in preference order.
 const CPU_ZONE_TYPES: &[&str] = &["x86_pkg_temp", "TCPU", "acpitz"];
 
+/// The binary that answers about the card.
+pub const NVIDIA_SMI: &str = "nvidia-smi";
+
 /// What the graphics card says about itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gpu {
@@ -69,7 +72,13 @@ pub fn parse_query(line: &str) -> Option<Gpu> {
 /// `None` when the binary is absent, fails, or prints something unrecognisable, which covers
 /// every machine that is not this one.
 pub fn read_gpu() -> Option<Gpu> {
-    let out = Command::new("nvidia-smi")
+    read_gpu_with(NVIDIA_SMI)
+}
+
+/// The same, against a named binary, so a test can prove a machine without one reports
+/// unknown rather than zero.
+pub fn read_gpu_with(program: &str) -> Option<Gpu> {
+    let out = Command::new(program)
         .args([
             "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
             "--format=csv,noheader",

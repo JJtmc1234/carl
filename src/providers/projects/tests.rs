@@ -239,3 +239,254 @@ fn a_process_that_has_gone_is_not_still_running() {
     assert!(still_running(std::process::id()), "this one is");
     assert!(!still_running(u32::MAX));
 }
+
+// ---- hardening ----
+
+/// A project id becomes a folder name, so traversal has to be impossible at construction
+/// rather than guarded at each use.
+#[test]
+fn no_project_id_can_escape_the_store_directory() {
+    for attempt in [
+        "../../etc",
+        "..",
+        "a/../../b",
+        "/etc/passwd",
+        "a/b",
+        "a\\b",
+        ".",
+        ".hidden",
+        "a\0b",
+    ] {
+        assert!(
+            ProjectId::new(attempt).is_err(),
+            "{attempt:?} should be refused"
+        );
+    }
+
+    // And the same check runs on the way in from a file.
+    for attempt in ["\"../../etc\"", "\"a/b\"", "\"/etc\""] {
+        assert!(
+            serde_json::from_str::<ProjectId>(attempt).is_err(),
+            "{attempt}"
+        );
+    }
+}
+
+#[test]
+fn every_legal_id_stays_directly_under_the_store_root() {
+    let (s, d) = store();
+    let root = d.path().join("projects");
+    for good in ["jjtorio", "a", "aos-2", "x9"] {
+        let id = ProjectId::new(good).unwrap();
+        let folder = s.folder(&id);
+        assert_eq!(folder.parent(), Some(root.as_path()), "{good} escaped");
+        assert_eq!(folder.file_name().unwrap(), good);
+    }
+}
+
+/// The bug a count based id would have caused: one unreadable line and the next milestone
+/// reuses an id that is already taken.
+#[test]
+fn a_corrupt_line_does_not_cause_a_repeated_milestone_id() {
+    let (s, d) = saved();
+    s.record(milestone("first", 100)).unwrap();
+    s.record(milestone("second", 200)).unwrap();
+
+    // Ruin the middle of the file, the way a half written append would.
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+    let good = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<&str> = good.lines().collect();
+    lines[0] = "{ not json";
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+    assert_eq!(s.milestones(&id()).unwrap().len(), 1, "one line survived");
+    assert_eq!(
+        s.milestone_gaps(&id()).unwrap(),
+        1,
+        "and the hole is visible"
+    );
+
+    let third = s.record(milestone("third", 300)).unwrap();
+    assert_eq!(third.id, "jjtorio-3", "the id carried on past the hole");
+
+    let ids: Vec<String> = s
+        .milestones(&id())
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(ids.len(), unique.len(), "duplicated ids: {ids:?}");
+}
+
+#[test]
+fn a_readable_history_reports_no_gaps() {
+    let (s, _d) = saved();
+    s.record(milestone("one", 100)).unwrap();
+    assert_eq!(s.milestone_gaps(&id()).unwrap(), 0);
+    assert_eq!(s.view(&id()).unwrap().unwrap().milestone_gaps, 0);
+}
+
+#[test]
+fn a_view_carries_the_number_of_unreadable_lines() {
+    let (s, d) = saved();
+    s.record(milestone("one", 100)).unwrap();
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+    let good = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{good}{{ broken\n")).unwrap();
+
+    assert_eq!(s.view(&id()).unwrap().unwrap().milestone_gaps, 1);
+}
+
+/// Malformed project JSON must be an error, never an empty project that looks fine.
+#[test]
+fn a_malformed_project_never_becomes_an_empty_healthy_one() {
+    let (s, d) = saved();
+    for rubbish in ["{ not json", "", "null", "[]", "{}"] {
+        std::fs::write(d.path().join("projects/jjtorio/project.json"), rubbish).unwrap();
+        let got = s.get(&id());
+        assert!(got.is_err(), "{rubbish:?} loaded as {got:?}");
+        assert!(s.list().is_err(), "{rubbish:?} survived a listing");
+    }
+}
+
+/// A folder with no project.json is not a project, and is not a blank one either.
+#[test]
+fn a_folder_without_a_project_file_is_absent_rather_than_empty() {
+    let (s, d) = store();
+    std::fs::create_dir_all(d.path().join("projects").join("halfmade")).unwrap();
+
+    let id = ProjectId::new("halfmade").unwrap();
+    assert_eq!(s.get(&id).unwrap(), None);
+    assert!(s.list().unwrap().is_empty());
+    assert!(s.view(&id).unwrap().is_none());
+}
+
+#[test]
+fn milestone_order_is_deterministic_even_at_the_same_timestamp() {
+    let (s, d) = saved();
+    for n in 1..=6 {
+        s.record(milestone(&format!("thing {n}"), 1_000)).unwrap();
+    }
+
+    let first: Vec<String> = s
+        .milestones(&id())
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    drop(s);
+
+    // Read again from a fresh store, repeatedly. Same order every time.
+    for _ in 0..5 {
+        let again = Projects::open(d.path());
+        let ids: Vec<String> = again
+            .milestones(&id())
+            .unwrap()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(ids, first, "append order is the order");
+    }
+    assert_eq!(first[0], "jjtorio-1");
+}
+
+#[test]
+fn newest_first_is_deterministic_and_capped() {
+    let (s, _d) = saved();
+    for n in 1..=6 {
+        s.record(milestone(&format!("thing {n}"), 1_000)).unwrap();
+    }
+
+    let a = s.recent_milestones(&id(), 3).unwrap();
+    let b = s.recent_milestones(&id(), 3).unwrap();
+    assert_eq!(a, b, "two reads disagree");
+    assert_eq!(a.len(), 3);
+    assert_eq!(a[0].id, "jjtorio-6", "newest first");
+    assert_eq!(a[2].id, "jjtorio-4");
+}
+
+/// Repeated and interleaved reads must not disturb the store.
+#[test]
+fn repeated_reads_are_safe_and_do_not_change_anything() {
+    let (s, d) = saved();
+    s.record(milestone("one", 100)).unwrap();
+
+    let before =
+        std::fs::read_to_string(d.path().join("projects/jjtorio/milestones.jsonl")).unwrap();
+    for _ in 0..20 {
+        s.list().unwrap();
+        s.get(&id()).unwrap();
+        s.milestones(&id()).unwrap();
+        s.recent_milestones(&id(), 3).unwrap();
+        s.suggestions(&id()).unwrap();
+        s.view(&id()).unwrap();
+    }
+    let after =
+        std::fs::read_to_string(d.path().join("projects/jjtorio/milestones.jsonl")).unwrap();
+    assert_eq!(before, after, "reading changed the history");
+}
+
+/// The two stores must not be able to impersonate each other through their own files.
+#[test]
+fn a_suggestion_file_cannot_be_read_as_history_and_the_reverse() {
+    let (s, d) = saved();
+    s.record(milestone("real", 100)).unwrap();
+    s.suggest(&Suggestion {
+        project: id(),
+        at: 200,
+        title: "proposed".into(),
+        detail: None,
+        evidence: None,
+        because: "a build went green".into(),
+    })
+    .unwrap();
+
+    let folder = d.path().join("projects/jjtorio");
+    let history = std::fs::read_to_string(folder.join("milestones.jsonl")).unwrap();
+    let proposals = std::fs::read_to_string(folder.join("suggested.jsonl")).unwrap();
+
+    for line in proposals.lines() {
+        assert!(
+            serde_json::from_str::<Milestone>(line).is_err(),
+            "a suggestion parsed as a milestone: {line}"
+        );
+    }
+    for line in history.lines() {
+        assert!(
+            serde_json::from_str::<Suggestion>(line).is_err(),
+            "a milestone parsed as a suggestion: {line}"
+        );
+    }
+
+    // And swapping the files wholesale yields nothing rather than a mixed history.
+    std::fs::write(folder.join("milestones.jsonl"), &proposals).unwrap();
+    assert!(
+        s.milestones(&id()).unwrap().is_empty(),
+        "nothing was adopted"
+    );
+    assert_eq!(
+        s.milestone_gaps(&id()).unwrap(),
+        1,
+        "and the mismatch is visible"
+    );
+}
+
+/// recent_changes.json is a governance feed, not a milestone source. Nothing here reads it.
+#[test]
+fn the_governance_feed_is_not_a_milestone_source() {
+    let (s, d) = saved();
+    std::fs::write(
+        d.path().join("recent_changes.json"),
+        r#"{"recent_changes":[{"id":"aos-1","title":"JJ is ultimate authority"}]}"#,
+    )
+    .unwrap();
+
+    assert!(
+        s.milestones(&id()).unwrap().is_empty(),
+        "a governance file must not become project history"
+    );
+    assert_eq!(s.list().unwrap().len(), 1, "and it is not a project either");
+}

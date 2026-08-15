@@ -140,7 +140,7 @@ pub fn talk(home: &Path, machine: &Mutex<Diagnostics>, stream: UnixStream) -> Re
             // Takes over the connection. A subscribed panel is streaming, and interleaving
             // request handling on the same socket would need framing this protocol does not
             // have. A panel that wants both opens two connections.
-            Ask::Subscribe { since } => return stream_from(home, &mut out, id, since),
+            Ask::Subscribe { since } => return stream_from(home, machine, &mut out, id, since),
             Ask::Command { command } => {
                 let replies = carry_out(home, command, &mut out, id.clone());
                 match replies {
@@ -181,7 +181,13 @@ fn send(out: &mut UnixStream, frame: &Frame) -> Result<()> {
 }
 
 /// Replays what the panel missed, then forwards everything new until it disconnects.
-fn stream_from(home: &Path, out: &mut UnixStream, id: Option<String>, since: u64) -> Result<()> {
+fn stream_from(
+    home: &Path,
+    machine: &Mutex<Diagnostics>,
+    out: &mut UnixStream,
+    id: Option<String>,
+    since: u64,
+) -> Result<()> {
     let path = Personnel::open(home)?.journal_path();
     let records = event::read(&path)?;
 
@@ -198,6 +204,11 @@ fn stream_from(home: &Path, out: &mut UnixStream, id: Option<String>, since: u64
     // having to infer it from a quiet connection.
     send(out, &Frame::to(id, Reply::Live { seq: last }))?;
 
+    // Where the sampler had got to when this panel subscribed. Telemetry is only sent when this
+    // moves, so a subscriber gets a frame when there is genuinely something newer and not on a
+    // timer of its own.
+    let mut told_of = machine.lock().ok().and_then(|m| m.last_sampled_at());
+
     loop {
         let fresh: Vec<Record> = event::read(&path)?
             .into_iter()
@@ -210,8 +221,42 @@ fn stream_from(home: &Path, out: &mut UnixStream, id: Option<String>, since: u64
                 return Ok(());
             }
         }
+
+        if let Some(frame) = fresh_telemetry(machine, &mut told_of)
+            && send(out, &frame).is_err()
+        {
+            return Ok(());
+        }
         std::thread::sleep(TICK);
     }
+}
+
+/// A telemetry frame, but only if the sampler has actually taken a new reading.
+///
+/// Asking the sampler on every tick is free: its own rate limit decides whether to resample, and
+/// between samples it hands back the previous readings with their original `measured_at`. So the
+/// interval that governs how often a panel hears about the machine is Process 3's, and there is
+/// no second one here that could drift from it.
+///
+/// The comparison is on `last_sampled_at` rather than on the readings, because two identical
+/// readings taken a minute apart are two different facts and a panel showing an age needs to
+/// know the second one happened.
+fn fresh_telemetry(machine: &Mutex<Diagnostics>, told_of: &mut Option<u64>) -> Option<Frame> {
+    let mut machine = machine.lock().ok()?;
+    let sampled = machine.machine();
+    let at = machine.last_sampled_at()?;
+
+    if *told_of == Some(at) {
+        return None;
+    }
+    *told_of = Some(at);
+    Some(Frame::to(
+        None,
+        Reply::Telemetry {
+            at,
+            diagnostics: sampled,
+        },
+    ))
 }
 
 fn event_frame(r: Record) -> Frame {

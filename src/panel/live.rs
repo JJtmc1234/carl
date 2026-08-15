@@ -54,6 +54,14 @@ pub enum Update {
     /// Throw away what you were holding and rebuild from this. It carries its own sequence, and
     /// the stream continues from exactly there.
     Resynced(Box<PanelSnapshot>),
+    /// Fresh machine readings, replacing the ones in the last snapshot.
+    ///
+    /// Sampled telemetry only. Nothing about the army arrives this way, and this carries no
+    /// sequence: replace the diagnostics you are holding and leave everything else alone.
+    Telemetry {
+        at: u64,
+        diagnostics: Vec<crate::providers::health::Diagnostic>,
+    },
     /// Nothing happened except that the honest description of the connection changed.
     Health(Health),
 }
@@ -182,6 +190,16 @@ impl LivePanel {
                         self.pending.push_back(update);
                     }
                     self.pending.push_back(Update::Event(event));
+                }
+                Ok(Incoming::Telemetry { at, diagnostics }) => {
+                    // Contact, so the connection is alive even when the army is quiet. It does
+                    // not move `last`, because the resume point belongs to the journal.
+                    self.confirm();
+                    if let Some(update) = self.became(Health::Connected) {
+                        self.pending.push_back(update);
+                    }
+                    self.pending
+                        .push_back(Update::Telemetry { at, diagnostics });
                 }
                 Ok(Incoming::CaughtUp { seq }) => {
                     self.last = self.last.max(seq);
