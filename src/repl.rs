@@ -40,7 +40,10 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
 
-    eprintln!("talking to carl in thread {thread}. control d or \"exit\" to finish.");
+    eprintln!(
+        "talking to carl in thread {thread}. control d or \"exit\" to finish.\n\
+         start a line with \"look\" to have him look at your screen."
+    );
 
     loop {
         write!(out, "\n> ")?;
@@ -62,41 +65,59 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
             break;
         }
 
+        // Judged the same way the voice judges it, so "should I put it here" looks and "what
+        // should I research" does not. Typing has one advantage over speaking: you can say
+        // "look" and mean it, so that is honoured outright.
+        let (question, look) = match said.strip_prefix("look ") {
+            Some(rest) => (rest.trim(), true),
+            None if said.eq_ignore_ascii_case("look") => ("What is on my screen?", true),
+            None => (said, carl::needs_screen(said)),
+        };
+        if look {
+            eprintln!("(looking at your screen, which flashes it)");
+        }
+
         // Printed as it arrives, and only the part anybody should see. A [remember] line is
         // Carl writing something down, not talking, so it is stripped before the terminal ever
         // gets it rather than after.
         let mut shown = 0usize;
         let mut whole = String::new();
 
-        let answer = turn::stream_in(
-            turn::Asking {
-                pool: &mut pool,
-                home,
-                thread: &thread,
-                said,
-                sent: None,
-                said_by: Some(carl::brief::OWNER),
-            },
-            &mut |chunk| {
-                whole.push_str(chunk);
-                let visible = carl::remember::split(&whole).text;
+        let asking = turn::Asking {
+            pool: &mut pool,
+            home,
+            thread: &thread,
+            said: question,
+            sent: None,
+            said_by: Some(carl::brief::OWNER),
+        };
 
-                // Only ever appends, and only on a character boundary. Stripping a note can
-                // shorten the visible text, nothing already printed can be taken back, and
-                // `shown` is a byte offset into an older version of the string.
-                if let Some(fresh) = visible.get(shown..)
-                    && !fresh.is_empty()
-                {
-                    let _ = out.write_all(fresh.as_bytes());
-                    let _ = out.flush();
-                    shown = visible.len();
-                }
-                Flow::Continue
-            },
-            // Nothing interrupts a typed answer. There is no microphone, and the next line
-            // cannot be typed until this one is done.
-            &mut || Flow::Continue,
-        );
+        let mut on_text = |chunk: &str| {
+            whole.push_str(chunk);
+            let visible = carl::remember::split(&whole).text;
+
+            // Only ever appends, and only on a character boundary. Stripping a note can
+            // shorten the visible text, nothing already printed can be taken back, and
+            // `shown` is a byte offset into an older version of the string.
+            if let Some(fresh) = visible.get(shown..)
+                && !fresh.is_empty()
+            {
+                let _ = out.write_all(fresh.as_bytes());
+                let _ = out.flush();
+                shown = visible.len();
+            }
+            Flow::Continue
+        };
+
+        // Nothing interrupts a typed answer. There is no microphone, and the next line cannot
+        // be typed until this one is done.
+        let mut waiting = || Flow::Continue;
+
+        let answer = if look {
+            turn::look_in(asking, carl::Area::Screen, &mut on_text, &mut waiting)
+        } else {
+            turn::stream_in(asking, &mut on_text, &mut waiting)
+        };
 
         writeln!(out)?;
         match answer {

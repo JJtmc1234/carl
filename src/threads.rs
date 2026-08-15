@@ -76,6 +76,12 @@ pub struct Thread {
     /// How many times Carl has answered in it. Useful for spotting a runaway loop.
     #[serde(default)]
     pub turns: u64,
+    /// Unix seconds of the last answer.
+    ///
+    /// Defaulted rather than required, so a registry written before this existed still loads
+    /// and simply looks like it has never been used, which for warming is the safe reading.
+    #[serde(default)]
+    pub last_at: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -117,6 +123,7 @@ impl Registry {
                 session: session.clone(),
                 started_at: now,
                 turns: 0,
+                last_at: now,
             },
         );
         self.save()?;
@@ -126,8 +133,27 @@ impl Registry {
     pub fn record_turn(&mut self, thread: &ThreadId) -> Result<()> {
         if let Some(entry) = self.threads.get_mut(thread) {
             entry.turns += 1;
+            entry.last_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(entry.last_at);
         }
         self.save()
+    }
+
+    /// The threads used most recently, newest first.
+    ///
+    /// Used to decide what to reopen after a restart. Restarting loses every held open
+    /// process, so without this the first message to each thread pays the full startup again,
+    /// and the person who notices is whoever was mid conversation when it happened.
+    pub fn recent(&self, limit: usize) -> Vec<(ThreadId, SessionId)> {
+        let mut all: Vec<(&ThreadId, &Thread)> = self.threads.iter().collect();
+        all.sort_by_key(|(_, t)| std::cmp::Reverse(t.last_at.max(t.started_at)));
+        all.into_iter()
+            .filter(|(_, t)| t.turns > 0)
+            .take(limit)
+            .map(|(id, t)| (id.clone(), t.session.clone()))
+            .collect()
     }
 
     pub fn get(&self, thread: &ThreadId) -> Option<&Thread> {
@@ -158,6 +184,41 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Restarting loses every held open process, so the ones worth reopening are the ones
+    /// somebody was most recently talking in.
+    #[test]
+    fn the_most_recently_used_threads_come_back_first() {
+        let d = tempfile::tempdir().unwrap();
+        let mut r = Registry::open(d.path().join("threads.json")).unwrap();
+
+        for (name, at) in [("old", 100), ("newer", 200), ("newest", 300)] {
+            let t = ThreadId::new(name).unwrap();
+            r.session_for(&t, at).unwrap();
+            r.record_turn(&t).unwrap();
+            // record_turn stamps with the clock, so the ordering is set by hand here.
+            r.threads.get_mut(&t).unwrap().last_at = at;
+        }
+
+        let names: Vec<String> = r
+            .recent(2)
+            .into_iter()
+            .map(|(t, _)| t.to_string())
+            .collect();
+        assert_eq!(names, vec!["newest", "newer"]);
+    }
+
+    /// A thread that was created and never used is not worth a process. Every Slack mention
+    /// creates one, and most of them are asked a single question or none at all.
+    #[test]
+    fn a_thread_nobody_ever_answered_in_is_not_warmed() {
+        let d = tempfile::tempdir().unwrap();
+        let mut r = Registry::open(d.path().join("threads.json")).unwrap();
+        r.session_for(&ThreadId::new("never-used").unwrap(), 100)
+            .unwrap();
+
+        assert!(r.recent(4).is_empty());
+    }
 
     fn t(name: &str) -> ThreadId {
         ThreadId::new(name).unwrap()

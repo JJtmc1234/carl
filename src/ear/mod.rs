@@ -125,6 +125,16 @@ impl Ear {
         let hush = mic.calibrate(1.5);
         eprintln!("quiet is below {hush:.3}");
 
+        // The voice is one conversation and it is the one where waiting is most obvious, so
+        // it is reopened before the first "hey carl" rather than on it.
+        if let Ok(registry) = carl::Registry::open(home.join("threads.json"))
+            && let Some(thread) = registry.get(&self.thread)
+        {
+            running
+                .pool
+                .warm(&[(self.thread.clone(), thread.session.clone())]);
+        }
+
         // Rendered after the room is measured rather than before, so the first thing that
         // happens on startup is still listening. A filler that fails to render costs nothing:
         // Carl without one is the Carl that existed before it.

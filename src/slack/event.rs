@@ -26,6 +26,10 @@ pub struct Ask {
     pub thread_ts: String,
     pub text: String,
     pub user: String,
+    /// Pictures pasted into the message.
+    ///
+    /// Carried rather than fetched here, because this file is pure and downloading is not.
+    pub images: Vec<super::Shared>,
 }
 
 /// Reads one Socket Mode payload. `None` for everything Carl should stay out of.
@@ -104,6 +108,21 @@ pub fn ask_from(
         _ => return None,
     };
 
+    // A picture on its own is a question. Pasting a screenshot and saying nothing is the
+    // most ordinary way somebody asks for help with what is on their screen.
+    let has_images = !super::images_in(event).is_empty();
+    if text.is_empty() && has_images && channel_type == "im" {
+        return Some(Ask {
+            thread: ThreadId::slack(channel, ts).ok()?,
+            from_agent,
+            images: super::images_in(event),
+            channel: channel.to_string(),
+            thread_ts: ts.to_string(),
+            text: "What is in this picture?".to_string(),
+            user: user.to_string(),
+        });
+    }
+
     // A bare name is being called rather than being asked, which still deserves an answer.
     // An empty message that never had a name in it does not.
     if text.is_empty() && kind != "message" {
@@ -124,6 +143,7 @@ pub fn ask_from(
 
     Some(Ask {
         thread: ThreadId::slack(channel, &thread_ts).ok()?,
+        images: super::images_in(event),
         from_agent,
         channel: channel.to_string(),
         thread_ts,

@@ -25,7 +25,13 @@ pub fn run(home: &Path) -> Result<()> {
     eprintln!("carl is {} in team {}", me.user_id, me.team);
     eprintln!("mention @Carl in a channel he is in, or send him a direct message.");
 
-    let jobs = spawn_worker(home.to_path_buf(), Api::new(&tokens.bot, &tokens.app));
+    // The token comes along because a Slack file url is private and needs it. Without it a
+    // download returns a sign in page with a 200, which is the confusing kind of failure.
+    let jobs = spawn_worker(
+        home.to_path_buf(),
+        Api::new(&tokens.bot, &tokens.app),
+        tokens.bot.clone(),
+    );
 
     carl::slack::serve(&api, &me, &mut |ask| {
         // Never blocks. The socket has to keep reading, both to acknowledge the next envelope
@@ -42,7 +48,7 @@ pub fn run(home: &Path) -> Result<()> {
 /// One worker rather than a thread per message, on purpose. Two answers at once would both be
 /// writing the thread registry, and two in the same Slack thread would interleave. Slack
 /// holds the queue meanwhile, which is what the queue is for.
-fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
+fn spawn_worker(home: PathBuf, api: Api, bot: String) -> Sender<Ask> {
     let (jobs, rx) = channel::<Ask>();
 
     std::thread::spawn(move || {
@@ -62,6 +68,20 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
             home.join("workspace"),
             carl::brief::IDENTITY,
         );
+
+        // Reopened before anything arrives, so a restart does not make the next person to
+        // speak wait for a cold process. Which threads is read from the registry, newest
+        // first, and never more than the pool would keep anyway.
+        match carl::Registry::open(home.join("threads.json")) {
+            Ok(registry) => {
+                let recent = registry.recent(carl::claude::KEEP_OPEN);
+                if !recent.is_empty() {
+                    eprintln!("reopening {} recent conversations", recent.len());
+                    pool.warm(&recent);
+                }
+            }
+            Err(e) => eprintln!("could not read the thread registry: {e}"),
+        }
 
         for ask in rx {
             let who = if ask.from_agent { "agent" } else { "person" };
@@ -101,7 +121,15 @@ fn spawn_worker(home: PathBuf, api: Api) -> Sender<Ask> {
                 .map_err(|e| eprintln!("  could not post a placeholder: {e}"))
                 .ok();
 
-            let reply = match answer(&mut pool, &home, &ask, &speaker, live.as_deref(), &api) {
+            let reply = match answer(
+                &mut pool,
+                &home,
+                &ask,
+                &speaker,
+                live.as_deref(),
+                &api,
+                &bot,
+            ) {
                 Ok(text) if !text.trim().is_empty() => text,
                 Ok(_) => "I had nothing to say to that, which is probably a bug.".to_string(),
                 // Said out loud rather than only logged. Somebody is waiting in a channel,
@@ -153,11 +181,45 @@ fn answer(
     speaker: &str,
     live: Option<&str>,
     api: &Api,
+    bot_token: &str,
 ) -> Result<String> {
     // Carl needs telling that he is in Slack. Without it he reasons about whether he has a
     // Slack connector authorised, decides he has not, and explains that he cannot reply, in
     // a message that is itself posted to Slack.
     let mut context = format!("{}\n\nYou are talking to {speaker}.", slack::CONTEXT);
+
+    // Fetched into the same working directory a screenshot lands in, so Claude reads it with
+    // its own file tools and nothing downstream has to learn anything new.
+    if !ask.images.is_empty() {
+        let workdir = home.join("workspace");
+        let mut got = Vec::new();
+        for image in &ask.images {
+            match slack::fetch(image, bot_token, &workdir) {
+                Ok(path) => got.push(
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                ),
+                Err(e) => eprintln!("  could not fetch {}: {e}", image.name),
+            }
+        }
+        if !got.is_empty() {
+            context.push_str(&format!(
+                "\n\nThey attached {} to this message, saved next to you as {}. Read the \
+                 image before answering, and answer from what is actually in it rather than \
+                 what you expect. If you cannot make something out, say so.",
+                if got.len() == 1 {
+                    "a picture"
+                } else {
+                    "pictures"
+                },
+                got.iter()
+                    .map(|n| format!("./{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
     if ask.from_agent {
         context.push_str(
             "\n\nThat is another AI agent, not a person. Answer it directly and briefly. Do \

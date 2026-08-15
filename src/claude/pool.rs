@@ -103,6 +103,30 @@ impl Pool {
         }
     }
 
+    /// Reopens conversations that were open before a restart.
+    ///
+    /// Restarting loses every held open process, and the first message to each thread
+    /// afterwards pays the full startup again. The person who notices is whoever was mid
+    /// conversation when the service was restarted, which during a day of building is
+    /// constantly.
+    ///
+    /// Spawning is quick. What takes 0.8 seconds is the child reading its own config, and that
+    /// happens inside the child, so starting several here costs almost nothing and they warm
+    /// themselves while nobody is waiting.
+    ///
+    /// Always resumed rather than pinned, because a thread being warmed has by definition been
+    /// talked in before.
+    pub fn warm(&mut self, threads: &[(ThreadId, SessionId)]) {
+        for (thread, session) in threads.iter().take(self.limit) {
+            match self.ensure(thread, session, true) {
+                Ok(()) => eprintln!("  reopened {thread}"),
+                // Not fatal, and not retried. A thread that will not reopen simply opens when
+                // somebody asks something in it, which is what used to happen every time.
+                Err(e) => eprintln!("  could not reopen {thread}: {e}"),
+            }
+        }
+    }
+
     /// Closes a conversation, so the next question starts a new process.
     pub fn close(&mut self, thread: &ThreadId) {
         self.open.retain(|(t, _)| t != thread);
