@@ -430,6 +430,27 @@ default and is correct for anything you did not actually check.
 Terminal and editor are yours and are not in this protocol. If they need to reach the backend,
 tell me what for and I will add a command rather than having you open a second channel.
 
+## Observing does not change what is observed
+
+Opening a panel on a home reads it and writes nothing. `~/.carl/panel/` is the one exception and
+is legitimate: the socket has to live somewhere, and a backend that is running is a true thing to
+have written down.
+
+This was not true before. A real panel opened on JJ's home left an empty `~/.carl/army/` behind,
+which is the difference between "no army has been founded here" and "an army was founded and
+everybody left". Two causes, both now fixed at the source rather than guarded at each call site:
+
+- `Personnel::open` created `<home>/army` on the way in. It is a read and no longer creates. A
+  home with no army reads as an army with no folders, which is what it is. Founding still creates
+  it, through the path that is supposed to.
+- The panel opened the journal before deciding whether a command writes, so a read-only `inspect`
+  created `<home>/run`. The journal is now opened only where something is recorded.
+
+An unfounded home still gives a full snapshot: the organisation is compiled in, so all four
+agents are described with `enlisted: false`, and `army.personnel` says "no army has been founded
+in this home". That is an honest empty state and better than a directory that makes it look
+otherwise.
+
 ## Lifecycle
 
 `carl panel` removes its socket when it stops, on a normal return, on a panic unwinding, and on
@@ -445,6 +466,15 @@ manual cleanup.
 Two backends cannot share a home. The second refuses at bind, naming the path. There is no lock
 file, because the socket already answers the question and a second mechanism would be a second
 thing that can disagree.
+
+Deciding whether a socket in the way is live is more careful than it looks, and two mistakes were
+made getting there. A successful `connect` is not proof of life: the kernel can complete a
+connection into a listener's backlog and that listener can then close. And a *failed* connect is
+not proof of death, which is the more dangerous of the two: under load, connecting to a live
+listener whose backlog is full returns `EAGAIN`, and reading that as debris would delete a
+running backend's socket. So only `ECONNREFUSED` may lead to a delete, a read that times out with
+the connection open means somebody is there, `EINTR` is retried, and anything else refuses to
+start rather than guessing in the destructive direction.
 
 ## What changed for Process 2 since you branched
 
@@ -463,7 +493,7 @@ mock fixtures need the new field shapes; your UI logic should not.
 
 ## Verified
 
-678 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
+727 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
 
 The full path, with the real binaries and a real restart, as run:
 

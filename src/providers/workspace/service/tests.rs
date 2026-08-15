@@ -387,3 +387,226 @@ fn investigating_something_that_is_not_in_the_snapshot_finds_nothing() {
     let w = Workspace::new();
     assert_eq!(w.investigate(&snapshot, "system.tea"), None);
 }
+
+// ---- lifecycle, for a panel that stays open all day ----
+
+#[test]
+fn many_terminals_coexist_and_every_id_is_distinct() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+
+    let ids: Vec<SessionId> = (0..5)
+        .map(|_| w.open_terminal(d.path(), Size::default()).unwrap())
+        .collect();
+
+    let mut unique = ids.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), ids.len(), "ids repeated: {ids:?}");
+    assert_eq!(w.terminals().len(), 5);
+    for id in &ids {
+        assert!(w.is_alive(*id));
+    }
+}
+
+/// An id is never handed out twice, even after the session it named has gone.
+#[test]
+fn a_closed_session_does_not_give_its_id_back() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+
+    let first = w.open_terminal(d.path(), Size::default()).unwrap();
+    w.close_terminal(first).unwrap();
+    let second = w.open_terminal(d.path(), Size::default()).unwrap();
+
+    assert_ne!(first, second, "a stale handle would address a live session");
+}
+
+#[test]
+fn closing_one_terminal_leaves_the_others_running() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+
+    let a = w.open_terminal(d.path(), Size::default()).unwrap();
+    let b = w.open_terminal(d.path(), Size::default()).unwrap();
+    let c = w.open_terminal(d.path(), Size::default()).unwrap();
+
+    w.close_terminal(b).unwrap();
+
+    assert!(w.is_alive(a), "a was closed too");
+    assert!(!w.is_alive(b));
+    assert!(w.is_alive(c), "c was closed too");
+    assert_eq!(w.terminals().len(), 2);
+
+    // And the survivors still work.
+    w.input_line(a, "echo still-here").unwrap();
+    wait_for(&mut w, a, "still-here");
+}
+
+/// A shell JJ exits from is dead, and the panel has to notice without being told.
+#[test]
+fn a_shell_that_exits_on_its_own_is_detected_as_dead() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+    let id = w.open_terminal(d.path(), Size::default()).unwrap();
+
+    w.input_line(id, "exit").unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if !w.is_alive(id) {
+            // Still a known session, just not a living one, so the panel can show that.
+            assert!(w.terminals().contains(&id));
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("the shell is still alive after exit");
+}
+
+/// Resizing while output is pouring in is the case that deadlocks a naive implementation.
+#[test]
+fn a_terminal_can_be_resized_while_it_is_producing_output() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+    let id = w.open_terminal(d.path(), Size::default()).unwrap();
+
+    w.input_line(id, "for i in $(seq 1 4000); do echo line-$i; done")
+        .unwrap();
+
+    for step in 0..8 {
+        w.resize(
+            id,
+            Size {
+                rows: 24 + step,
+                cols: 80 + step,
+            },
+        )
+        .unwrap();
+        let _ = w.drain(id);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    assert!(w.is_alive(id), "resizing under load killed the shell");
+    w.input_line(id, "echo survived").unwrap();
+    wait_for(&mut w, id, "survived");
+}
+
+#[test]
+fn a_terminal_can_start_in_a_directory_with_spaces() {
+    let d = tempfile::tempdir().unwrap();
+    let spaced = d
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("a directory with spaces");
+    std::fs::create_dir(&spaced).unwrap();
+
+    let mut w = Workspace::new();
+    let id = w.open_terminal(&spaced, Size::default()).unwrap();
+
+    assert_eq!(w.cwd(id).as_deref(), Some(spaced.as_path()));
+    w.input_line(id, "echo HERE=$PWD").unwrap();
+    let seen = wait_for(&mut w, id, "a directory with spaces");
+    assert!(seen.contains("a directory with spaces"), "{seen}");
+}
+
+// ---- editor lifecycle ----
+
+#[test]
+fn many_files_are_open_at_once_and_stay_separate() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+
+    let mut ids = Vec::new();
+    for n in 0..4 {
+        let path = d.path().join(format!("file{n}.txt"));
+        std::fs::write(&path, format!("contents {n}\n")).unwrap();
+        ids.push(w.open_file(&path, Mode::ReadWrite).unwrap());
+    }
+
+    assert_eq!(w.files().len(), 4);
+    for (n, id) in ids.iter().enumerate() {
+        assert_eq!(w.contents(*id), Some(format!("contents {n}\n").as_str()));
+    }
+
+    // Saving one leaves the others alone.
+    w.save(ids[1], "changed\n").unwrap();
+    assert_eq!(w.contents(ids[0]), Some("contents 0\n"));
+    assert_eq!(w.contents(ids[2]), Some("contents 2\n"));
+
+    w.close_file(ids[1]).unwrap();
+    assert_eq!(w.files().len(), 3);
+    assert_eq!(w.contents(ids[1]), None);
+}
+
+/// A file renamed out from under the editor is gone, and saving must not recreate it at the
+/// old name as if nothing happened.
+#[test]
+fn a_file_renamed_underneath_is_treated_as_changed() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("before.txt");
+    std::fs::write(&path, "contents\n").unwrap();
+
+    let mut w = Workspace::new();
+    let id = w.open_file(&path, Mode::ReadWrite).unwrap();
+
+    std::fs::rename(&path, d.path().join("after.txt")).unwrap();
+
+    assert_eq!(w.changed_on_disk(id), Some(true));
+    assert!(
+        w.save(id, "mine\n").is_err(),
+        "a save resurrected the old name"
+    );
+    assert!(!path.exists(), "the old path came back");
+}
+
+#[test]
+fn a_file_deleted_underneath_refuses_to_be_saved_over() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("doomed.txt");
+    std::fs::write(&path, "contents\n").unwrap();
+
+    let mut w = Workspace::new();
+    let id = w.open_file(&path, Mode::ReadWrite).unwrap();
+    std::fs::remove_file(&path).unwrap();
+
+    assert_eq!(w.changed_on_disk(id), Some(true));
+    assert!(w.save(id, "mine\n").is_err());
+    assert!(w.reload(id).is_err(), "there is nothing to reload");
+}
+
+#[test]
+fn a_rapid_same_size_external_edit_is_caught() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("racy.txt");
+    std::fs::write(&path, "aaaaaaaa\n").unwrap();
+
+    let mut w = Workspace::new();
+    let id = w.open_file(&path, Mode::ReadWrite).unwrap();
+
+    // Same byte count, same second, different content. Only the hash catches this.
+    std::fs::write(&path, "bbbbbbbb\n").unwrap();
+
+    assert_eq!(w.changed_on_disk(id), Some(true));
+    let err = w.save(id, "cccccccc\n").unwrap_err().to_string();
+    assert!(err.contains("changed on disk"), "{err}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "bbbbbbbb\n");
+}
+
+#[test]
+fn a_file_with_spaces_in_its_path_opens_and_saves() {
+    let d = tempfile::tempdir().unwrap();
+    let folder = d.path().join("some folder");
+    std::fs::create_dir(&folder).unwrap();
+    let path = folder.join("a file.txt");
+    std::fs::write(&path, "one\n").unwrap();
+
+    let mut w = Workspace::new();
+    let id = w.open_file(&path, Mode::ReadWrite).unwrap();
+    assert_eq!(w.contents(id), Some("one\n"));
+
+    w.save(id, "two\n").unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+    assert!(w.file_info(id).unwrap().path.ends_with("a file.txt"));
+}

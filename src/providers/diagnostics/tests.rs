@@ -287,3 +287,226 @@ fn this_machine_reports_its_uptime() {
         "a machine up for no time at all is not running this"
     );
 }
+
+// ---- cost split, proved rigorously ----
+
+/// The bug this design exists to prevent, at the scale it would have happened.
+///
+/// The old code ran three `systemctl` calls inside every `army()`. Six hundred frames is ten
+/// seconds of a sixty frame panel, which would have been eighteen hundred child processes.
+#[test]
+fn six_hundred_frames_at_one_instant_start_one_set_of_processes() {
+    let d = tempfile::tempdir().unwrap();
+    let mut diagnostics = at(d.path());
+
+    for _ in 0..600 {
+        diagnostics.snapshot_at(1_000);
+    }
+
+    assert_eq!(
+        diagnostics.probes_taken(),
+        1,
+        "systemctl ran more than once"
+    );
+    assert_eq!(
+        diagnostics.samples_taken(),
+        1,
+        "nvidia-smi ran more than once"
+    );
+}
+
+/// The cheap half must keep working while the expensive half is held back, or the split has
+/// simply made everything stale.
+#[test]
+fn cheap_reads_repeat_freely_while_expensive_probes_do_not() {
+    let d = tempfile::tempdir().unwrap();
+    let mut diagnostics = at(d.path());
+
+    // Prime the caches so nothing is due.
+    diagnostics.snapshot_at(1_000);
+    assert_eq!(diagnostics.probes_taken(), 1);
+
+    // A hundred more reads at the same instant. The records must follow the disk each time.
+    for round in 0..100 {
+        let records = diagnostics.records();
+        assert!(
+            records.iter().any(|x| x.component == "army.journal"),
+            "round {round} lost the journal row"
+        );
+    }
+    assert_eq!(
+        diagnostics.probes_taken(),
+        1,
+        "a cheap read started a process"
+    );
+    assert_eq!(diagnostics.samples_taken(), 1);
+}
+
+/// Records are genuinely reread rather than served from a cache, checked by changing the disk
+/// underneath and taking no clock step at all.
+#[test]
+fn records_reread_the_journal_every_time() {
+    let d = tempfile::tempdir().unwrap();
+    let mut diagnostics = at(d.path());
+    crate::army::personnel::found(d.path(), 1).unwrap();
+
+    let before = diagnostics.army_at(1_000);
+    let events = |rows: &[Diagnostic]| -> f64 {
+        rows.iter()
+            .find(|x| x.component == "army.journal")
+            .and_then(|x| x.metrics.iter().find(|m| m.name == "events"))
+            .and_then(|m| m.value.as_f64())
+            .expect("the journal row counts events")
+    };
+    let first = events(&before);
+
+    // Append to the journal without moving the clock.
+    let mut journal = crate::army::event::Journal::open(d.path().join("run/events.jsonl")).unwrap();
+    journal
+        .append(
+            "carl",
+            crate::army::event::Event::Decided {
+                task: None,
+                what: "something happened".into(),
+            },
+        )
+        .unwrap();
+    drop(journal);
+
+    let after = diagnostics.army_at(1_000);
+    assert_eq!(
+        events(&after),
+        first + 1.0,
+        "the record did not follow the file"
+    );
+    assert_eq!(diagnostics.probes_taken(), 1, "and no probe was rerun");
+}
+
+/// The two expensive sources have separate clocks, so a fast machine interval does not drag
+/// the service probe along with it.
+#[test]
+fn the_machine_and_probe_intervals_are_independent() {
+    let d = tempfile::tempdir().unwrap();
+    let mut diagnostics = at(d.path()).every(Intervals {
+        machine_secs: 1,
+        probe_secs: 10,
+    });
+
+    for second in 0..10 {
+        diagnostics.snapshot_at(1_000 + second);
+    }
+
+    assert_eq!(
+        diagnostics.samples_taken(),
+        10,
+        "the machine should have sampled once a second"
+    );
+    assert_eq!(
+        diagnostics.probes_taken(),
+        1,
+        "the slower probe should not have followed it"
+    );
+
+    diagnostics.snapshot_at(1_010);
+    assert_eq!(diagnostics.probes_taken(), 2, "and it refreshes when due");
+}
+
+/// And the other way round, so neither is secretly driving the other.
+#[test]
+fn a_fast_probe_does_not_drag_the_machine_sampler() {
+    let d = tempfile::tempdir().unwrap();
+    let mut diagnostics = at(d.path()).every(Intervals {
+        machine_secs: 10,
+        probe_secs: 1,
+    });
+
+    for second in 0..10 {
+        diagnostics.snapshot_at(1_000 + second);
+    }
+
+    assert_eq!(diagnostics.probes_taken(), 10);
+    assert_eq!(diagnostics.samples_taken(), 1);
+}
+
+#[test]
+fn a_cache_refreshes_exactly_on_expiry_and_not_before() {
+    let d = tempfile::tempdir().unwrap();
+    let mut diagnostics = at(d.path()).every(Intervals {
+        machine_secs: 5,
+        probe_secs: 5,
+    });
+
+    diagnostics.snapshot_at(1_000);
+    assert_eq!(diagnostics.samples_taken(), 1);
+
+    diagnostics.snapshot_at(1_004);
+    assert_eq!(
+        diagnostics.samples_taken(),
+        1,
+        "one second early is still cached"
+    );
+
+    diagnostics.snapshot_at(1_005);
+    assert_eq!(
+        diagnostics.samples_taken(),
+        2,
+        "exactly on expiry it refreshes"
+    );
+    assert_eq!(diagnostics.last_sampled_at(), Some(1_005));
+}
+
+/// A clock that jumps backwards, which happens when a machine syncs time, must not wedge the
+/// cache shut forever.
+#[test]
+fn a_clock_that_goes_backwards_does_not_freeze_the_cache() {
+    let d = tempfile::tempdir().unwrap();
+    let mut diagnostics = at(d.path());
+
+    diagnostics.machine_at(10_000);
+    assert_eq!(diagnostics.samples_taken(), 1);
+
+    // Saturating arithmetic means an earlier instant reads as no time passed, so it stays
+    // cached rather than panicking or resampling on every frame.
+    diagnostics.machine_at(9_000);
+    assert_eq!(diagnostics.samples_taken(), 1);
+
+    // And once the clock is ahead again by the interval, it recovers.
+    diagnostics.machine_at(10_000 + diagnostics.intervals().machine_secs);
+    assert_eq!(diagnostics.samples_taken(), 2);
+}
+
+/// A watched path that resolves to the root filesystem must not become a second root row.
+#[test]
+fn a_symlinked_home_does_not_duplicate_the_disk_it_points_at() {
+    let d = tempfile::tempdir().unwrap();
+    let real = d.path().canonicalize().unwrap();
+    let link = real.join("link-to-self");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let mut through_link = Diagnostics::new(&link);
+    let taken = through_link.snapshot_at(1_000);
+    assert!(
+        taken.duplicate_components().is_empty(),
+        "duplicated: {:?}",
+        taken.duplicate_components()
+    );
+
+    // The row is named by the resolved path, so two ways in are one component.
+    let mut direct = Diagnostics::new(&real);
+    let straight = direct.snapshot_at(1_000);
+    let ids = |s: &Snapshot| -> Vec<String> {
+        let mut v: Vec<String> = s
+            .components()
+            .iter()
+            .filter(|c| c.starts_with("system.disk"))
+            .map(|c| c.to_string())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(
+        ids(&taken),
+        ids(&straight),
+        "the same filesystem, named twice"
+    );
+}

@@ -57,13 +57,31 @@ impl Personnel {
     /// An agent with no folder is not an error. The hierarchy is compiled in, so a missing
     /// folder means that agent has no state yet rather than that the organisation is broken.
     /// `missing` is how you ask.
+    ///
+    /// **Reading does not write.** This used to create `<home>/army` on the way in, which meant
+    /// that merely opening a panel on a home where no army had been founded left one behind. A
+    /// real panel did exactly that to JJ's home. An empty directory is not much damage, but it
+    /// is the difference between "no army has been founded here" and "an army was founded and
+    /// everybody left", and a read that changes the answer to the question it was asked is worth
+    /// removing rather than working around.
+    ///
+    /// A home with no army reads as an army with no folders, which is what it is. Founding still
+    /// creates the directory, through `empty`.
     pub fn open(home: impl Into<PathBuf>) -> Result<Self> {
         let home = home.into();
         let root = home.join("army");
-        std::fs::create_dir_all(&root)?;
 
         let mut records = BTreeMap::new();
-        for entry in std::fs::read_dir(&root)? {
+        let listing = match std::fs::read_dir(&root) {
+            Ok(l) => l,
+            // Never founded. Not an error, and not a reason to bring it into existence.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self { home, records });
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        for entry in listing {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
                 continue;
