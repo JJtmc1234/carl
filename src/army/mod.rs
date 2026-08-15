@@ -36,6 +36,8 @@ mod campaign;
 pub mod chain;
 pub mod event;
 pub mod org;
+/// Per agent folders that survive a restart.
+pub mod personnel;
 mod report;
 mod roster;
 pub mod task;
