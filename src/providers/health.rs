@@ -382,3 +382,130 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod flattening_tests {
+    use super::*;
+
+    /// Every module that produces canonical diagnostics. If one is added, add it here.
+    const COLLECTORS: &[(&str, &str)] = &[
+        ("system/mod.rs", include_str!("system/mod.rs")),
+        ("system/gpu.rs", include_str!("system/gpu.rs")),
+        ("system/disk.rs", include_str!("system/disk.rs")),
+        ("army/mod.rs", include_str!("army/mod.rs")),
+        ("army/services.rs", include_str!("army/services.rs")),
+        ("army/journal.rs", include_str!("army/journal.rs")),
+        ("diagnostics/mod.rs", include_str!("diagnostics/mod.rs")),
+    ];
+
+    /// The rule that keeps the canonical value rich, enforced rather than remembered.
+    ///
+    /// `flattened` throws away the age of an attempt and the names of the metrics that were
+    /// missing. That is fine at the edge, where a caller has already decided it wants a gap,
+    /// and it is silent data loss anywhere upstream of that. So no collector may call it, and
+    /// this reads their source to check, the same trick `org.rs` uses to keep administrator
+    /// rights out of the organisation table.
+    #[test]
+    fn no_collector_ever_flattens_its_own_output() {
+        for (name, source) in COLLECTORS {
+            // Only the real code. A test in one of these files may say the word.
+            let code = source.split("#[cfg(test)]").next().unwrap_or(source);
+            for (number, line) in code.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                assert!(
+                    !trimmed.contains("flattened("),
+                    "{name}:{} flattens a canonical diagnostic: {trimmed}",
+                    number + 1
+                );
+            }
+        }
+    }
+
+    /// A measured zero is a measurement. Only an unmeasurable thing is unknown.
+    #[test]
+    fn a_genuine_zero_is_never_treated_as_unknown() {
+        assert!(Reading::Float(0.0).is_known());
+        assert!(Reading::Int(0).is_known());
+        assert_eq!(Reading::Float(0.0).as_f64(), Some(0.0));
+
+        let idle = Metric::new("utilisation", Reading::Float(0.0), "%");
+        assert_eq!(
+            idle.rendered(),
+            "0.0%",
+            "an idle card is not an absent card"
+        );
+        assert_ne!(idle.rendered(), "unknown");
+
+        let none = Metric::new("processes", Reading::Int(0), "");
+        assert_eq!(none.rendered(), "0", "zero of something is a count");
+    }
+
+    /// And a zero survives flattening, because flattening only empties a component nobody
+    /// could read at all.
+    #[test]
+    fn flattening_keeps_a_measured_zero() {
+        let idle = Diagnostic::new("system.gpu", Health::Healthy, "card idle", Kind::Sampled)
+            .measured(1_000)
+            .with(Metric::new("utilisation", Reading::Float(0.0), "%"))
+            .with(Metric::new("memory used", Reading::Int(0), " MiB"));
+
+        let flat = idle.flattened();
+        assert_eq!(flat.measured_at, Some(1_000), "we did read it");
+        assert_eq!(flat.metrics.len(), 2);
+        assert_eq!(flat.metrics[0].1, "0.0%");
+        assert_eq!(flat.metrics[1].1, "0 MiB");
+    }
+
+    /// The two halves of the contract, side by side, which is the pair the panel depends on.
+    #[test]
+    fn rich_keeps_the_attempt_and_flattened_discards_it() {
+        let rich = Diagnostic::new(
+            "system.gpu",
+            Health::Unknown,
+            "no card answered",
+            Kind::Sampled,
+        )
+        .measured(1_000)
+        .with(Metric::unknown("utilisation", "%"))
+        .with(Metric::unknown("memory used", " MiB"));
+
+        // Rich: we looked, at a known moment, and we know what was missing.
+        assert_eq!(rich.measured_at, Some(1_000));
+        assert_eq!(rich.metrics.len(), 2);
+        assert_eq!(rich.metrics[0].name, "utilisation");
+        assert!(!rich.metrics[0].value.is_known());
+        assert_eq!(rich.metrics[0].rendered(), "unknown");
+
+        // Flattened: a gap, and nothing about the attempt survives.
+        let flat = rich.flattened();
+        assert_eq!(flat.measured_at, None);
+        assert!(flat.metrics.is_empty());
+        assert_eq!(flat.health, Health::Unknown);
+        assert_eq!(flat.group, "system");
+
+        // And the canonical value is untouched by having been flattened.
+        assert_eq!(rich.measured_at, Some(1_000));
+        assert_eq!(rich.metrics.len(), 2);
+    }
+
+    /// An event driven unknown has no age to lose, so both forms agree.
+    #[test]
+    fn an_event_driven_unknown_flattens_without_losing_an_age_it_never_had() {
+        let rich = Diagnostic::new(
+            "army.personnel",
+            Health::Unknown,
+            "no army founded",
+            Kind::EventDriven,
+        )
+        .with(Metric::unknown("agents", ""));
+
+        assert_eq!(rich.measured_at, None);
+        let flat = rich.flattened();
+        assert_eq!(flat.measured_at, None);
+        assert!(flat.metrics.is_empty());
+        assert_eq!(flat.kind, Kind::EventDriven);
+    }
+}

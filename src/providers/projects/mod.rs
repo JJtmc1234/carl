@@ -288,17 +288,39 @@ fn next_sequence(project: &ProjectId, existing: &[Milestone]) -> usize {
         + 1
 }
 
+/// Appends one line, repairing a broken record boundary first.
+///
+/// The repair matters. A write cut off part way through leaves a file that does not end in a
+/// newline, and appending onto that glues the new record to the broken one. The result is that
+/// an interruption costs two milestones rather than one, and the second is the one somebody
+/// just recorded and believes is safe. So if the file does not end cleanly, the boundary is
+/// closed before anything else is written. The damaged line stays damaged and stays counted by
+/// `milestone_gaps`, which is honest, but it no longer takes its successor with it.
 fn append_line(path: &Path, line: &str) -> Result<()> {
-    use std::io::Write;
+    use std::io::{Read, Seek, SeekFrom, Write};
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(path)?;
+
+    let mut repair = "";
+    let length = file.metadata()?.len();
+    if length > 0 {
+        let mut last = [0u8; 1];
+        file.seek(SeekFrom::End(-1))?;
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            repair = "\n";
+        }
+    }
+
     // One write call, so two appenders cannot interleave a partial line.
-    file.write_all(format!("{line}\n").as_bytes())?;
+    file.write_all(format!("{repair}{line}\n").as_bytes())?;
     file.flush()?;
     Ok(())
 }

@@ -183,3 +183,118 @@ fn an_unsaved_buffer_can_be_compared_with_the_file_it_came_from() {
     let out = buffer_vs_disk(&on_disk, "one\ntwo\nthree\nfour\n");
     assert!(out.contains("+four"), "{out}");
 }
+
+// ---- hardening ----
+
+/// A repository with no commits yet has no HEAD to compare against. That has to fail with
+/// something a person can read rather than an empty diff that looks like no changes.
+#[test]
+fn a_repository_with_no_commits_yet_fails_clearly() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().canonicalize().unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["init", "--quiet", "-b", "main"])
+        .output()
+        .expect("git runs");
+    std::fs::write(root.join("new.txt"), "first ever\n").unwrap();
+
+    let err = against_head(&root, Path::new("new.txt"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("git diff failed"), "{err}");
+    assert!(!err.is_empty());
+
+    // The working tree still lists what is there, which is the useful answer in this state.
+    let changes = worktree_changes(&root).unwrap();
+    assert_eq!(changes.len(), 1);
+    assert!(changes[0].is_untracked());
+    assert_eq!(summarise(&root).unwrap(), "1 untracked");
+}
+
+/// Git says binary files differ rather than printing them, which is the behaviour to keep. A
+/// panel showing raw bytes in a diff pane is worse than a panel saying it will not.
+#[test]
+fn a_binary_file_reports_that_it_differs_rather_than_dumping_bytes() {
+    let (root, _d) = repository();
+    let path = root.join("thing.bin");
+    std::fs::write(&path, [0u8, 159, 146, 150, 255, 254]).unwrap();
+
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .expect("git runs")
+    };
+    git(&["add", "thing.bin"]);
+    git(&["commit", "--quiet", "-m", "add a binary"]);
+
+    std::fs::write(&path, [1u8, 2, 3, 4, 5, 6]).unwrap();
+    let out = against_head(&root, Path::new("thing.bin")).unwrap();
+
+    assert!(out.contains("Binary files"), "{out}");
+    assert!(!out.contains('\u{0}'), "raw bytes reached the diff output");
+}
+
+/// The editor refuses binary outright, so the two agree about what is text.
+#[test]
+fn the_editor_and_the_diff_agree_that_binary_is_not_text() {
+    let (root, _d) = repository();
+    let path = root.join("thing.bin");
+    std::fs::write(&path, [0xff, 0xfe, 0x00, 0x01]).unwrap();
+
+    let opened = crate::providers::workspace::editor::open(
+        &path,
+        crate::providers::workspace::editor::Mode::ReadWrite,
+    );
+    assert!(opened.is_err(), "the editor opened a binary file");
+}
+
+/// Every argument is passed as an argument. There is no shell anywhere in this module, and a
+/// file whose name is shell syntax proves it.
+#[test]
+fn a_filename_that_is_shell_syntax_is_only_a_filename() {
+    let (root, _d) = repository();
+    let sentinel = std::path::Path::new("/tmp/carl-panel-diff-should-not-exist");
+    let hostile = "; touch /tmp/carl-panel-diff-should-not-exist";
+
+    // Asking about it is safe whether or not it exists.
+    let _ = against_head(&root, Path::new(hostile));
+    let _ = repository_of(Path::new(hostile));
+    assert!(!sentinel.exists(), "a filename was executed");
+
+    // And when a file genuinely has a name made of shell syntax, it is tracked as a name.
+    // No slash in this one, so it really is a single filename rather than a path.
+    let named_like_a_command = "; touch sentinel-was-created; echo .txt";
+    let local_sentinel = root.join("sentinel-was-created");
+    std::fs::write(root.join(named_like_a_command), "contents\n").unwrap();
+
+    let changes = worktree_changes(&root).unwrap();
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path.to_string_lossy().contains("touch")),
+        "the file was not listed: {changes:?}"
+    );
+    assert!(!local_sentinel.exists(), "listing it executed it");
+    let _ = against_head(&root, Path::new(named_like_a_command));
+    assert!(!local_sentinel.exists(), "diffing it executed it");
+}
+
+#[test]
+fn a_subcommand_with_a_dangerous_flag_is_still_refused_by_name() {
+    let (root, _d) = repository();
+    // The check is on the subcommand, so no combination of flags gets a writing command in.
+    for attempt in [
+        vec!["checkout", "."],
+        vec!["reset", "--hard", "HEAD"],
+        vec!["clean", "-fdx"],
+        vec!["push", "--force"],
+        vec!["rebase", "--abort"],
+    ] {
+        assert!(run(&root, &attempt).is_err(), "{attempt:?} was allowed");
+    }
+}

@@ -490,3 +490,257 @@ fn the_governance_feed_is_not_a_milestone_source() {
     );
     assert_eq!(s.list().unwrap().len(), 1, "and it is not a project either");
 }
+
+// ---- stress and recovery ----
+
+#[test]
+fn many_appends_keep_their_order_and_their_ids() {
+    let (s, _d) = saved();
+    for n in 1..=200 {
+        s.record(milestone(&format!("thing {n}"), n as u64))
+            .unwrap();
+    }
+
+    let all = s.milestones(&id()).unwrap();
+    assert_eq!(all.len(), 200);
+    for (index, m) in all.iter().enumerate() {
+        assert_eq!(m.id, format!("jjtorio-{}", index + 1), "at {index}");
+        assert_eq!(m.title, format!("thing {}", index + 1));
+    }
+    assert_eq!(s.milestone_gaps(&id()).unwrap(), 0);
+
+    let recent = s.recent_milestones(&id(), 3).unwrap();
+    assert_eq!(recent[0].id, "jjtorio-200", "newest first");
+    assert_eq!(recent[2].id, "jjtorio-198");
+}
+
+/// A half written final line, which is what an interrupted append leaves behind.
+#[test]
+fn a_truncated_last_line_costs_one_milestone_and_is_counted() {
+    let (s, d) = saved();
+    s.record(milestone("one", 100)).unwrap();
+    s.record(milestone("two", 200)).unwrap();
+
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+    let whole = std::fs::read_to_string(&path).unwrap();
+    // Cut the file mid record, exactly as a crash during a write would.
+    let cut = whole.len() - 20;
+    std::fs::write(&path, &whole[..cut]).unwrap();
+
+    let survived = s.milestones(&id()).unwrap();
+    assert_eq!(survived.len(), 1, "the whole records are still readable");
+    assert_eq!(survived[0].title, "one");
+    assert_eq!(
+        s.milestone_gaps(&id()).unwrap(),
+        1,
+        "and the loss is visible"
+    );
+
+    // The store recovers: the next append is well formed and does not reuse an id.
+    let next = s.record(milestone("three", 300)).unwrap();
+    assert_eq!(next.id, "jjtorio-2", "one is the highest that survived");
+    assert_eq!(s.milestones(&id()).unwrap().len(), 2);
+}
+
+/// A bad line in the middle must not hide everything after it.
+#[test]
+fn a_corrupt_middle_line_does_not_hide_the_ones_after_it() {
+    let (s, d) = saved();
+    for n in 1..=5 {
+        s.record(milestone(&format!("thing {n}"), n)).unwrap();
+    }
+
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+    let mut lines: Vec<String> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    lines[2] = "{ this line is ruined".to_string();
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+    let survived = s.milestones(&id()).unwrap();
+    assert_eq!(survived.len(), 4, "four of five are still there");
+    assert_eq!(s.milestone_gaps(&id()).unwrap(), 1);
+    assert!(
+        survived.iter().any(|m| m.title == "thing 5"),
+        "the ones after the hole were lost"
+    );
+}
+
+/// Two milestones with the same id would be a timeline nobody can point at.
+#[test]
+fn a_hand_written_duplicate_id_does_not_spread() {
+    let (s, d) = saved();
+    s.record(milestone("one", 100)).unwrap();
+
+    // Somebody appends a second record claiming the same id.
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+    let first = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("{first}{first}")).unwrap();
+
+    let all = s.milestones(&id()).unwrap();
+    assert_eq!(all.len(), 2, "both lines parse");
+    assert_eq!(all[0].id, all[1].id, "and they do collide");
+
+    // The next id is taken from the highest present, so the store does not add a third.
+    let next = s.record(milestone("two", 200)).unwrap();
+    assert_eq!(next.id, "jjtorio-2");
+
+    let ids: Vec<String> = s
+        .milestones(&id())
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(
+        ids.iter().filter(|i| *i == "jjtorio-2").count(),
+        1,
+        "the store made the collision worse: {ids:?}"
+    );
+}
+
+#[test]
+fn a_missing_milestone_file_is_an_empty_history_rather_than_an_error() {
+    let (s, _d) = saved();
+    assert!(s.milestones(&id()).unwrap().is_empty());
+    assert_eq!(s.milestone_gaps(&id()).unwrap(), 0);
+    assert!(s.suggestions(&id()).unwrap().is_empty());
+
+    let view = s.view(&id()).unwrap().unwrap();
+    assert!(view.milestones.is_empty());
+    assert_eq!(view.milestone_gaps, 0);
+}
+
+/// A project whose file is gone is absent. It is never a blank project that looks fine.
+#[test]
+fn a_deleted_project_file_leaves_no_ghost_project() {
+    let (s, d) = saved();
+    s.record(milestone("one", 100)).unwrap();
+    std::fs::remove_file(d.path().join("projects/jjtorio/project.json")).unwrap();
+
+    assert_eq!(s.get(&id()).unwrap(), None);
+    assert!(s.list().unwrap().is_empty());
+    assert!(s.view(&id()).unwrap().is_none());
+
+    // And a milestone cannot be recorded against something that is not there any more.
+    assert!(s.record(milestone("two", 200)).is_err());
+}
+
+#[test]
+fn unicode_survives_a_round_trip_intact() {
+    let (s, d) = store();
+    let mut p = Project::new(
+        ProjectId::new("jjtorio").unwrap(),
+        "JJtorio ⚙️ 工場",
+        "Une base qui marche, même à minuit. Ça compte.",
+    );
+    p.phase = "phase deux ⇒ ceintures".into();
+    p.blockers = vec!["la ligne de production est bloquée".into()];
+    s.save(&p).unwrap();
+
+    let reopened = Projects::open(d.path());
+    let back = reopened
+        .get(&ProjectId::new("jjtorio").unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(back, p, "unicode did not survive");
+    assert!(back.name.contains('工'));
+
+    let m = reopened
+        .record(NewMilestone {
+            project: ProjectId::new("jjtorio").unwrap(),
+            at: 1,
+            title: "les ceintures s'équilibrent ✅".into(),
+            detail: Some("première fois sous charge".into()),
+            evidence: None,
+            achievement: Achievement::FeatureWorks,
+            source: Source::Jj,
+        })
+        .unwrap();
+    let back = reopened
+        .milestones(&ProjectId::new("jjtorio").unwrap())
+        .unwrap();
+    assert_eq!(back[0], m);
+    assert!(back[0].title.contains('✅'));
+}
+
+/// Several readers at once must all see the same thing and none of them disturb it.
+#[test]
+fn concurrent_readers_agree_and_change_nothing() {
+    let (s, d) = saved();
+    for n in 1..=20 {
+        s.record(milestone(&format!("thing {n}"), n)).unwrap();
+    }
+    let home = d.path().to_path_buf();
+    let expected = s.milestones(&id()).unwrap();
+
+    let readers: Vec<_> = (0..8)
+        .map(|_| {
+            let home = home.clone();
+            std::thread::spawn(move || {
+                let store = Projects::open(&home);
+                let mut seen = Vec::new();
+                for _ in 0..25 {
+                    seen.push(
+                        store
+                            .milestones(&ProjectId::new("jjtorio").unwrap())
+                            .unwrap(),
+                    );
+                    store.list().unwrap();
+                    store.view(&ProjectId::new("jjtorio").unwrap()).unwrap();
+                }
+                seen
+            })
+        })
+        .collect();
+
+    for reader in readers {
+        for round in reader.join().expect("a reader panicked") {
+            assert_eq!(round, expected, "two readers disagreed");
+        }
+    }
+    assert_eq!(
+        s.milestones(&id()).unwrap(),
+        expected,
+        "reading changed the store"
+    );
+}
+
+/// A project written while the panel is reading must never be seen half written, which is what
+/// the write to a neighbouring file and rename buys.
+#[test]
+fn a_project_is_never_observed_half_written() {
+    let (s, d) = saved();
+    let home = d.path().to_path_buf();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let reading = {
+        let home = home.clone();
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let store = Projects::open(&home);
+            let mut reads = 0u32;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                // Either the old project or the new one, never a broken one.
+                match store.get(&ProjectId::new("jjtorio").unwrap()) {
+                    Ok(Some(p)) => assert!(!p.goal.is_empty(), "a half written project was read"),
+                    Ok(None) => panic!("the project vanished mid write"),
+                    Err(e) => panic!("a torn read: {e}"),
+                }
+                reads += 1;
+            }
+            reads
+        })
+    };
+
+    for n in 0..300 {
+        let mut p = s.get(&id()).unwrap().unwrap();
+        p.phase = format!("phase {n}");
+        s.save(&p).unwrap();
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let reads = reading.join().expect("the reader panicked");
+    assert!(reads > 0, "the reader never ran");
+}
