@@ -1,3 +1,10 @@
+[workspace]
+members = ["panel"]
+# The CLI keeps building and testing on its own by default, so adding a GUI to the repository
+# does not put eframe in front of everybody who only wanted `cargo test`. The panel is built
+# and tested explicitly with `-p carl-panel`, and `--workspace` still covers both.
+default-members = ["."]
+
 [package]
 name = "carl"
 version = "0.1.0"

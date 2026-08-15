@@ -1,0 +1,24 @@
+[package]
+name = "carl-panel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+
+[[bin]]
+name = "carl-panel"
+path = "src/main.rs"
+
+[lib]
+name = "carl_panel"
+path = "src/lib.rs"
+
+[dependencies]
+# The army types. The panel reads them and defines no second copy of any of them.
+carl = { path = ".." }
+# Chosen after checking the machine rather than by preference. Tauri needs webkit2gtk and
+# gtk-rs needs the gtk dev packages, and none of those are installed or installable without
+# sudo, which agents do not get. eframe is pure Rust and needs nothing added to the system.
+eframe = { version = "0.29", default-features = false, features = ["glow", "wayland", "x11"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
