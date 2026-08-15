@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::command::{Intervention, InterventionKind};
-use crate::model::{Health, Reading};
+use crate::model::{Health, Kind};
 
 #[test]
 fn the_opening_snapshot_is_the_real_organisation() {
@@ -32,6 +32,10 @@ fn the_seed_task_went_through_the_real_chain() {
     let task = snap.tasks.first().expect("a task");
 
     assert_eq!(task.assigner, "mason");
+    assert!(
+        task.project.is_some(),
+        "the fixture task belongs to a project"
+    );
     assert_eq!(task.owner, "nora");
     assert!(
         carl::army::org::may_delegate(&task.assigner, &task.owner),
@@ -53,15 +57,11 @@ fn the_diagnostics_include_something_unmeasured() {
         "nothing on the board is unmeasured, so the unknown state is never exercised"
     );
     assert!(
-        snap.diagnostics
-            .iter()
-            .any(|d| d.reading == Reading::Sampled),
+        snap.diagnostics.iter().any(|d| d.kind == Kind::Sampled),
         "and nothing is sampled"
     );
     assert!(
-        snap.diagnostics
-            .iter()
-            .any(|d| d.reading == Reading::EventDriven),
+        snap.diagnostics.iter().any(|d| d.kind == Kind::EventDriven),
         "and nothing is event driven"
     );
 }

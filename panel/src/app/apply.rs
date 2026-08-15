@@ -103,7 +103,12 @@ impl App {
             }
 
             PanelEvent::ProjectChanged(p) => {
-                match self.snapshot.projects.iter_mut().find(|x| x.name == p.name) {
+                match self
+                    .snapshot
+                    .projects
+                    .iter_mut()
+                    .find(|x| x.project.id == p.project.id)
+                {
                     Some(slot) => *slot = *p,
                     None => self.snapshot.projects.push(*p),
                 }
@@ -114,9 +119,11 @@ impl App {
                     .snapshot
                     .projects
                     .iter_mut()
-                    .find(|p| p.name == project)
+                    .find(|p| p.project.name == project)
                 {
-                    p.milestones.push(*milestone);
+                    // Newest first, which is the order the provider keeps them in and the
+                    // order the pane draws.
+                    p.milestones.insert(0, *milestone);
                 }
             }
         }

@@ -1,11 +1,15 @@
 //! The mapping is where honesty is either kept or quietly lost, so it is tested on its own.
+//!
+//! Diagnostics and projects are no longer mapped at all: they are Process 3's canonical types
+//! on the wire and on the screen. What is left here is the agent overlay, which is genuinely
+//! derived, and the snapshot joins the screen relies on.
+
+use carl::panel::view::{
+    AgentView as WireAgent, CarlView, LastEvent, Maybe, PanelSnapshot, TaskView,
+};
 
 use super::*;
-use crate::model::{Health, Phase, Reading};
-use carl::panel::view::{
-    AgentView as WireAgent, CarlView, DiagnosticView, Health as WireHealth, LastEvent, Maybe,
-    Metric, Milestone as WireMilestone, PanelSnapshot, ProjectView, TaskView,
-};
+use crate::model::AgentStatus;
 
 fn agent(name: &str, enlisted: bool) -> WireAgent {
     WireAgent {
@@ -35,6 +39,7 @@ fn task(id: &str, owner: &str, status: &str) -> TaskView {
         owner: owner.into(),
         assigner: "mason".into(),
         parent: None,
+        project: carl::ProjectId::new("jjtorio").ok(),
         status: status.into(),
         attempts: 1,
         must: vec!["tests pass".into()],
@@ -71,33 +76,34 @@ fn nobody_looked_is_not_the_same_as_nothing_there() {
 }
 
 /// An agent nobody has enlisted is unknown, which is a different fact from idle.
+///
+/// This is also what stops a process indicator going green because some Claude process exists
+/// somewhere. Unknown stays unknown until something measured this one.
 #[test]
 fn an_unenlisted_agent_is_unknown_rather_than_idle() {
     assert_eq!(
         one_agent(&agent("nora", false), &[]).status,
-        crate::model::AgentStatus::Unknown
+        AgentStatus::Unknown
     );
     assert_eq!(
         one_agent(&agent("nora", true), &[]).status,
-        crate::model::AgentStatus::Idle
+        AgentStatus::Idle
     );
 }
 
 #[test]
 fn the_held_task_decides_what_the_agent_is_doing() {
-    let tasks = vec![task("t1", "nora", "submitted")];
     let mut wire = agent("nora", true);
     wire.holding = Some("t1".into());
+
+    let submitted = vec![task("t1", "nora", "submitted")];
     assert_eq!(
-        one_agent(&wire, &tasks).status,
-        crate::model::AgentStatus::AwaitingReview
+        one_agent(&wire, &submitted).status,
+        AgentStatus::AwaitingReview
     );
 
-    let tasks = vec![task("t1", "nora", "in hand")];
-    assert_eq!(
-        one_agent(&wire, &tasks).status,
-        crate::model::AgentStatus::Working
-    );
+    let in_hand = vec![task("t1", "nora", "in hand")];
+    assert_eq!(one_agent(&wire, &in_hand).status, AgentStatus::Working);
 }
 
 /// Blocked beats whatever the task says, because it is the thing somebody has to act on.
@@ -109,119 +115,8 @@ fn blocked_wins_and_names_the_task_it_is_stuck_on() {
     wire.blocked = Maybe::known(true);
 
     let view = one_agent(&wire, &tasks);
-    assert_eq!(view.status, crate::model::AgentStatus::Blocked);
+    assert_eq!(view.status, AgentStatus::Blocked);
     assert!(view.blocker.unwrap().contains("belt rate"));
-}
-
-/// The two boards are split here rather than upstream, from prefixes Process 3 agreed are stable.
-#[test]
-fn the_board_a_component_lands_on_comes_from_its_prefix() {
-    assert_eq!(diagnostics::group_of("system.cpu"), "system");
-    assert_eq!(diagnostics::group_of("system.gpu"), "system");
-    assert_eq!(diagnostics::group_of("army.blockers"), "army");
-    assert_eq!(diagnostics::group_of("carl.process"), "army");
-    assert_eq!(diagnostics::group_of("agent.nora"), "army");
-    assert_eq!(
-        diagnostics::group_of("weird"),
-        "army",
-        "anything unknown is army"
-    );
-}
-
-/// A machine number decays and army state does not, so only one of them carries an age.
-#[test]
-fn only_machine_readings_are_sampled() {
-    assert_eq!(diagnostics::reading_of("system.cpu"), Reading::Sampled);
-    assert_eq!(diagnostics::reading_of("army.tasks"), Reading::EventDriven);
-}
-
-/// Process 3 keeps a sampled unknown carrying its timestamp and metric names on purpose, and
-/// the panel must draw that as a gap without ever turning it into a zero.
-#[test]
-fn an_unknown_reading_keeps_its_detail_and_never_becomes_zero() {
-    let wire = DiagnosticView {
-        component: "system.gpu".into(),
-        health: WireHealth::Unknown,
-        summary: "no NVIDIA card present".into(),
-        measured_at: 1_760_000_000,
-        metrics: vec![Metric {
-            name: "vram".into(),
-            value: 0.0,
-            unit: Some("MB".into()),
-        }],
-    };
-    let drawn = one_diagnostic(&wire);
-
-    assert_eq!(drawn.health, Health::Unknown);
-    assert_eq!(
-        drawn.measured_at,
-        Some(1_760_000_000),
-        "looked at and found nothing is not the same as never looked"
-    );
-    assert_eq!(
-        drawn.summary, "no NVIDIA card present",
-        "the reason survives"
-    );
-    assert_eq!(drawn.metrics.len(), 1, "the metric name survives");
-    assert!(!drawn.health.wants_attention(), "a gap is not an alarm");
-}
-
-/// Zero is not a time anybody measured at, so it reads back as the absence it stands for.
-#[test]
-fn a_zero_timestamp_means_never_measured() {
-    let wire = DiagnosticView {
-        component: "system.temperature".into(),
-        health: WireHealth::Unknown,
-        summary: "no sensor".into(),
-        measured_at: 0,
-        metrics: Vec::new(),
-    };
-    let drawn = one_diagnostic(&wire);
-    assert_eq!(drawn.measured_at, None);
-    assert_eq!(drawn.age_secs(500), None, "and therefore has no age");
-}
-
-/// A phase spelled differently is unknown rather than the nearest guess.
-#[test]
-fn an_unrecognised_phase_is_unknown_rather_than_a_guess() {
-    assert_eq!(projects::phase_of("building"), Phase::Building);
-    assert_eq!(projects::phase_of("  Verifying "), Phase::Verifying);
-    assert_eq!(projects::phase_of("gardening"), Phase::Unknown);
-    assert_eq!(projects::phase_of(""), Phase::Unknown);
-}
-
-/// Nothing about a project is inferred. What the backend did not say stays empty.
-#[test]
-fn a_project_carries_only_what_the_backend_said() {
-    let wire = ProjectView {
-        id: "p1".into(),
-        name: "jjtorio".into(),
-        goal: "a factorio mod".into(),
-        phase: "building".into(),
-        department: Some("coding".into()),
-        active_tasks: vec!["t1".into()],
-        blockers: vec!["no lua".into()],
-        milestones: vec![WireMilestone {
-            at: 500,
-            what: "belts verified".into(),
-        }],
-    };
-    let drawn = one_project(&wire);
-
-    assert_eq!(drawn.phase, Phase::Building);
-    assert_eq!(drawn.department.as_deref(), Some("coding"));
-    assert_eq!(
-        drawn.owner, None,
-        "a department is not an accountable agent"
-    );
-    assert_eq!(drawn.status, None, "no status was sent, so none is drawn");
-    assert_eq!(drawn.next_objective, None);
-    assert!(
-        drawn.active_agents.is_empty(),
-        "the backend never said who is on it, so nobody is shown"
-    );
-    assert_eq!(drawn.active_tasks, vec!["t1".to_string()]);
-    assert_eq!(drawn.milestones.len(), 1);
 }
 
 /// A whole snapshot, end to end, with the joins the screen relies on.
@@ -265,4 +160,31 @@ fn a_backend_snapshot_becomes_a_drawable_one() {
         drawn.conversation.is_empty(),
         "the backend keeps no history, so none is fabricated"
     );
+}
+
+/// The link a project pane walks is the one the record carries, not a guess.
+#[test]
+fn a_task_belongs_to_the_project_the_record_names() {
+    let mut wire = PanelSnapshot {
+        seq: 1,
+        at: 1,
+        carl: CarlView {
+            status: Maybe::Unknown,
+            pending: Vec::new(),
+            objectives: Vec::new(),
+            recent_delegations: Vec::new(),
+        },
+        agents: Vec::new(),
+        tasks: vec![task("t1", "nora", "in hand"), task("t2", "nora", "in hand")],
+        projects: Vec::new(),
+        diagnostics: Vec::new(),
+    };
+    wire.tasks[1].project = None;
+
+    let drawn = snapshot(wire);
+    let jjtorio = carl::ProjectId::new("jjtorio").unwrap();
+    let mine = drawn.tasks_in(&jjtorio);
+
+    assert_eq!(mine.len(), 1, "only the task the record put in the project");
+    assert_eq!(mine[0].id, "t1");
 }

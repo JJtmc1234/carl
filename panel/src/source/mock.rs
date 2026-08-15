@@ -266,6 +266,7 @@ fn seed_task() -> TaskView {
         owner: "nora".into(),
         assigner: "mason".into(),
         parent: None,
+        project: carl::ProjectId::new("jjtorio").ok(),
         status: "in hand".into(),
         attempts: 0,
         must: vec![

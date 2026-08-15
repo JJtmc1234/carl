@@ -15,6 +15,7 @@
 //!   wire.rs      the frames, one JSON object per line, both directions
 //!   command.rs   what the panel may ask for, and how a JJ intervention is written down
 //!   tasks.rs     tasks rebuilt from the record, because they exist nowhere else
+//!   facts.rs     the provider backed half, and how projects join to tasks
 //!   snapshot.rs  everything at one moment, from the three places that actually know
 //!   listen.rs    the socket, owner only, which is the authentication
 //!   client.rs    the typed client, so nothing above it deals in bytes
@@ -35,6 +36,7 @@
 
 pub mod client;
 pub mod command;
+pub mod facts;
 pub mod listen;
 pub mod live;
 pub mod serve;
@@ -48,6 +50,7 @@ mod tests;
 
 pub use client::{Done, Events, Incoming, PanelClient};
 pub use command::{PanelCommand, Recorded};
+pub use facts::Facts;
 pub use listen::{Bound, bind, hold, socket_path};
 pub use live::{Health as Link, LivePanel, Update};
 pub use serve::Server;

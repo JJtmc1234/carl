@@ -122,9 +122,14 @@ fn wants_attention(app: &App, tab: Tab) -> usize {
             .snapshot
             .diagnostics
             .iter()
-            .filter(|d| d.health.wants_attention())
+            .filter(|d| widgets::wants_attention(d.health))
             .count(),
-        Tab::Projects => app.snapshot.projects.iter().filter(|p| p.blocked()).count(),
+        Tab::Projects => app
+            .snapshot
+            .projects
+            .iter()
+            .filter(|p| !p.project.blockers.is_empty())
+            .count(),
     }
 }
 
@@ -259,7 +264,7 @@ mod tests {
             .snapshot
             .diagnostics
             .iter()
-            .filter(|d| d.health.wants_attention())
+            .filter(|d| widgets::wants_attention(d.health))
             .count();
         assert_eq!(wants_attention(&a, Tab::Diagnostics), degraded);
         assert!(

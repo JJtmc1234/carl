@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::task::{Status, TaskId};
-use crate::Result;
+use crate::{ProjectId, Result};
 
 /// Something worth being able to ask about later.
 ///
@@ -43,6 +43,13 @@ pub enum Event {
         parent: Option<TaskId>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         must: Vec<String>,
+        /// Which project the work belongs to, when it belongs to one.
+        ///
+        /// Defaults, so every line written before projects existed still reads, as `None`. An
+        /// old journal is not a broken journal, and refusing to open one would throw away the
+        /// only record of everything that happened before this field did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<ProjectId>,
     },
     /// A task moved from one state to another.
     Moved {
@@ -301,6 +308,7 @@ mod tests {
                 goal: "fix the counter".into(),
                 parent: None,
                 must: vec!["it works".into()],
+                project: None,
             },
         )
         .unwrap();

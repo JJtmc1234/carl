@@ -22,7 +22,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result};
+use crate::{Error, ProjectId, Result};
 
 /// Names one task, unique within a run.
 ///
@@ -184,6 +184,20 @@ pub struct Task {
     /// Somebody who has failed the same task four times is not going to succeed on the fifth,
     /// and this is the only place that is visible.
     pub attempts: u32,
+    /// Which project this task is part of, if any.
+    ///
+    /// Deliberately not `workspace`. A workspace is where the files are, a project is who the
+    /// work belongs to, and they answer different questions: two tasks in one worktree can serve
+    /// two projects, and one project can span several worktrees. Collapsing them would make the
+    /// panel unable to tell a shared checkout from shared ownership.
+    ///
+    /// Set when the task is created and never afterwards. There is no setter on purpose: a
+    /// worker who could move her own task into another project could quietly reassign work
+    /// nobody agreed to move.
+    ///
+    /// A `Task` is never written to disk, so this survives a restart only by riding on the
+    /// `Delegated` event. That is why the event carries it too.
+    pub project: Option<ProjectId>,
     /// Where the work happens, once coding tasks get their own worktree and branch.
     ///
     /// Carried now and filled later, so adding worktrees does not change this type and every
@@ -219,6 +233,7 @@ impl Task {
             owner: owner.to_string(),
             created_by: created_by.to_string(),
             parent: None,
+            project: None,
             attempts: 0,
             workspace: None,
         })
@@ -234,7 +249,21 @@ impl Task {
     ) -> Result<Self> {
         let mut task = Self::assign(created_by, owner, goal, verification)?;
         task.parent = Some(parent.id.clone());
+        // Inherited rather than asked for. Work split off a project's task is that project's
+        // work, and making the caller repeat it would let a lead drop a subtask out of its
+        // project by forgetting, which is the failure nobody would notice.
+        task.project = parent.project.clone();
         Ok(task)
+    }
+
+    /// Says which project this task belongs to.
+    ///
+    /// Only at creation, before anybody has been handed it. Consuming `self` rather than taking
+    /// `&mut self` is what makes that true in the type: there is no way to reach a task somebody
+    /// is already holding and move it into a different project.
+    pub fn for_project(mut self, project: ProjectId) -> Self {
+        self.project = Some(project);
+        self
     }
 
     /// Moves the task on, refusing a move that is not allowed.

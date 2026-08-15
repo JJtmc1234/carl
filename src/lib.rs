@@ -30,6 +30,7 @@ pub mod heard;
 pub mod log;
 pub mod memory;
 pub mod panel;
+pub mod providers;
 pub mod pushback;
 pub mod remember;
 pub mod slack;
@@ -51,6 +52,57 @@ pub use threads::{Registry, SessionId};
 pub use whisper::{Tier, Whisper};
 
 use serde::{Deserialize, Serialize};
+/// A project's name on disk, which is also its folder.
+///
+/// Here rather than in `providers::projects` because `army::task` names one, and an army that
+/// had to depend on a provider layer to say which project a task belongs to would have the
+/// dependency upside down. Shared id types live at the root next to [`ThreadId`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ProjectId(String);
+
+impl ProjectId {
+    pub fn new(raw: impl Into<String>) -> Result<Self> {
+        let raw = raw.into();
+        let ok = !raw.is_empty()
+            && raw.len() <= 64
+            && raw
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && !raw.starts_with('-')
+            && !raw.ends_with('-');
+        if ok {
+            Ok(Self(raw))
+        } else {
+            Err(Error::Refused(format!(
+                "a project id must be lowercase letters, digits and dashes, got {raw:?}"
+            )))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ProjectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl TryFrom<String> for ProjectId {
+    type Error = Error;
+    fn try_from(value: String) -> Result<Self> {
+        Self::new(value)
+    }
+}
+
+impl From<ProjectId> for String {
+    fn from(value: ProjectId) -> Self {
+        value.0
+    }
+}
 
 /// Names one conversation. A Slack thread, or `cli` when talking to Carl from a terminal.
 ///

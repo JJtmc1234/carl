@@ -82,7 +82,7 @@ pub enum PanelEvent {
     },
     Delegated(Box<crate::model::Delegation>),
     DiagnosticChanged(Box<crate::model::Diagnostic>),
-    ProjectChanged(Box<crate::model::Project>),
+    ProjectChanged(Box<crate::model::ProjectView>),
     MilestoneReached {
         project: String,
         milestone: Box<crate::model::Milestone>,

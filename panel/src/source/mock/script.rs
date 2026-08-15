@@ -11,9 +11,12 @@ use carl::army::task::TaskId;
 
 use super::EPOCH;
 use crate::command::{Intervention, InterventionKind};
+use carl::ProjectId;
+use carl::providers::health::{Kind, Metric, Reading};
+use carl::providers::projects::{Achievement, Project, ProjectView, Source, Status};
+
 use crate::model::{
-    AgentStatus, AgentView, Decision, Delegation, Diagnostic, Health, Link, Milestone, Phase,
-    ProcessState, Project, Reading,
+    AgentStatus, AgentView, Decision, Delegation, Diagnostic, Health, Link, Milestone, ProcessState,
 };
 use crate::source::PanelEvent;
 
@@ -68,7 +71,7 @@ pub fn timeline() -> Vec<(Duration, PanelEvent)> {
                 Health::Healthy,
                 "2 of 5 agent processes running",
                 &[("running", "2"), ("stopped", "3")],
-                Reading::EventDriven,
+                Kind::EventDriven,
                 EPOCH + 130,
             ))),
         ),
@@ -111,7 +114,7 @@ pub fn timeline() -> Vec<(Duration, PanelEvent)> {
                 Health::Blocked,
                 "1 worker blocked on a missing dependency",
                 &[("blocked", "1"), ("agent", "nora")],
-                Reading::EventDriven,
+                Kind::EventDriven,
                 EPOCH + 260,
             ))),
         ),
@@ -169,7 +172,7 @@ pub fn timeline() -> Vec<(Duration, PanelEvent)> {
                 Health::Degraded,
                 "load high while four agents build",
                 &[("load 1m", "7.8"), ("cores", "8")],
-                Reading::Sampled,
+                Kind::Sampled,
                 EPOCH + 420,
             ))),
         ),
@@ -178,11 +181,11 @@ pub fn timeline() -> Vec<(Duration, PanelEvent)> {
             secs(53),
             PanelEvent::MilestoneReached {
                 project: "jjtorio".into(),
-                milestone: Box::new(Milestone {
-                    at: EPOCH + 450,
-                    title: "Belt throughput figures verified against the game data".into(),
-                    detail: Some("express 45/s, fast 30/s, transport 15/s".into()),
-                }),
+                milestone: Box::new(milestone(
+                    EPOCH + 450,
+                    "Belt throughput figures verified against the game data",
+                    Some("express 45/s, fast 30/s, transport 15/s"),
+                )),
             },
         ),
         (
@@ -253,25 +256,24 @@ fn record(seq: u64, at: u64, actor: &str, event: Event) -> Record {
 #[allow(clippy::too_many_arguments)]
 fn one_diagnostic(
     component: &str,
-    group: &str,
+    _group: &str,
     health: Health,
     summary: &str,
     metrics: &[(&str, &str)],
-    reading: Reading,
+    kind: Kind,
     at: u64,
 ) -> Diagnostic {
-    Diagnostic {
-        component: component.into(),
-        group: group.into(),
-        health,
-        summary: summary.into(),
-        metrics: metrics
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
-        reading,
-        measured_at: Some(at),
+    let mut d = Diagnostic::new(component, health, summary, kind);
+    for (name, value) in metrics {
+        // Text readings, because these are labels rather than measurements and pretending
+        // otherwise would put a number on screen nobody measured.
+        d = d.with(Metric::new(name, Reading::Text((*value).to_string()), ""));
     }
+    // Only a sample carries a moment. Army state is true until something changes it.
+    if kind == Kind::Sampled {
+        d = d.measured(at);
+    }
+    d
 }
 
 /// The opening diagnostics board.
@@ -286,7 +288,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "chief process up, 2 turns in the last hour",
             &[("process", "running"), ("model", "claude-opus-5")],
-            Reading::EventDriven,
+            Kind::EventDriven,
             now,
         ),
         one_diagnostic(
@@ -295,7 +297,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "1 of 5 agent processes running",
             &[("running", "1"), ("stopped", "4")],
-            Reading::EventDriven,
+            Kind::EventDriven,
             now,
         ),
         one_diagnostic(
@@ -304,7 +306,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "1 task in hand, 0 awaiting review",
             &[("in hand", "1"), ("submitted", "0"), ("accepted", "3")],
-            Reading::EventDriven,
+            Kind::EventDriven,
             now,
         ),
         one_diagnostic(
@@ -313,7 +315,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "nothing blocked",
             &[("blocked", "0")],
-            Reading::EventDriven,
+            Kind::EventDriven,
             now,
         ),
         one_diagnostic(
@@ -322,7 +324,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "events.jsonl readable, 17 records, numbering continuous",
             &[("records", "17"), ("last seq", "17")],
-            Reading::EventDriven,
+            Kind::EventDriven,
             now,
         ),
         one_diagnostic(
@@ -331,7 +333,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Degraded,
             "mock source, no live backend attached",
             &[("source", "mock")],
-            Reading::EventDriven,
+            Kind::EventDriven,
             now,
         ),
         one_diagnostic(
@@ -340,7 +342,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "load 2.1 across 8 cores",
             &[("load 1m", "2.1"), ("cores", "8")],
-            Reading::Sampled,
+            Kind::Sampled,
             now,
         ),
         one_diagnostic(
@@ -349,7 +351,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "9.4 GB of 31 GB in use",
             &[("used", "9.4 GB"), ("total", "31 GB")],
-            Reading::Sampled,
+            Kind::Sampled,
             now,
         ),
         one_diagnostic(
@@ -358,7 +360,7 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Healthy,
             "nothing swapped",
             &[("used", "0 B"), ("total", "2.0 GB")],
-            Reading::Sampled,
+            Kind::Sampled,
             now,
         ),
         one_diagnostic(
@@ -367,58 +369,108 @@ pub fn diagnostics(now: u64) -> Vec<Diagnostic> {
             Health::Degraded,
             "root filesystem 86 percent full",
             &[("used", "402 GB"), ("total", "468 GB")],
-            Reading::Sampled,
+            Kind::Sampled,
             now,
         ),
-        // Deliberately unmeasured. The panel must draw the gap rather than a zero.
-        Diagnostic::unknown("system.gpu", "system"),
-        Diagnostic::unknown("system.temperature", "system"),
+        // Deliberately unmeasured, both ways round, because the two are different facts and
+        // the screen has to draw them differently.
+        //
+        // The GPU was looked at and there is no card, so it keeps its moment and names what it
+        // could not read. The sensor has never been read at all, so it has no moment.
+        Diagnostic::new(
+            "system.gpu",
+            Health::Unknown,
+            "no NVIDIA card on this machine",
+            Kind::Sampled,
+        )
+        .with(Metric::new("vram", Reading::Unknown, "MiB"))
+        .measured(now),
+        Diagnostic::new(
+            "system.temperature",
+            Health::Unknown,
+            "no sensor has been read",
+            Kind::Sampled,
+        ),
     ]
 }
 
+/// A project id from a name known to be valid, since these are fixtures.
+fn pid(name: &str) -> ProjectId {
+    ProjectId::new(name).expect("the fixture ids are well formed")
+}
+
+/// A milestone in the canonical shape, with the fields the record carries.
+fn milestone(at: u64, title: &str, detail: Option<&str>) -> Milestone {
+    Milestone {
+        id: format!("m-{at}"),
+        project: pid("jjtorio"),
+        at,
+        title: title.to_string(),
+        detail: detail.map(str::to_string),
+        evidence: Some("run-tests.sh".into()),
+        achievement: Achievement::FeatureWorks,
+        source: Source::Lead("mason".into()),
+    }
+}
+
 /// The opening projects board.
-pub fn projects(now: u64) -> Vec<Project> {
+pub fn projects(now: u64) -> Vec<ProjectView> {
     let mut jjtorio = Project::new(
+        pid("jjtorio"),
         "jjtorio",
         "A Factorio mod and the planning tools around it, so JJ can size a build from real \
          numbers instead of guessing.",
     );
-    jjtorio.phase = Phase::Building;
-    jjtorio.status = Some("Belt figures being corrected against the game data".into());
-    jjtorio.owner = Some("mason".into());
-    jjtorio.active_agents = vec!["nora".into()];
+    jjtorio.status = Status::Active;
+    jjtorio.phase = "correcting the belt figures against the game data".into();
+    jjtorio.department = Some("coding".into());
     jjtorio.next_objective = Some("Smelting ratios, same source, same proof".into());
-    jjtorio.milestones = vec![
-        Milestone {
-            at: now - 8_600,
-            title: "Planner runs its own test suite".into(),
-            detail: None,
-        },
-        Milestone {
-            at: now - 3_200,
-            title: "Express belt rate corrected to 45 per second".into(),
-            detail: Some("was 40, proven by the project's own runner".into()),
-        },
-    ];
 
     let mut panel = Project::new(
+        pid("command-panel"),
         "command panel",
         "A fullscreen operations interface for the army, so JJ can see what everyone is doing \
          without reading a journal file.",
     );
-    panel.phase = Phase::Building;
-    panel.status = Some("Shell and four tabs against a mock source".into());
-    panel.owner = Some("adrian".into());
-    panel.active_agents = vec!["adrian".into()];
-    panel.blockers = vec!["No live backend yet, so every figure on it is scripted".into()];
-    panel.next_objective = Some("Swap the mock source for the live one".into());
+    panel.status = Status::Active;
+    panel.phase = "shell and four tabs against a live backend".into();
+    panel.department = Some("coding".into());
+    panel.blockers = vec!["The OpenGL backend draws glyphs black on this machine".into()];
 
     let mut aos = Project::new(
+        pid("aos"),
         "aos",
         "The supervisor that will run the army as processes rather than as one program.",
     );
-    aos.phase = Phase::Planned;
-    aos.owner = Some("adrian".into());
+    aos.status = Status::Paused;
+    aos.phase = "planned".into();
 
-    vec![jjtorio, panel, aos]
+    vec![
+        ProjectView {
+            project: jjtorio,
+            // Newest first, which is the order the provider keeps and the pane draws.
+            milestones: vec![
+                milestone(
+                    now - 3_200,
+                    "Express belt rate corrected to 45 per second",
+                    Some("was 40, proven by the project's own runner"),
+                ),
+                milestone(now - 8_600, "Planner runs its own test suite", None),
+            ],
+            active_tasks: vec![carl::army::task::TaskId::quoted("t-belt-throughput")],
+            active_agents: vec!["nora".into()],
+        },
+        ProjectView {
+            project: panel,
+            milestones: Vec::new(),
+            active_tasks: Vec::new(),
+            active_agents: Vec::new(),
+        },
+        ProjectView {
+            project: aos,
+            milestones: Vec::new(),
+            active_tasks: Vec::new(),
+            active_agents: Vec::new(),
+        },
+    ]
 }

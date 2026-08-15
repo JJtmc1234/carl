@@ -6,7 +6,7 @@
 
 use eframe::egui::{Align, Color32, Layout, Rect, Response, RichText, Sense, Ui, Vec2, vec2};
 
-use crate::model::{AgentStatus, Health, Link, Reading};
+use crate::model::{AgentStatus, Diagnostic, Health, Kind, Link};
 use crate::theme;
 
 /// The colour a status is drawn in.
@@ -18,6 +18,25 @@ pub fn status_color(s: AgentStatus) -> Color32 {
         AgentStatus::Idle => theme::FAINT,
         AgentStatus::Unknown => theme::UNKNOWN,
     }
+}
+
+/// The word for a health, since the canonical type is data and does not carry screen words.
+pub fn health_label(h: Health) -> &'static str {
+    match h {
+        Health::Healthy => "HEALTHY",
+        Health::Degraded => "DEGRADED",
+        Health::Blocked => "BLOCKED",
+        Health::Failed => "FAILED",
+        Health::Unknown => "UNKNOWN",
+    }
+}
+
+/// Whether a health should pull the eye.
+///
+/// Unknown deliberately does not. It is a gap in what was measured rather than a fault, and
+/// treating every unmeasured thing as an alarm trains somebody to ignore the screen.
+pub fn wants_attention(h: Health) -> bool {
+    matches!(h, Health::Failed | Health::Blocked | Health::Degraded)
 }
 
 pub fn health_color(h: Health) -> Color32 {
@@ -190,10 +209,13 @@ pub fn ago(now: u64, then: u64) -> String {
 }
 
 /// How a reading's freshness is described, or nothing when freshness is not the point.
-pub fn freshness(reading: Reading, measured_at: Option<u64>, now: u64) -> Option<String> {
-    match reading {
-        Reading::EventDriven => None,
-        Reading::Sampled => Some(match measured_at {
+///
+/// Event driven state gets no age at all. It is true until something changes it, and a clock
+/// beside it would say it decays.
+pub fn freshness(d: &Diagnostic, now: u64) -> Option<String> {
+    match d.kind {
+        Kind::EventDriven => None,
+        Kind::Sampled => Some(match d.measured_at {
             Some(at) => format!("sampled {}", ago(now, at)),
             None => "never sampled".into(),
         }),
@@ -217,6 +239,8 @@ mod tests {
         );
         assert_eq!(health_color(Health::Unknown), theme::UNKNOWN);
         assert_eq!(health_color(Health::Failed), theme::BAD);
+        assert!(!wants_attention(Health::Unknown), "a gap is not an alarm");
+        assert!(wants_attention(Health::Failed));
     }
 
     #[test]
@@ -231,14 +255,13 @@ mod tests {
     /// taken says exactly that rather than showing a plausible number.
     #[test]
     fn only_a_sample_is_described_as_fresh_or_stale() {
-        assert_eq!(freshness(Reading::EventDriven, Some(10), 100), None);
-        assert_eq!(
-            freshness(Reading::Sampled, None, 100).as_deref(),
-            Some("never sampled")
-        );
-        assert_eq!(
-            freshness(Reading::Sampled, Some(70), 100).as_deref(),
-            Some("sampled 30s ago")
-        );
+        let state = Diagnostic::new("army.tasks", Health::Healthy, "x", Kind::EventDriven);
+        assert_eq!(freshness(&state, 100), None);
+
+        let never = Diagnostic::new("system.gpu", Health::Unknown, "x", Kind::Sampled);
+        assert_eq!(freshness(&never, 100).as_deref(), Some("never sampled"));
+
+        let taken = Diagnostic::new("system.cpu", Health::Healthy, "x", Kind::Sampled).measured(70);
+        assert_eq!(freshness(&taken, 100).as_deref(), Some("sampled 30s ago"));
     }
 }

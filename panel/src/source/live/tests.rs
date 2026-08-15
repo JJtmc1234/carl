@@ -21,6 +21,7 @@ fn task(id: &str, status: &str) -> TaskView {
         owner: "nora".into(),
         assigner: "mason".into(),
         parent: None,
+        project: carl::ProjectId::new("jjtorio").ok(),
         status: status.into(),
         attempts: 0,
         must: vec!["tests pass".into()],
@@ -230,4 +231,110 @@ fn a_frame_marks_its_agent_as_having_just_acted() {
     assert_eq!(nora.last_activity.as_deref(), Some("submitted"));
     assert_eq!(nora.last_activity_at, Some(900));
     assert!(out.iter().any(|e| matches!(e, PanelEvent::AgentChanged(_))));
+}
+
+/// The frame loop must never wait on the backend.
+///
+/// `poll` drains whatever has arrived and returns, and with nothing there it returns nothing.
+/// If it ever blocked, the panel would freeze whenever the army went quiet, which is most of
+/// the time.
+#[test]
+fn draining_returns_at_once_when_the_backend_is_silent() {
+    let (mut source, _tx, _orders) = LivePanelDataSource::detached(Snapshot::default());
+
+    let began = std::time::Instant::now();
+    let got = source.poll();
+    let took = began.elapsed();
+
+    assert!(got.is_empty(), "nothing arrived, so nothing comes back");
+    assert!(
+        took < std::time::Duration::from_millis(50),
+        "poll blocked for {took:?}, which would freeze the frame loop"
+    );
+}
+
+/// A health reading changes the badge and nothing else.
+#[test]
+fn a_health_update_changes_only_the_link() {
+    let before = Snapshot {
+        agents: vec![AgentView::unknown("nora")],
+        ..Default::default()
+    };
+    let (mut source, tx, _orders) = LivePanelDataSource::detached(before);
+
+    tx.send(FromBackend::Update(Box::new(Update::Health(
+        Health::Reconnecting,
+    ))))
+    .unwrap();
+    let got = source.poll();
+
+    assert!(!source.link().is_live());
+    assert!(matches!(got.as_slice(), [PanelEvent::LinkChanged(_)]));
+    assert_eq!(
+        source.snapshot().agents.len(),
+        1,
+        "the last state is kept for reference rather than blanked"
+    );
+}
+
+/// Nothing may be sent while the link is down, and it must not be queued for later either.
+#[test]
+fn a_command_is_refused_out_loud_while_disconnected_and_never_queued() {
+    let (mut source, tx, orders) = LivePanelDataSource::detached(Snapshot::default());
+
+    tx.send(FromBackend::Update(Box::new(Update::Health(
+        Health::Disconnected,
+    ))))
+    .unwrap();
+    source.poll();
+
+    let refused = source
+        .submit(Command::SayToCarl("are you there".into()))
+        .unwrap_err();
+    assert!(refused.contains("not sent"), "{refused}");
+    assert!(
+        orders.try_recv().is_err(),
+        "a refused command must not be sitting in the queue waiting to surprise somebody"
+    );
+}
+
+/// Carl's answer arrives in pieces and the turn closes only when the backend stops talking.
+#[test]
+fn carl_streams_in_chunks_and_the_caret_goes_out_at_the_end() {
+    let (mut source, tx, _orders) = LivePanelDataSource::detached(Snapshot::default());
+
+    tx.send(FromBackend::Speaking("Handed to ".into())).unwrap();
+    tx.send(FromBackend::Speaking("Adrian.".into())).unwrap();
+    let mid = source.poll();
+    assert_eq!(mid.len(), 2);
+    assert!(
+        mid.iter()
+            .all(|e| matches!(e, PanelEvent::CarlSaid { streaming, .. } if *streaming))
+    );
+
+    tx.send(FromBackend::Settled(Ok(()))).unwrap();
+    let end = source.poll();
+    assert!(
+        matches!(
+            end.as_slice(),
+            [PanelEvent::CarlSaid {
+                streaming: false,
+                ..
+            }]
+        ),
+        "the end of the answer must close the turn: {end:?}"
+    );
+}
+
+/// A command that failed is reported rather than swallowed, and does not close a turn nobody
+/// started.
+#[test]
+fn a_failed_command_is_surfaced() {
+    let (mut source, tx, _orders) = LivePanelDataSource::detached(Snapshot::default());
+
+    tx.send(FromBackend::Settled(Err("backend refused".into())))
+        .unwrap();
+    let got = source.poll();
+
+    assert!(matches!(got.as_slice(), [PanelEvent::CommandRefused(_)]));
 }

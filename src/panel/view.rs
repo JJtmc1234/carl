@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ProjectId;
 use crate::army::org::Rank;
 
 /// Something the panel has not been told, distinguished from something it has been told is
@@ -50,20 +51,17 @@ impl<T> From<Option<T>> for Maybe<T> {
     }
 }
 
-/// How a component is doing, for anything that reports health.
-///
-/// `Unknown` is first and is the default, because a component nobody has measured must not
-/// render as healthy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Health {
-    #[default]
-    Unknown,
-    Healthy,
-    Degraded,
-    Blocked,
-    Failed,
-}
+// `Health` used to be defined here, and so did `DiagnosticView`, `Metric` and `ProjectView`.
+// They are Process 3's now, re-exported rather than reimplemented.
+//
+// Not tidiness. The panel's own versions flattened two distinctions the collectors are careful
+// to keep. A metric held an `f64`, which cannot say "unreadable", so an unmeasurable disk and a
+// full disk arrived on screen as the same number. And `measured_at` was a bare `u64`, which
+// forced a timestamp onto army state that has none, because it is true until something changes
+// it rather than true at an instant. Re-exporting keeps both distinctions all the way to the
+// wire.
+pub use crate::providers::health::{Diagnostic as DiagnosticView, Health, Kind, Metric, Reading};
+pub use crate::providers::projects::ProjectView;
 
 /// One agent, as the panel sees them.
 ///
@@ -130,6 +128,12 @@ pub struct TaskView {
     /// Who assigned it, and who therefore reviews it.
     pub assigner: String,
     pub parent: Option<String>,
+    /// Which project this task belongs to, from the record.
+    ///
+    /// `None` for a task nobody put in one, and for every task delegated before projects
+    /// existed. Those are the same on the wire and mean the same thing: nobody said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectId>,
     pub status: String,
     pub attempts: u32,
     /// What must be observable before it is done. Empty only for a task delegated before the
@@ -173,52 +177,6 @@ pub struct Pending {
     pub asked_by: String,
     pub question: String,
     pub task: Option<String>,
-}
-
-/// A piece of work larger than one task.
-///
-/// The smallest shape that can hold what a project tab needs, and nothing is derived here in
-/// v1. Carl has no project model yet, so the panel reports an empty list rather than inventing
-/// one out of git history. Process 3 owns the provider that fills this.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProjectView {
-    pub id: String,
-    pub name: String,
-    pub goal: String,
-    pub phase: String,
-    pub department: Option<String>,
-    /// Task ids, so a screen can join against `tasks` rather than hold a second copy.
-    pub active_tasks: Vec<String>,
-    pub blockers: Vec<String>,
-    pub milestones: Vec<Milestone>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Milestone {
-    pub at: u64,
-    pub what: String,
-}
-
-/// One component's health.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DiagnosticView {
-    pub component: String,
-    pub health: Health,
-    pub summary: String,
-    /// When this was measured. Not when it was rendered, and not now.
-    pub measured_at: u64,
-    /// Free-form numbers, because what is worth measuring differs per component and a closed
-    /// list here would be guessed rather than known.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub metrics: Vec<Metric>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Metric {
-    pub name: String,
-    pub value: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
 }
 
 /// Everything, at one moment.

@@ -19,17 +19,10 @@
 //! model's word, so it stays here.
 
 use carl::panel::view::{
-    AgentView as WireAgent, Health as WireHealth, Maybe, PanelSnapshot,
-    ProcessState as WireProcess, TaskView,
+    AgentView as WireAgent, Maybe, PanelSnapshot, ProcessState as WireProcess, TaskView,
 };
 
-use crate::model::{AgentStatus, AgentView, Decision, Delegation, Health, ProcessState, Snapshot};
-
-pub mod diagnostics;
-pub mod projects;
-
-pub use diagnostics::one_diagnostic;
-pub use projects::one_project;
+use crate::model::{AgentStatus, AgentView, Decision, Delegation, ProcessState, Snapshot};
 
 /// Everything the backend sent, in the shape the screen draws.
 pub fn snapshot(wire: PanelSnapshot) -> Snapshot {
@@ -42,8 +35,10 @@ pub fn snapshot(wire: PanelSnapshot) -> Snapshot {
 
     Snapshot {
         agents,
-        projects: wire.projects.iter().map(one_project).collect(),
-        diagnostics: wire.diagnostics.iter().map(one_diagnostic).collect(),
+        // Both are Process 3's canonical types on the wire and on the screen, so there is
+        // nothing to map. The panel used to convert them and lost a distinction each time.
+        projects: wire.projects,
+        diagnostics: wire.diagnostics,
         decisions: wire
             .carl
             .pending
@@ -160,17 +155,6 @@ fn known<T: Clone>(m: &Maybe<T>) -> Option<T> {
     match m {
         Maybe::Known { value } => Some(value.clone()),
         Maybe::Unknown => None,
-    }
-}
-
-/// Their health, drawn in ours. The two lists are the same set with a different order.
-pub fn health_of(h: WireHealth) -> Health {
-    match h {
-        WireHealth::Healthy => Health::Healthy,
-        WireHealth::Degraded => Health::Degraded,
-        WireHealth::Blocked => Health::Blocked,
-        WireHealth::Failed => Health::Failed,
-        WireHealth::Unknown => Health::Unknown,
     }
 }
 

@@ -174,10 +174,64 @@ security bypass, and the record keeps them apart:
 Render those differently. A blank that means "no process running" and a blank that means "nobody
 looked" read the same on screen, and that is how a dead agent looks merely idle.
 
-**Always `unknown` in v1**, waiting on Process 3: `AgentView.process`, `CarlView.status`.
-**Always empty in v1**: `projects`, `diagnostics`. Carl has no project model and measures nothing
-yet. They are empty rather than invented, because a milestone guessed from a git commit is a made
-up answer that looks like a real one.
+**Still always `unknown`**: `AgentView.process` and `CarlView.status`. Process 3's provider can
+list claude processes, but **nothing anywhere associates a pid with an agent**. Turning "some
+claude process exists" into "Nora's process is running" would be a guess presented as a fact, and
+this is the panel somebody would open to check exactly that. A test asserts it stays unknown.
+
+`projects` and `diagnostics` are now real. Both come from Process 3's providers.
+
+## Projects, and how a task joins one
+
+`Task` has **two independent fields**, and they answer different questions:
+
+- `project: Option<ProjectId>` — whose work it is
+- `workspace: Option<String>` — where the files are
+
+Two tasks can share a checkout and serve different projects; one project can span several
+checkouts. Collapsing them would make the panel unable to tell a shared directory from shared
+ownership.
+
+`ProjectId` lives at the crate root, next to `ThreadId`, and `providers::projects` re-exports it.
+There is exactly one of it. It could not live in `providers` because `army::task` names one, and
+an army depending on a provider layer would have the dependency upside down.
+
+Rules, each with a test:
+
+- a task has no project unless somebody says so at creation
+- `Task::split_from` **inherits** the parent's project, so a lead cannot drop a subtask out of its
+  project by forgetting
+- `for_project` consumes `self`, so it is unreachable on a task somebody is already holding.
+  There is no setter: a worker cannot move her own work between projects
+- `ProjectView.active_tasks` and `active_agents` come **only** from tasks whose `project` names
+  that project. An unlinked task never drifts into the only project that exists
+- milestones come only from explicitly recorded ones. Nothing is derived from git
+
+## Diagnostics, and the two distinctions that survive the wire
+
+`DiagnosticView` **is** `providers::health::Diagnostic`, re-exported. The panel's own version was
+deleted rather than kept in step.
+
+| field | why not the obvious type |
+|---|---|
+| `Metric.value` is `Reading`, not `f64` | an `f64` cannot say "unreadable". A full disk and an unmeasurable disk would arrive as the same number, and one of them is an emergency |
+| `measured_at` is `Option<u64>`, not `u64` | army state is true until something changes it, not true at an instant. Forcing a timestamp on it invents a freshness it does not have |
+| `kind` is `Sampled` or `EventDriven` | so a screen can show the age of one and not the other |
+
+`Reading` is `{"int":N}`, `{"float":N}`, `{"text":"..."}` or `"unknown"`. **Never render `unknown`
+as a number.** From a real run, side by side:
+
+```text
+sampled  system.gpu  utilisation  {"float": 0.0}   <- genuinely zero
+sampled  system.cpu  utilisation  "unknown"        <- could not be read
+```
+
+Those are different facts. With the old `f64` they were the same one.
+
+**Sampling is rate limited inside `Diagnostics::machine`**, and the backend holds one sampler for
+the whole process. A snapshot taken twice in a second returns the earlier readings with their
+original `measured_at`, so a fast poller sees an honestly old number rather than a fresh looking
+one. Do not build a second cache on your side.
 
 ## What is authoritative, and what is derived
 
@@ -317,9 +371,24 @@ Two backends cannot share a home. The second refuses at bind, naming the path. T
 file, because the socket already answers the question and a second mechanism would be a second
 thing that can disagree.
 
+## What changed for Process 2 since you branched
+
+Four things, all in the shared layer:
+
+1. **`DiagnosticView` is now `providers::health::Diagnostic`.** Your `panel/src/model/diagnostic.rs`
+   already draws the same two distinctions, so this should be an adapter change and not a design
+   one. Their `Kind` is your `Reading`; their `Reading` is the value.
+2. **`ProjectView` is now `providers::projects::ProjectView`**, which wraps a full `Project` plus
+   `milestones`, `active_tasks` and `active_agents`. It has `project.name`, not `name`.
+3. **`TaskView` gained `project: Option<ProjectId>`.** Absent on the wire when there is none.
+4. **`PanelSnapshot.projects` and `.diagnostics` are populated**, where they were always empty.
+
+Nothing about the transport, the frames, `LivePanel` or the reconnect behaviour changed. Your
+mock fixtures need the new field shapes; your UI logic should not.
+
 ## Verified
 
-447 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
+624 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
 
 The full path, with the real binaries and a real restart, as run:
 

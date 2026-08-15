@@ -31,6 +31,7 @@ pub fn fold(records: &[Record]) -> Vec<TaskView> {
                 goal,
                 parent,
                 must,
+                project,
             } => {
                 let id = task.to_string();
                 if !by_id.contains_key(&id) {
@@ -44,6 +45,7 @@ pub fn fold(records: &[Record]) -> Vec<TaskView> {
                         owner: to.clone(),
                         assigner: r.actor.clone(),
                         parent: parent.as_ref().map(|p| p.to_string()),
+                        project: project.clone(),
                         // A task exists as assigned the moment it is handed over. Anything else
                         // comes from a later `Moved`.
                         status: "assigned".to_string(),

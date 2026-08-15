@@ -402,9 +402,13 @@ fn a_diagnostic_changes_live_in_place() {
     let mut a = app();
     let before = a.snapshot.diagnostics.len();
 
-    let mut cpu = Diagnostic::unknown("system.cpu", "system");
-    cpu.health = Health::Degraded;
-    cpu.summary = "load high".into();
+    let cpu = Diagnostic::new(
+        "system.cpu",
+        Health::Degraded,
+        "load high",
+        crate::model::Kind::Sampled,
+    )
+    .measured(500);
     a.apply(PanelEvent::DiagnosticChanged(Box::new(cpu)));
 
     assert_eq!(
@@ -430,9 +434,14 @@ fn a_milestone_arrives_live_on_its_own_project() {
     a.apply(PanelEvent::MilestoneReached {
         project: "jjtorio".into(),
         milestone: Box::new(Milestone {
+            id: "m1".into(),
+            project: carl::ProjectId::new("jjtorio").unwrap(),
             at: 999,
             title: "Belt figures verified".into(),
             detail: None,
+            evidence: None,
+            achievement: carl::providers::projects::Achievement::FeatureWorks,
+            source: carl::providers::projects::Source::Jj,
         }),
     });
 

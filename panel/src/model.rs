@@ -16,6 +16,16 @@
 use carl::army::org::{Agent, Rank};
 use carl::panel::view::TaskView;
 
+// Process 3's types, used as they are rather than copied.
+//
+// The panel used to define its own `Diagnostic` and `Project`, and both flattened a
+// distinction the collectors are careful to keep: a metric that cannot say "unreadable" turns
+// an unmeasurable disk and a full one into the same number, and a bare timestamp forces an age
+// onto army state that has none. Re exporting keeps both distinctions all the way to the
+// screen, and means there is one definition of each rather than two that drift.
+pub use carl::providers::health::{Diagnostic, Health, Kind, Metric, Reading};
+pub use carl::providers::projects::{Achievement, Milestone, Project, ProjectView, Status};
+
 /// How the panel is currently getting its data.
 ///
 /// Shown at all times and never guessed at. A panel that looks live while disconnected is the
@@ -173,7 +183,10 @@ pub struct Delegation {
 }
 
 /// Everything the panel knows at one instant.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Not `Eq`, because a diagnostic can carry a float. Comparing readings for exact equality is
+/// not something the screen should be doing anyway.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Snapshot {
     pub agents: Vec<AgentView>,
     /// The backend's own task view, used as it is.
@@ -182,7 +195,7 @@ pub struct Snapshot {
     /// `Task::assign`, which mints a fresh id and re-checks a delegation that already happened,
     /// so the panel would be drawing a task the army never issued.
     pub tasks: Vec<TaskView>,
-    pub projects: Vec<Project>,
+    pub projects: Vec<ProjectView>,
     pub diagnostics: Vec<Diagnostic>,
     pub conversation: Vec<Turn>,
     pub decisions: Vec<Decision>,
@@ -201,8 +214,20 @@ impl Snapshot {
         self.tasks.iter().find(|t| t.id == id)
     }
 
-    pub fn project(&self, name: &str) -> Option<&Project> {
-        self.projects.iter().find(|p| p.name == name)
+    pub fn project(&self, name: &str) -> Option<&ProjectView> {
+        self.projects.iter().find(|p| p.project.name == name)
+    }
+
+    /// Every task the backend says belongs to a project.
+    ///
+    /// The link is `TaskView::project`, which the record now carries. Nothing is matched by
+    /// name or guessed at from a goal, so a project with no tasks shows none rather than the
+    /// ones that happen to read like it.
+    pub fn tasks_in(&self, project: &carl::ProjectId) -> Vec<&TaskView> {
+        self.tasks
+            .iter()
+            .filter(|t| t.project.as_ref() == Some(project))
+            .collect()
     }
 
     /// Everything recorded about one task, newest last.
@@ -214,8 +239,6 @@ impl Snapshot {
     }
 }
 
-mod diagnostic;
-mod project;
+mod render;
 
-pub use diagnostic::{Diagnostic, Health, Reading};
-pub use project::{Milestone, Phase, Project};
+pub use render::{STALE_AFTER, age_secs, group_of, stale};

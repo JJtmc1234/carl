@@ -79,6 +79,29 @@ impl LivePanelDataSource {
         })
     }
 
+    /// The same source with the threads replaced by channels the test holds.
+    ///
+    /// Exists so the drain, the resync and the refusal can be checked without a backend. The
+    /// alternative is testing through a real socket, where every failure arrives as a timeout
+    /// instead of as an assertion.
+    #[cfg(test)]
+    fn detached(first: Snapshot) -> (Self, Sender<FromBackend>, Receiver<Command>) {
+        let (tx, incoming) = channel();
+        let (orders, taken) = channel();
+        (
+            Self {
+                socket: PathBuf::from("/nonexistent.sock"),
+                latest: first,
+                incoming,
+                orders,
+                link: Link::Live,
+                speaking: false,
+            },
+            tx,
+            taken,
+        )
+    }
+
     /// Where the backend puts its socket, so the usual case needs no argument.
     pub fn default_socket() -> PathBuf {
         carl::panel::listen::socket_path(&home())
