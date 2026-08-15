@@ -150,6 +150,12 @@ enum Command {
         journal: Option<String>,
     },
 
+    /// Serve the Command Panel backend on a local socket.
+    ///
+    /// Owner only, under ~/.carl/panel/. Nothing listens on the network. The protocol is in
+    /// docs/panel-v1.md, and it is line delimited JSON, so `nc -U` is a working client when the
+    /// thing that is broken is the backend.
+    Panel,
     /// What Carl remembers across conversations.
     Memory {
         #[command(subcommand)]
@@ -342,6 +348,13 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        Command::Panel => {
+            let at = carl::panel::socket_path(&home);
+            let listener = carl::panel::bind(&at)?;
+            println!("panel backend listening on {}", at.display());
+            carl::panel::Server::new(&home).run(listener)?;
+            Ok(())
+        }
         Command::Threads => {
             let registry = carl::Registry::open(home.join("threads.json"))?;
             let entries = carl::log::read(home.join("conversations.jsonl"))?;

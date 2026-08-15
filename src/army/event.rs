@@ -299,6 +299,8 @@ mod tests {
                 task: task.clone(),
                 to: "nora".into(),
                 goal: "fix the counter".into(),
+                parent: None,
+                must: vec!["it works".into()],
             },
         )
         .unwrap();
