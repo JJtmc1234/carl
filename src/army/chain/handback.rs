@@ -174,12 +174,12 @@ pub fn read_verdict(said: &str) -> (Verdict, String) {
                 .unwrap_or("");
             if first.eq_ignore_ascii_case("accept") || first.eq_ignore_ascii_case("accepted") {
                 verdict = Some(Verdict::Accept);
-                push_tail(&mut why, bare, first.len());
+                push_tail(&mut why, bare, first);
                 continue;
             }
             if first.eq_ignore_ascii_case("reject") || first.eq_ignore_ascii_case("rejected") {
                 verdict = Some(Verdict::Reject);
-                push_tail(&mut why, bare, first.len());
+                push_tail(&mut why, bare, first);
                 continue;
             }
         }
@@ -201,9 +201,18 @@ pub fn read_verdict(said: &str) -> (Verdict, String) {
 }
 
 /// Whatever followed the verdict word on the same line, which is often the whole reason.
-fn push_tail(why: &mut Vec<String>, line: &str, word: usize) {
-    let tail = line[word..]
-        .trim_start_matches([':', '.', ',', ' ', '-'])
+///
+/// The word is located rather than assumed to start at the beginning. A reviewer who numbers
+/// the line writes "1. REJECT because ...", and slicing from the word's length instead of from
+/// where it actually sits cuts the reason mid word. With anything non ASCII on the line that
+/// same slice can land inside a character and panic, which is a review crashing the run rather
+/// than being read.
+fn push_tail(why: &mut Vec<String>, line: &str, word: &str) {
+    let Some(at) = line.find(word) else {
+        return;
+    };
+    let tail = line[at + word.len()..]
+        .trim_start_matches([':', '.', ',', ' ', '-', '*'])
         .trim();
     if !tail.is_empty() {
         why.push(tail.to_string());

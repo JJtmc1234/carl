@@ -384,3 +384,34 @@ fn the_record_shows_what_was_stopped_as_well_as_what_happened() {
     );
     assert!(records.iter().any(|r| r.actor == "nora"));
 }
+
+/// A reviewer who numbers or decorates the line means the same thing, and the reason after the
+/// verdict must survive intact. Slicing from the word's length rather than from where it sits
+/// cut the reason mid word, and with anything non ASCII on the line it could panic instead.
+#[test]
+fn the_reason_survives_whatever_sits_in_front_of_the_verdict() {
+    for said in [
+        "REJECT: the test does not fail without the fix",
+        "1. REJECT the test does not fail without the fix",
+        "**REJECT** the test does not fail without the fix",
+        "- rejected. the test does not fail without the fix",
+    ] {
+        let (v, why) = read_verdict(said);
+        assert_eq!(v, Verdict::Reject, "{said:?}");
+        assert!(
+            why.starts_with("the test does not fail"),
+            "{said:?} gave {why:?}"
+        );
+    }
+}
+
+/// A review written with any non ASCII in it must be read rather than crash the run.
+#[test]
+fn a_verdict_line_with_non_ascii_does_not_panic() {
+    let (v, why) = read_verdict("REJECT the ratio is wrong, 45 is not 40 either way");
+    assert_eq!(v, Verdict::Reject);
+    assert!(why.contains("ratio is wrong"), "{why}");
+
+    let (v, _) = read_verdict("ACCEPT the numbers agree with the wiki");
+    assert_eq!(v, Verdict::Accept);
+}
