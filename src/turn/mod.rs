@@ -7,9 +7,9 @@
 
 use std::path::Path;
 
+use crate::claude::{Answer, Flow, Pool, Runner, Turn};
+use crate::{Area, Camera, ThreadId};
 use anyhow::{Context, Result};
-use carl::claude::{Answer, Flow, Pool, Runner, Turn};
-use carl::{Area, Camera, ThreadId};
 
 mod exchange;
 use exchange::Exchange;
@@ -64,7 +64,7 @@ pub fn stream(
         // Only one person has this terminal, and it is the same person who has the
         // microphone. A note written from here with no source reads later as if nobody said
         // it.
-        author: Some(carl::brief::OWNER.to_string()),
+        author: Some(crate::brief::OWNER.to_string()),
         extra,
     }
     .run(|p| {
@@ -197,7 +197,7 @@ fn shot(home: &Path, question: &str, area: Area) -> Result<String> {
         .capture(area, &shot)
         .context("could not take a picture of the screen")?;
 
-    let (w, h) = carl::capture::png_size(&shot).unwrap_or((0, 0));
+    let (w, h) = crate::capture::png_size(&shot).unwrap_or((0, 0));
 
     // Told to look first and answer second. Asking the question first invites an answer from
     // memory before the image is ever opened.
@@ -211,7 +211,7 @@ than from what you expect to be there. If you cannot make something out, say so.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use carl::Speaker;
+    use crate::Speaker;
 
     /// The question must be on disk before Claude is ever contacted, so a failure there
     /// cannot take it with it. Proven by pointing at a binary that does not exist.
@@ -231,7 +231,7 @@ mod tests {
         );
         assert!(result.is_err(), "the ask should have failed");
 
-        let entries = carl::log::read(home.path().join("conversations.jsonl")).unwrap();
+        let entries = crate::log::read(home.path().join("conversations.jsonl")).unwrap();
         assert!(
             entries.iter().any(|e| e.text == "did you record this"),
             "the question must be recorded even when the answer never arrives: {entries:?}"
@@ -272,7 +272,7 @@ mod tests {
         });
         assert!(result.is_err());
 
-        let entries = carl::log::read(home.path().join("conversations.jsonl")).unwrap();
+        let entries = crate::log::read(home.path().join("conversations.jsonl")).unwrap();
         assert!(
             entries.iter().any(|e| e.text == "streamed question"),
             "{entries:?}"

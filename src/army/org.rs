@@ -37,7 +37,13 @@ use std::fmt;
 use crate::{Error, Result};
 
 /// What an agent may do, by where it sits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// Serialisable because the panel renders it. The wire form is the lowercase name, so a reader
+/// without this crate still gets something it can compare against a string.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Rank {
     /// A person. The only authority nobody delegated.
     Human,

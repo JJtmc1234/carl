@@ -29,11 +29,13 @@ pub mod game;
 pub mod heard;
 pub mod log;
 pub mod memory;
+pub mod panel;
 pub mod pushback;
 pub mod remember;
 pub mod slack;
 pub mod speech;
 pub mod threads;
+pub mod turn;
 pub mod whisper;
 
 pub use capture::{Area, Camera};

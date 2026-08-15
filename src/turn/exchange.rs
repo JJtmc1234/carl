@@ -17,9 +17,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::claude::Answer;
+use crate::{Log, Memory, Registry, SessionId, Speaker, ThreadId};
 use anyhow::{Context, Result};
-use carl::claude::Answer;
-use carl::{Log, Memory, Registry, SessionId, Speaker, ThreadId};
 
 /// Drops a note, named either by its filename or by what it said.
 ///
@@ -43,7 +43,7 @@ fn forget_note(memory: &Memory, named: &str) -> anyhow::Result<bool> {
     }
 
     // Otherwise as a fact, put through the same naming rule that wrote it.
-    let slug = carl::remember::note_name(bare);
+    let slug = crate::remember::note_name(bare);
     if !slug.is_empty() && memory.forget(&slug)? {
         return Ok(true);
     }
@@ -115,7 +115,7 @@ impl Prepared<'_> {
 
 impl Exchange<'_> {
     /// Records the question, prepares the turn, runs `ask`, records the outcome.
-    pub fn run(self, ask: impl FnOnce(&Prepared<'_>) -> carl::Result<Answer>) -> Result<Answer> {
+    pub fn run(self, ask: impl FnOnce(&Prepared<'_>) -> crate::Result<Answer>) -> Result<Answer> {
         // Kept before the author is handed to the log, which consumes it. Notes written this
         // turn are attributed to whoever is speaking, since memory is one pile and everybody
         // who can reach Carl writes into it.
@@ -141,7 +141,7 @@ impl Exchange<'_> {
         // Who Carl is goes on every turn, not just spoken ones. The underlying binary
         // describes itself as a tool for software engineering, and without this Carl inherits
         // that and turns down questions about anything else.
-        let mut identity = carl::brief::IDENTITY.to_string();
+        let mut identity = crate::brief::IDENTITY.to_string();
         if let Some(extra) = self.extra {
             identity.push_str("\n\n");
             identity.push_str(extra);
@@ -159,7 +159,7 @@ impl Exchange<'_> {
         // first real question: "I need more iron plates" contains none of them, so Carl
         // answered about stone furnaces to somebody playing Sea Block, where there are no
         // ores to smelt. Recency is a fact and keyword lists are a guess.
-        let game = carl::game::playing();
+        let game = crate::game::playing();
 
         // A game in a browser tab cannot be detected at all, so it is named by being told and
         // kept under this name instead. Carl writing "they are playing Slither" is the only
@@ -170,14 +170,14 @@ impl Exchange<'_> {
             .unwrap_or_else(|| "current".to_string());
 
         if let Some(found) = &game
-            && let Some(brief) = carl::game::brief(found)
+            && let Some(brief) = crate::game::brief(found)
         {
             extra_system.push_str("\n\n");
             extra_system.push_str(&brief);
 
             // What he made of it last time. Without this every look starts over and a
             // question like "is that better than before" has no answer available.
-            match carl::game::seen::read(self.home, &picture_name) {
+            match crate::game::seen::read(self.home, &picture_name) {
                 Some(picture) => {
                     extra_system.push_str(&format!(
                         "\n\nWhere they were up to when you last heard, which may be out of \
@@ -189,7 +189,7 @@ impl Exchange<'_> {
                      you find out, from a screenshot or from them saying so, record it.",
                 ),
             }
-        } else if let Some(picture) = carl::game::seen::read(self.home, &picture_name) {
+        } else if let Some(picture) = crate::game::seen::read(self.home, &picture_name) {
             // Nothing detectable is running, but something was recorded. Almost always a
             // browser game, since a page in a tab leaves no trace anywhere a program can look.
             extra_system.push_str(&format!(
@@ -222,7 +222,7 @@ impl Exchange<'_> {
                 // answer. Carl writes a note inside the reply he was already giving, which
                 // costs nothing, works on every surface, and lets him decide, since he is the
                 // only participant who knows whether something mattered.
-                let kept = carl::remember::split(&answer.text);
+                let kept = crate::remember::split(&answer.text);
                 answer.text = kept.text;
 
                 // Dropped before kept, so correcting a fact in one breath cannot delete the
@@ -238,13 +238,13 @@ impl Exchange<'_> {
                 // Written before the notes, because it is the cheap one and cannot fail in a
                 // way worth abandoning the rest for.
                 if let Some(picture) = &kept.seen
-                    && let Err(e) = carl::game::seen::write(self.home, &picture_name, picture)
+                    && let Err(e) = crate::game::seen::write(self.home, &picture_name, picture)
                 {
                     eprintln!("  could not keep what was seen: {e}");
                 }
 
                 for note in &kept.keep {
-                    let name = carl::remember::note_name(note);
+                    let name = crate::remember::note_name(note);
                     if name.is_empty() {
                         eprintln!("  a note with no words in it was skipped: {note:?}");
                         continue;
@@ -327,14 +327,14 @@ mod tests {
 
         let fact = "JJ prefers two sentence answers";
         memory
-            .write(&carl::remember::note_name(fact), fact)
+            .write(&crate::remember::note_name(fact), fact)
             .unwrap();
 
         assert!(forget_note(&memory, fact).unwrap(), "by its words");
         assert!(!forget_note(&memory, fact).unwrap(), "and only once");
 
         memory
-            .write(&carl::remember::note_name(fact), fact)
+            .write(&crate::remember::note_name(fact), fact)
             .unwrap();
         assert!(
             forget_note(&memory, "jj-prefers-two-sentence-answers.md").unwrap(),

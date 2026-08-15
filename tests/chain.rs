@@ -164,6 +164,8 @@ fn the_record_can_say_who_did_what_to_which_task() {
                 task: t.id.clone(),
                 to: "nora".into(),
                 goal: t.goal.clone(),
+                parent: None,
+                must: vec!["it works".into()],
             },
         )
         .unwrap();

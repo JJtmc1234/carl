@@ -23,6 +23,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+# Only for removing the panel socket from a signal handler. std has no signal API.
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -30,4 +32,5 @@ tungstenite = { version = "0.28", default-features = false, features = ["rustls-
 ureq = { version = "3", default-features = false, features = ["json", "rustls"] }
 
 [dev-dependencies]
+libc = "0.2"
 tempfile = "3"

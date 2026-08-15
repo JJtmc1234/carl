@@ -10,8 +10,7 @@ use std::sync::mpsc::{Sender, channel};
 use anyhow::Result;
 use carl::claude::{Pool, Runner};
 use carl::slack::{self, Api, Ask, Directory, Pace, Patience, Tokens};
-
-use crate::turn;
+use carl::turn;
 
 /// Runs until interrupted.
 pub fn run(home: &Path) -> Result<()> {

@@ -1,0 +1,326 @@
+//! The accept loop, and one thread per connected panel.
+//!
+//! Blocking threads rather than an async runtime, because that is what the rest of Carl is and
+//! because there is one panel. An executor would be more machinery than the thing it runs.
+//!
+//! **Liveness is a tail of the journal, not a rebuild.** The chain writes to `events.jsonl` from
+//! its own process, so this one watches the file grow and forwards whatever is new. Rebuilding
+//! the world on a timer would be simpler to write and would be wrong twice over: it would miss
+//! anything that happened and was undone between two ticks, and it would give the panel no way
+//! to tell one change from a redraw.
+//!
+//! The tail is a poll rather than inotify, which would need a dependency for the one thing it
+//! would buy. The cost is up to `TICK` of latency on a file that is written a handful of times
+//! per task. Written down because it is a choice and there is a point at which it stops being
+//! the right one.
+
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use super::command::{self, PanelCommand};
+use super::listen::Bound;
+use super::snapshot;
+use super::wire::{Ask, Frame, PanelEvent, Reply, Request, VERSION};
+use crate::army::event::{self, Intervention, Journal, Record};
+use crate::army::personnel::Personnel;
+use crate::army::task::TaskId;
+use crate::{Result, ThreadId};
+
+/// How often the journal is checked for new lines while a panel is subscribed.
+const TICK: Duration = Duration::from_millis(150);
+
+/// The conversation the panel talks to Carl in.
+///
+/// A thread of its own, like Slack's channels and the terminal's `cli`, so the panel has its own
+/// history. It is the same Carl underneath with the same memory and the same rules, because it
+/// goes through the same `turn` machinery every other surface goes through. A second Carl would
+/// have needed a second code path, and there is not one.
+pub const THREAD: &str = "panel";
+
+pub struct Server {
+    home: PathBuf,
+}
+
+impl Server {
+    pub fn new(home: impl Into<PathBuf>) -> Self {
+        Self { home: home.into() }
+    }
+
+    /// Serves until the socket is dropped, which removes it. One thread per connection.
+    ///
+    /// Takes the `Bound` rather than a bare listener so the socket file cannot outlive the server
+    /// that made it. Returning from here, by any route including a panic unwinding, unlinks it.
+    pub fn run(&self, bound: Bound) -> Result<()> {
+        for stream in bound.listener().incoming() {
+            let stream = match stream {
+                Ok(s) => s,
+                // One panel failing to connect is not a reason to stop serving the next.
+                Err(_) => continue,
+            };
+            let home = self.home.clone();
+            std::thread::spawn(move || {
+                let _ = talk(&home, stream);
+            });
+        }
+        Ok(())
+    }
+}
+
+/// One connected panel, until it goes away.
+pub fn talk(home: &Path, stream: UnixStream) -> Result<()> {
+    let mut out = stream.try_clone()?;
+    let reader = BufReader::new(stream);
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        // A line that will not parse is answered rather than dropped. A panel that sent
+        // something malformed and got silence cannot tell that from a backend that died.
+        let request: Request = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                send(
+                    &mut out,
+                    &Frame::refused(None, format!("unreadable request: {e}")),
+                )?;
+                continue;
+            }
+        };
+
+        if request.v != VERSION {
+            send(
+                &mut out,
+                &Frame::refused(
+                    Some(request.id),
+                    format!(
+                        "this backend speaks panel protocol {VERSION} and that frame said {}",
+                        request.v
+                    ),
+                ),
+            )?;
+            continue;
+        }
+
+        let id = Some(request.id.clone());
+        match request.body {
+            Ask::Ping => send(&mut out, &Frame::to(id, Reply::Pong))?,
+            Ask::Snapshot => match snapshot::build(home) {
+                Ok(s) => send(
+                    &mut out,
+                    &Frame::to(
+                        id,
+                        Reply::Snapshot {
+                            snapshot: Box::new(s),
+                        },
+                    ),
+                )?,
+                Err(e) => send(&mut out, &Frame::refused(id, e.to_string()))?,
+            },
+            // Takes over the connection. A subscribed panel is streaming, and interleaving
+            // request handling on the same socket would need framing this protocol does not
+            // have. A panel that wants both opens two connections.
+            Ask::Subscribe { since } => return stream_from(home, &mut out, id, since),
+            Ask::Command { command } => {
+                let replies = carry_out(home, command, &mut out, id.clone());
+                match replies {
+                    Ok(reply) => send(&mut out, &Frame::to(id, reply))?,
+                    Err(e) => send(&mut out, &Frame::refused(id, e.to_string()))?,
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn send(out: &mut UnixStream, frame: &Frame) -> Result<()> {
+    writeln!(out, "{}", serde_json::to_string(frame)?)?;
+    out.flush()?;
+    Ok(())
+}
+
+/// Replays what the panel missed, then forwards everything new until it disconnects.
+fn stream_from(home: &Path, out: &mut UnixStream, id: Option<String>, since: u64) -> Result<()> {
+    let path = Personnel::open(home)?.journal_path();
+    let records = event::read(&path)?;
+
+    if let Some(gap) = gap(&records, since) {
+        return send(out, &Frame::to(id, gap));
+    }
+
+    let mut last = since;
+    for r in records.iter().filter(|r| r.seq > since) {
+        last = r.seq;
+        send(out, &event_frame(r.clone()))?;
+    }
+    // Sent even when the replay was empty, so a panel always knows it has caught up rather than
+    // having to infer it from a quiet connection.
+    send(out, &Frame::to(id, Reply::Live { seq: last }))?;
+
+    loop {
+        let fresh: Vec<Record> = event::read(&path)?
+            .into_iter()
+            .filter(|r| r.seq > last)
+            .collect();
+        for r in fresh {
+            last = r.seq;
+            // A write failure is the panel having gone away, which is ordinary.
+            if send(out, &event_frame(r)).is_err() {
+                return Ok(());
+            }
+        }
+        std::thread::sleep(TICK);
+    }
+}
+
+fn event_frame(r: Record) -> Frame {
+    Frame::to(
+        None,
+        Reply::Event {
+            event: Box::new(PanelEvent::of(r)),
+        },
+    )
+}
+
+/// Whether the record can honour a request to continue from `since`.
+///
+/// Two ways it cannot. The panel asks for a sequence past the end, which means it is holding a
+/// position from a different record than this one, most likely because the journal was replaced.
+/// Or the record no longer starts early enough to reach `since + 1`. Both are answered honestly
+/// rather than served as a stream with a hole in it that would look continuous.
+fn gap(records: &[Record], since: u64) -> Option<Reply> {
+    let first = records.first().map_or(0, |r| r.seq);
+    let last = records.last().map_or(0, |r| r.seq);
+
+    if since > last {
+        return Some(Reply::Gap {
+            asked_for: since,
+            have_from: first,
+            have_to: last,
+            why: "that sequence is past the end of this record, so it is not the record you were \
+                  reading. Take a fresh snapshot."
+                .into(),
+        });
+    }
+    if since > 0 && first > since + 1 {
+        return Some(Reply::Gap {
+            asked_for: since,
+            have_from: first,
+            have_to: last,
+            why: "the record no longer goes back that far. Take a fresh snapshot.".into(),
+        });
+    }
+    None
+}
+
+/// Does what the panel asked, and writes down anything that reached past the chain.
+fn carry_out(
+    home: &Path,
+    command: PanelCommand,
+    out: &mut UnixStream,
+    id: Option<String>,
+) -> Result<Reply> {
+    command.check()?;
+
+    let mut journal = Journal::open(Personnel::open(home)?.journal_path())?;
+
+    let intervention = match &command {
+        PanelCommand::Say { text } => return speak(home, text, out, id),
+        PanelCommand::Objective { text } => {
+            // An objective goes to Carl as well as into the record, because an objective nobody
+            // was told about is a note to self.
+            let recorded =
+                command::record(&mut journal, Intervention::Objective { what: text.clone() })?;
+            let _ = speak(home, &format!("New objective from JJ: {text}"), out, id);
+            return Ok(Reply::Done {
+                seq: Some(recorded.seq),
+                what: format!(
+                    "objective recorded and Carl told, {} notified",
+                    recorded.told.len()
+                ),
+            });
+        }
+        PanelCommand::Inspect { agent } => {
+            let people = Personnel::open(home)?;
+            let records = event::read(people.journal_path())?;
+            let view = snapshot::inspect(&people, &records, agent)?;
+            return Ok(Reply::Done {
+                seq: None,
+                what: serde_json::to_string(&view)?,
+            });
+        }
+        PanelCommand::Answer { seq, text } => Intervention::Answered {
+            question: seq.to_string(),
+            answer: text.clone(),
+        },
+        PanelCommand::JjMessage { agent, text } => Intervention::Message {
+            to: agent.clone(),
+            what: text.clone(),
+        },
+        PanelCommand::JjInstruct { agent, instruction } => Intervention::Override {
+            agent: agent.clone(),
+            instruction: instruction.clone(),
+        },
+        PanelCommand::JjStop { agent, why } => Intervention::Stopped {
+            task: holding(home, agent)?,
+            why: why.clone(),
+        },
+        PanelCommand::JjReplace { agent, goal, why } => Intervention::Replaced {
+            task: holding(home, agent)?,
+            goal: goal.clone(),
+            why: why.clone(),
+        },
+    };
+
+    let recorded = command::record(&mut journal, intervention)?;
+    Ok(Reply::Done {
+        seq: Some(recorded.seq),
+        what: format!(
+            "recorded as a JJ intervention, told {}",
+            recorded.told.join(" and ")
+        ),
+    })
+}
+
+/// The task this agent is actually holding, refusing rather than guessing.
+///
+/// Stopping "whatever she is doing" when she is doing nothing has to be an error. Inventing a
+/// task id would put a stop event in the record against a task that never existed.
+fn holding(home: &Path, agent: &str) -> Result<TaskId> {
+    let people = Personnel::open(home)?;
+    people
+        .state(agent)
+        .and_then(|s| s.holding.clone())
+        .ok_or_else(|| {
+            crate::Error::Refused(format!(
+                "{agent} is not holding a task, so there is none to stop"
+            ))
+        })
+}
+
+/// Asks Carl, through the same machinery every other surface uses.
+///
+/// Text is forwarded as it arrives rather than at the end, because `turn::stream` already hands
+/// it over that way and holding it back would make the panel slower than the terminal for no
+/// reason.
+fn speak(home: &Path, said: &str, out: &mut UnixStream, id: Option<String>) -> Result<Reply> {
+    let thread = ThreadId::new(THREAD)?;
+    let answer = crate::turn::stream(home, &thread, said, None, None, &mut |text| {
+        match send(out, &Frame::to(None, Reply::Speaking { text: text.into() })) {
+            Ok(()) => crate::claude::Flow::Continue,
+            // The panel hung up mid answer. Stopping is right: the rest is going nowhere.
+            Err(_) => crate::claude::Flow::Stop,
+        }
+    })
+    .map_err(|e| crate::Error::Claude(e.to_string()))?;
+
+    let _ = id;
+    Ok(Reply::Done {
+        seq: None,
+        what: answer.text,
+    })
+}

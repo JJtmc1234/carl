@@ -365,6 +365,8 @@ fn the_journal_carries_on_across_a_restart() {
                 task: task(),
                 to: "nora".into(),
                 goal: "make the balancer symmetric".into(),
+                parent: None,
+                must: vec!["it works".into()],
             },
         )
         .unwrap();

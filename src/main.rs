@@ -9,12 +9,11 @@
 mod chat;
 mod ear;
 mod repl;
-mod turn;
 
 use std::path::PathBuf;
 
 use anyhow::Result;
-use carl::{Memory, ThreadId};
+use carl::{Memory, ThreadId, turn};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -151,6 +150,12 @@ enum Command {
         journal: Option<String>,
     },
 
+    /// Serve the Command Panel backend on a local socket.
+    ///
+    /// Owner only, under ~/.carl/panel/. Nothing listens on the network. The protocol is in
+    /// docs/panel-v1.md, and it is line delimited JSON, so `nc -U` is a working client when the
+    /// thing that is broken is the backend.
+    Panel,
     /// What Carl remembers across conversations.
     Memory {
         #[command(subcommand)]
@@ -343,6 +348,16 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        Command::Panel => {
+            let at = carl::panel::socket_path(&home);
+            let held = carl::panel::listen::hold(&at)?;
+            // systemd stops a service with SIGTERM, so without this every ordinary stop would
+            // leave a socket behind and `ls` would suggest a backend was running.
+            carl::panel::listen::on_signal(&at)?;
+            println!("panel backend listening on {}", at.display());
+            carl::panel::Server::new(&home).run(held)?;
+            Ok(())
+        }
         Command::Threads => {
             let registry = carl::Registry::open(home.join("threads.json"))?;
             let entries = carl::log::read(home.join("conversations.jsonl"))?;

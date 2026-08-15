@@ -17,8 +17,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use carl::claude::{Flow, Pool, Runner};
-
-use crate::turn;
+use carl::turn;
 
 /// Words that end the conversation, on their own on a line.
 ///
