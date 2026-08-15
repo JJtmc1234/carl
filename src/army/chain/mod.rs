@@ -47,12 +47,47 @@ use super::org::{Agent, Rank, reports_of};
 /// list raises privileges, and there is nowhere in `org.rs` to ask for that anyway.
 pub fn tools_for(rank: Rank) -> Vec<String> {
     let names: &[&str] = match rank {
-        // A chief with no tools cannot implement by accident, which is what the rank says.
+        // A chief pre approves nothing, and `denied_for` is what actually stops him.
         Rank::Human | Rank::Chief => &[],
         Rank::Lead => &["Read", "Grep", "Glob", "Bash"],
         Rank::Worker => &["Read", "Grep", "Glob", "Bash", "Write", "Edit"],
     };
     names.iter().map(|s| s.to_string()).collect()
+}
+
+/// What this rank is refused outright.
+///
+/// This is the half that enforces anything. Leaving a tool off the allow list only declines to
+/// pre approve it, and an empty allow list emits no flag at all, which leaves the defaults in
+/// place rather than granting nothing.
+///
+/// Found the hard way. Carl was given an empty allow list and described everywhere as having
+/// no tools, and he started a background task, whose reply then arrived in his session as an
+/// answer nobody had asked for. He was never toolless. He was unconfigured.
+///
+/// `Task` and `Agent` are refused to everybody including the worker. An agent that can start
+/// its own agents delegates outside the chain, and the whole point of the chain is that there
+/// is one route work can take.
+pub fn denied_for(rank: Rank) -> Vec<String> {
+    let always: &[&str] = &["Task", "Agent"];
+    let extra: &[&str] = match rank {
+        // No tools means named, not omitted.
+        Rank::Human | Rank::Chief => &[
+            "Read",
+            "Grep",
+            "Glob",
+            "Bash",
+            "Write",
+            "Edit",
+            "NotebookEdit",
+            "WebFetch",
+            "WebSearch",
+        ],
+        // A lead reads and reruns. It does not write.
+        Rank::Lead => &["Write", "Edit", "NotebookEdit"],
+        Rank::Worker => &[],
+    };
+    always.iter().chain(extra).map(|s| s.to_string()).collect()
 }
 
 /// What everybody in the chain is told, whatever their rank.

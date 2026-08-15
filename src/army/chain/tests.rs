@@ -415,3 +415,68 @@ fn a_verdict_line_with_non_ascii_does_not_panic() {
     let (v, _) = read_verdict("ACCEPT the numbers agree with the wiki");
     assert_eq!(v, Verdict::Accept);
 }
+
+/// The bug this exists to stop coming back.
+///
+/// Carl was given an empty allow list and described everywhere as having no tools. An empty
+/// allow list emits no flag, no flag means the defaults, and he started a background task whose
+/// reply then arrived in his session as an answer nobody asked for. Leaving a tool off the
+/// allow list only declines to pre approve it, so anything that must not happen has to be named.
+#[test]
+fn carl_is_refused_his_tools_by_name_rather_than_by_omission() {
+    let denied = denied_for(Rank::Chief);
+    for must_be_refused in ["Write", "Edit", "Bash", "Task", "Agent", "Read"] {
+        assert!(
+            denied.iter().any(|d| d == must_be_refused),
+            "the chief must be refused {must_be_refused} by name, got {denied:?}"
+        );
+    }
+
+    // And the refusal has to reach the command line, which is the only place it counts.
+    let args = crate::claude::Runner::at("claude")
+        .allowing(tools_for(Rank::Chief))
+        .denying(denied_for(Rank::Chief))
+        .session_args(&crate::SessionId::fresh().unwrap(), "brief", false);
+
+    let at = args
+        .iter()
+        .position(|a| a == "--disallowedTools")
+        .expect("a chief with no tools must still say so on the command line");
+    assert!(args[at + 1..].iter().any(|a| a == "Write"), "{args:?}");
+}
+
+/// Nobody in the chain may start agents of their own, worker included. An agent that can spawn
+/// agents delegates outside the chain, and one route for work is the entire point.
+#[test]
+fn no_rank_may_start_its_own_agents() {
+    for rank in [Rank::Human, Rank::Chief, Rank::Lead, Rank::Worker] {
+        let denied = denied_for(rank);
+        assert!(denied.iter().any(|d| d == "Task"), "{rank:?} {denied:?}");
+        assert!(denied.iter().any(|d| d == "Agent"), "{rank:?} {denied:?}");
+    }
+}
+
+/// A lead reads and reruns, and is refused an editor by name rather than by omission.
+#[test]
+fn a_lead_is_refused_an_editor_by_name() {
+    let denied = denied_for(Rank::Lead);
+    for editor in ["Write", "Edit", "NotebookEdit"] {
+        assert!(denied.iter().any(|d| d == editor), "{denied:?}");
+    }
+    assert!(
+        !denied.iter().any(|d| d == "Bash"),
+        "a reviewer still has to be able to rerun it: {denied:?}"
+    );
+}
+
+/// Nothing a rank is allowed may also be refused, or the grant is a lie either way.
+#[test]
+fn the_allow_list_and_the_refusal_list_never_disagree() {
+    for rank in [Rank::Human, Rank::Chief, Rank::Lead, Rank::Worker] {
+        let allowed = tools_for(rank);
+        let denied = denied_for(rank);
+        for a in &allowed {
+            assert!(!denied.contains(a), "{rank:?} both allows and refuses {a}");
+        }
+    }
+}

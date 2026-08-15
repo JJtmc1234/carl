@@ -80,6 +80,7 @@ impl Runner {
             args.push(system.to_string());
         }
         args.extend(self.allowed_args());
+        args.extend(self.denied_args());
         args
     }
 
@@ -164,6 +165,17 @@ impl Session {
         // this answer cannot be the tail of the last one.
         self.drain_unfinished();
 
+        // And anything the session said without being asked. A held open process is not only
+        // answering this program: a background task it started can report back into it, and
+        // that reply arrives as a finished answer nobody is waiting for. Taking the next
+        // envelope off the queue would then hand back the answer to the previous question, and
+        // every question after it is off by one.
+        //
+        // Caught in the delegation chain, where Carl answered a notification, that answer was
+        // read as his report to JJ, and it said the work had failed when it had succeeded. The
+        // record and the reply disagreed and only the transcript showed why.
+        self.discard_unasked();
+
         let message = json!({
             "type": "user",
             "message": { "role": "user", "content": [{ "type": "text", "text": prompt }] }
@@ -244,6 +256,21 @@ impl Session {
         self.unfinished = false;
     }
 
+    /// Throws away anything the session produced without being asked.
+    ///
+    /// Never blocks. Whatever is already sitting in the channel arrived before this question
+    /// was sent, so by construction it is not the answer to it.
+    ///
+    /// Returns how much was dropped, because a session that keeps talking to itself is worth
+    /// knowing about rather than quietly cleaning up after.
+    fn discard_unasked(&mut self) -> usize {
+        let mut dropped = 0;
+        while self.chunks.try_recv().is_ok() {
+            dropped += 1;
+        }
+        dropped
+    }
+
     /// Whether the process is still alive.
     ///
     /// Worth asking before relying on it. A session is long lived by design, so it has time
@@ -281,6 +308,36 @@ mod tests {
                 .open_session(&s, Path::new("/tmp"), "", false)
                 .is_err()
         );
+    }
+
+    /// An empty allow list emits no flag, and no flag means the defaults rather than nothing.
+    /// Anything that must not happen has to be refused by name, which is a different flag.
+    #[test]
+    fn refusing_a_tool_is_a_different_flag_from_not_allowing_it() {
+        let s = SessionId::fresh().unwrap();
+
+        let nothing_allowed = Runner::at("claude")
+            .allowing(vec![])
+            .session_args(&s, "", false);
+        assert!(
+            !nothing_allowed.contains(&"--allowedTools".to_string()),
+            "an empty allow list must not emit an empty flag: {nothing_allowed:?}"
+        );
+        assert!(
+            !nothing_allowed.contains(&"--disallowedTools".to_string()),
+            "and must not invent a refusal nobody asked for"
+        );
+
+        let refused = Runner::at("claude")
+            .allowing(vec![])
+            .denying(vec!["Write".into(), "Bash".into()])
+            .session_args(&s, "", false);
+        let at = refused
+            .iter()
+            .position(|a| a == "--disallowedTools")
+            .expect("a refusal must reach the command line");
+        assert_eq!(refused[at + 1], "Write");
+        assert_eq!(refused[at + 2], "Bash");
     }
 
     /// Pinning a new conversation and resuming an existing one are different flags, and

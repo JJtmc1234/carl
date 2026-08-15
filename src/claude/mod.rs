@@ -68,6 +68,12 @@ pub struct Runner {
     /// Headless has nobody to ask, so a tool that is not listed here is simply refused and
     /// Carl explains that he cannot do the thing rather than doing it.
     allowed: Vec<String>,
+    /// Tools refused outright, whatever the allow list says.
+    ///
+    /// Needed because an empty allow list means no flag at all, and no flag means the defaults
+    /// rather than nothing. Something that must not happen has to be named here, because
+    /// leaving it off the allow list only declines to pre approve it.
+    denied: Vec<String>,
 }
 
 /// Running python, which is what makes Carl able to work something out rather than guess.
@@ -89,6 +95,7 @@ impl Default for Runner {
         Self {
             program: PathBuf::from("claude"),
             allowed: vec![PYTHON.to_string()],
+            denied: Vec::new(),
         }
     }
 }
@@ -98,13 +105,37 @@ impl Runner {
         Self {
             program: program.into(),
             allowed: vec![PYTHON.to_string()],
+            denied: Vec::new(),
         }
     }
 
-    /// Replaces the allowed tool list. An empty list means Carl may use no tools at all.
+    /// Replaces the allowed tool list.
+    ///
+    /// An empty list is not the same as forbidding everything. It emits no flag, which leaves
+    /// the defaults in place. To actually forbid something, name it in `denying`.
     pub fn allowing(mut self, tools: Vec<String>) -> Self {
         self.allowed = tools;
         self
+    }
+
+    /// Refuses these tools outright, whatever else is allowed.
+    ///
+    /// This is the only thing that actually stops a tool being used. An agent forbidden to
+    /// implement needs its editors named here, because an empty allow list quietly grants the
+    /// default set instead of granting nothing.
+    pub fn denying(mut self, tools: Vec<String>) -> Self {
+        self.denied = tools;
+        self
+    }
+
+    /// The refusal list as arguments, or nothing when there is none.
+    pub(crate) fn denied_args(&self) -> Vec<String> {
+        if self.denied.is_empty() {
+            return Vec::new();
+        }
+        let mut args = vec!["--disallowedTools".to_string()];
+        args.extend(self.denied.iter().cloned());
+        args
     }
 
     pub fn program(&self) -> &Path {
@@ -139,6 +170,7 @@ impl Runner {
             args.push("--allowedTools".into());
             args.extend(self.allowed.iter().cloned());
         }
+        args.extend(self.denied_args());
 
         // --session-id pins a new conversation to an id we chose. --resume continues one that
         // already exists. Sending both is an error, which is why `resume` is a flag on the

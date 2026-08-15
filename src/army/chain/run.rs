@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::words;
-use super::{brief_for, read_must, tools_for};
+use super::{brief_for, denied_for, read_must, tools_for};
 use crate::army::event::{Event, Journal};
 use crate::army::org;
 use crate::army::task::{Status, Task, TaskId, Verification};
@@ -108,9 +108,12 @@ impl Chain {
 
         if !self.voices.iter().any(|(n, _)| n == who) {
             let session = SessionId::fresh()?;
-            // The tool list is the rank. An empty one becomes no flag at all rather than an
-            // empty flag, which some parsers read as allowing everything.
-            let runner = Runner::at(&self.program).allowing(tools_for(agent.rank));
+            // The tool list is the rank, and the refusal list is what enforces it. An empty
+            // allow list emits no flag, which leaves the defaults rather than granting
+            // nothing, so anything that must not happen is named in `denied_for`.
+            let runner = Runner::at(&self.program)
+                .allowing(tools_for(agent.rank))
+                .denying(denied_for(agent.rank));
             let open = runner.open_session(&session, &self.workdir, &brief_for(agent), false)?;
             self.voices.push((who.to_string(), open));
         }

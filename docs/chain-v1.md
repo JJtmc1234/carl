@@ -38,10 +38,18 @@ corrects her own first attempt rather than being re-briefed from cold.
 
 ## three rules that are enforced rather than requested
 
-**Rank picks the tool list the process starts with.** `tools_for` gives a chief an empty list,
-a lead read tools and `Bash`, and a worker an editor as well. `check_may_implement` refuses a
-chief who asks to implement, and the empty tool list means a chief who never asks still cannot
-write a file. Two guards, because either alone is one forgotten call away from nothing.
+**Rank picks both what a process may use and what it is refused.** `tools_for` pre approves,
+and `denied_for` is what actually stops anything.
+
+That distinction was learned rather than designed. The first version gave Carl an empty allow
+list and described him everywhere as having no tools. An empty allow list emits no flag, no
+flag means Claude Code's defaults rather than nothing, and Carl was never toolless. He started
+a background task, and its reply arrived in his session as an answer nobody had asked for.
+Leaving a tool off the allow list only declines to pre approve it, so anything that must not
+happen is now named in `--disallowedTools`.
+
+`Task` and `Agent` are refused to everybody, the worker included. An agent that can start its
+own agents delegates outside the chain, and one route for work is the entire point.
 
 Mason having `Bash` and no editor is deliberate and imperfect. A reviewer has to rerun the
 verification rather than believe a summary, and a shell can write a file. It is the smallest
@@ -82,6 +90,26 @@ pub fn check_free(open: &[Task], owner: &str) -> Result<()>
 ```
 
 Say the word and I will move it and delete mine.
+
+## two fixes in the shared claude layer, which you own
+
+Both were found by a real run and both affect the voice path as much as this one, so they are
+in `src/claude/` rather than worked around here. Say the word if you want them moved.
+
+**`Session::ask` now discards anything the session said without being asked.** A held open
+process is not only answering this program. A background task it starts reports back into the
+same session, and that reply arrives as a finished answer with nobody waiting for it. Taking
+the next envelope off the queue then hands back the answer to the previous question, and every
+question after it is off by one.
+
+This is what made Carl tell JJ "Not done, Adrian is blocked" about work that had in fact
+succeeded. His real answer was correct and was never read. Only the transcript showed why, and
+the record and the reply disagreed with each other in the meantime. In a spoken conversation
+the same bug means Carl answers the question before last out loud.
+
+**`Runner` grew `denying`, and `--disallowedTools` reaches the command line.** See the tool
+section above. An empty allow list was silently the default set, which meant every claim about
+what an agent could not do was untested and wrong.
 
 ## what I did not need, and did not build
 
