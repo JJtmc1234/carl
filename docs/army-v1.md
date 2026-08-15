@@ -125,6 +125,22 @@ pub fn about(records, task) -> Vec<Record>
 - The variant list is closed on purpose. A free string means every writer invents its own
   wording and no reader can count anything, and counting is most of what a record is for.
 
+## the shortest description of how this fits together
+
+`tests/chain.rs` walks JJ to Carl to Adrian to Mason to Nora with the real types and no model
+anywhere, in milliseconds. Read it before building. It shows every rule in use rather than
+described, including the two that are easy to get wrong:
+
+- **Escalation without a seventh status.** After three rejections, Mason takes it to Adrian by
+  creating a new task whose parent is the failed one. The original stays in
+  `ChangesRequested`, so its history remains true.
+- **Queueing is not piling on.** A lead may create a second task for a busy worker. Handing it
+  over is what `may_take_on` refuses.
+
+It also exists to catch a design fault the unit tests cannot: types that each behave correctly
+and cannot be composed into the shape JJ asked for. That is much cheaper to find there than
+after somebody has written a delegation engine against them.
+
 ## process 2, the delegation chain
 
 Build against `task.rs` and `org.rs`.
