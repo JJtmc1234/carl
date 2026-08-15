@@ -382,10 +382,10 @@ impl Panel {
 fn backend() -> (tempfile::TempDir, Personnel) {
     let dir = tempfile::tempdir().unwrap();
     let people = army(dir.path());
-    let listener = listen::bind(&listen::socket_path(dir.path())).unwrap();
+    let held = listen::hold(&listen::socket_path(dir.path())).unwrap();
     let home = dir.path().to_path_buf();
     std::thread::spawn(move || {
-        let _ = serve::Server::new(&home).run(listener);
+        let _ = serve::Server::new(&home).run(held);
     });
     (dir, people)
 }

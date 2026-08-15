@@ -15,11 +15,12 @@
 //! the right one.
 
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::command::{self, PanelCommand};
+use super::listen::Bound;
 use super::snapshot;
 use super::wire::{Ask, Frame, PanelEvent, Reply, Request, VERSION};
 use crate::army::event::{self, Intervention, Journal, Record};
@@ -47,9 +48,12 @@ impl Server {
         Self { home: home.into() }
     }
 
-    /// Serves until the listener is dropped. One thread per connection.
-    pub fn run(&self, listener: UnixListener) -> Result<()> {
-        for stream in listener.incoming() {
+    /// Serves until the socket is dropped, which removes it. One thread per connection.
+    ///
+    /// Takes the `Bound` rather than a bare listener so the socket file cannot outlive the server
+    /// that made it. Returning from here, by any route including a panic unwinding, unlinks it.
+    pub fn run(&self, bound: Bound) -> Result<()> {
+        for stream in bound.listener().incoming() {
             let stream = match stream {
                 Ok(s) => s,
                 // One panel failing to connect is not a reason to stop serving the next.

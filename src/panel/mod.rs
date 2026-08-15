@@ -17,6 +17,8 @@
 //!   tasks.rs     tasks rebuilt from the record, because they exist nowhere else
 //!   snapshot.rs  everything at one moment, from the three places that actually know
 //!   listen.rs    the socket, owner only, which is the authentication
+//!   client.rs    the typed client, so nothing above it deals in bytes
+//!   live.rs      staying connected, and being honest when it is not
 //!   serve.rs     the accept loop and the tail of the journal
 //! ```
 //!
@@ -31,8 +33,10 @@
 //! milestone is worse than a missing one. No editor and no terminal. Those belong to the other
 //! two processes, and `docs/panel-v1.md` is the contract they build against.
 
+pub mod client;
 pub mod command;
 pub mod listen;
+pub mod live;
 pub mod serve;
 pub mod snapshot;
 pub mod tasks;
@@ -42,8 +46,10 @@ pub mod wire;
 #[cfg(test)]
 mod tests;
 
+pub use client::{Done, Events, Incoming, PanelClient};
 pub use command::{PanelCommand, Recorded};
-pub use listen::{bind, socket_path};
+pub use listen::{Bound, bind, hold, socket_path};
+pub use live::{Health as Link, LivePanel, Update};
 pub use serve::Server;
 pub use snapshot::build;
 pub use view::{

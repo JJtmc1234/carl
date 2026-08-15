@@ -193,22 +193,94 @@ up answer that looks like a real one.
 away. Do not build a task table on your side either: keep the last snapshot, apply events to it,
 and re-snapshot whenever you get a `gap`.
 
-## For Process 2
+## For Process 2: use the client, not the protocol
 
-Your `PanelDataSource` needs five operations: `ping`, `snapshot`, `subscribe(since)`,
-`command(cmd)`, and a stream of `PanelEvent`. That is the whole surface. Nothing about the socket
-needs to reach your components.
+**Everything above this line is implementation detail you should not need.** `carl::panel::live`
+does all of it. Your `LivePanelDataSource` is meant to be thin and boring.
 
-The reconnect loop that works:
+```rust
+use carl::panel::live::{LivePanel, Update, Health};
+use carl::panel::{socket_path, PanelCommand};
 
-1. connect, `snapshot`, keep `snapshot.seq`
-2. second connection, `subscribe` from that `seq`
-3. apply events as they arrive, tracking the highest `seq` seen
-4. on disconnect, reconnect and `subscribe` from the highest `seq` you have
-5. on `gap`, throw your state away, go back to 1
+let (mut live, snapshot) = LivePanel::open(&socket_path(&home))?;
+// `snapshot` is a PanelSnapshot. Draw it.
 
-Types to generate from: `src/panel/view.rs` and `src/panel/wire.rs`. They serialise exactly as
-shown here.
+loop {
+    match live.next_update() {
+        Update::Event(e)      => apply(e),          // in order, no holes, ever
+        Update::Resynced(s)   => redraw_from(s),    // throw away what you had
+        Update::Health(h)     => show_link(h),      // Connected/Reconnecting/Stale/Disconnected
+    }
+}
+```
+
+`LivePanel` also implements `Iterator<Item = Update>`, so `for update in live` works. It never
+returns `None`: a panel that has lost its backend keeps trying, because a screen going blank is
+not the answer.
+
+Run it on a thread and forward `Update`s to your UI. It only returns when something actually
+happened, so there are no ticks to filter out.
+
+### What it does for you
+
+| you would have had to | it does |
+|---|---|
+| open and frame a unix socket | `LivePanel::open` |
+| track the last sequence | `live.last_seq()` |
+| notice a hole in the stream | refuses it as an error rather than accepting it |
+| reconnect on failure | automatic, with `Health` reported honestly |
+| resume from the right place | resubscribes from the last accepted sequence |
+| recover from a `gap` | takes a fresh snapshot and gives you `Update::Resynced` |
+| tell a quiet army from a dead backend | pings on a second connection before claiming either |
+
+### Sending commands
+
+```rust
+live.command(PanelCommand::JjInstruct { agent: "nora".into(), instruction: "...".into() })?;
+
+// Carl's answer, as he produces it:
+live.command_streaming(
+    PanelCommand::Say { text: "what is Nora up to".into() },
+    &mut |text| print!("{text}"),
+)?;
+```
+
+Commands go out on a connection of their own, because the subscribed one cannot carry a request.
+That is handled for you.
+
+**Streaming is real.** `say` and `objective` produce `speaking` frames while Carl is still
+talking, and `command_streaming` hands each one over as it arrives. Nothing splits a finished
+answer into pieces afterwards to look like streaming. Every other command produces no `speaking`
+frames at all and the callback is simply never called.
+
+### Connection health, and what each state entitles you to claim
+
+| `Health` | what is true | what the screen should say |
+|---|---|---|
+| `Connected` | contact confirmed within the last few seconds | current |
+| `Stale` | connected, quiet, and a check has not yet confirmed the backend is alive | was true a moment ago |
+| `Reconnecting` | the connection went and it is trying again | not current |
+| `Disconnected` | attempts are failing | not current, and say so plainly |
+
+A quiet army and a dead backend look identical from a subscribed socket, because the backend
+sends nothing when nothing is happening. So silence proves nothing, and `LivePanel` opens a
+second short lived connection and pings rather than assuming. `since_contact()` tells you how
+long since contact was last confirmed.
+
+### If you need the layer below
+
+`carl::panel::client::PanelClient` is one connection, typed: `connect`, `ping`, `snapshot`,
+`command`, `command_streaming`, `subscribe`. `subscribe` **consumes** the client and gives back
+an `Events`, because a streaming connection cannot carry requests, and making that a type change
+rather than a rule in a document means it cannot be got wrong.
+
+Types to generate from, if your UI is not in Rust: `src/panel/view.rs` and `src/panel/wire.rs`.
+They serialise exactly as shown above.
+
+### Running example
+
+`cargo run --example panel_watch -- ~/.carl` is a complete panel in forty lines. It has no state
+of its own beyond what it prints, which is the point.
 
 ## For Process 3
 
@@ -229,10 +301,39 @@ default and is correct for anything you did not actually check.
 Terminal and editor are yours and are not in this protocol. If they need to reach the backend,
 tell me what for and I will add a command rather than having you open a second channel.
 
+## Lifecycle
+
+`carl panel` removes its socket when it stops, on a normal return, on a panic unwinding, and on
+SIGTERM or SIGINT. systemd stops a service with SIGTERM, so that is the ordinary stop rather than
+the rare one, and without it every stop would leave a file that made `ls` suggest a backend was
+running.
+
+SIGKILL and a power cut still leave the socket, because nothing can run at that point. That is
+what the stale socket recovery is for: a start that finds a socket in its way connects to it, and
+clears it only when nothing answers. A live backend is never stranded and a dead one never needs
+manual cleanup.
+
+Two backends cannot share a home. The second refuses at bind, naming the path. There is no lock
+file, because the socket already answers the question and a second mechanism would be a second
+thing that can disagree.
+
 ## Verified
 
-433 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
+447 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
 
-Live path exercised against the real binary with `nc` as the client: a panel subscribed at 0,
-received `live 0`, then saw six events with no further requests. Three came from a separate socket
-connection, three from a separate OS process appending to the journal.
+The full path, with the real binaries and a real restart, as run:
+
+```text
+snapshot at seq 0: 4 agents, 0 tasks
+  event  seq  1  delegated   Task { id: "cafe01", actor: "mason" }   <- separate process
+  event  seq  2  moved       Task { id: "cafe01", actor: "mason" }
+  link   Reconnecting                                                <- backend killed
+  link   Disconnected
+  link   Connected                                                   <- backend restarted
+  event  seq  3  submitted   Task { id: "cafe01", actor: "mason" }   <- happened while away
+  event  seq  4  reviewed    Task { id: "cafe01", actor: "mason" }
+```
+
+Sequences 3 and 4 were written while nothing was watching, and arrived in order after the
+reconnect with nothing repeated and nothing skipped. No refresh was asked for at any point. The
+socket was gone from the filesystem between the kill and the restart.

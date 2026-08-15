@@ -350,9 +350,12 @@ fn main() -> Result<()> {
 
         Command::Panel => {
             let at = carl::panel::socket_path(&home);
-            let listener = carl::panel::bind(&at)?;
+            let held = carl::panel::listen::hold(&at)?;
+            // systemd stops a service with SIGTERM, so without this every ordinary stop would
+            // leave a socket behind and `ls` would suggest a backend was running.
+            carl::panel::listen::on_signal(&at)?;
             println!("panel backend listening on {}", at.display());
-            carl::panel::Server::new(&home).run(listener)?;
+            carl::panel::Server::new(&home).run(held)?;
             Ok(())
         }
         Command::Threads => {
