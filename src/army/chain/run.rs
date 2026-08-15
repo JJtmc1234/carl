@@ -250,6 +250,8 @@ impl Chain {
                 task: task.id.clone(),
                 to: to.to_string(),
                 goal: task.goal.clone(),
+                parent: task.parent.clone(),
+                must: task.verification.must.clone(),
             },
         )?;
         self.now_holding(to, &task.id)?;

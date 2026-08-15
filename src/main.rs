@@ -9,12 +9,11 @@
 mod chat;
 mod ear;
 mod repl;
-mod turn;
 
 use std::path::PathBuf;
 
 use anyhow::Result;
-use carl::{Memory, ThreadId};
+use carl::{Memory, ThreadId, turn};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
