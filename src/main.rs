@@ -137,6 +137,20 @@ enum Command {
     /// List the conversations Carl is holding.
     Threads,
 
+    /// Send one request down the chain of command and wait for it to come back.
+    ///
+    /// JJ to Carl to Adrian to Mason to Nora, and all the way back up. Four real `claude`
+    /// processes, one per agent, each with the tools its rank allows and no others.
+    Chain {
+        request: Vec<String>,
+        /// Where Nora does the work. She can change files here and nowhere else matters.
+        #[arg(long)]
+        workdir: String,
+        /// Where to write what happened. Defaults to events.jsonl inside the workdir.
+        #[arg(long)]
+        journal: Option<String>,
+    },
+
     /// What Carl remembers across conversations.
     Memory {
         #[command(subcommand)]
@@ -345,6 +359,48 @@ fn main() -> Result<()> {
             }
             for (thread, n) in counts {
                 println!("{thread}  {n} message(s)");
+            }
+            Ok(())
+        }
+
+        Command::Chain {
+            request,
+            workdir,
+            journal,
+        } => {
+            let asked = request.join(" ");
+            if asked.trim().is_empty() {
+                anyhow::bail!("ask for something");
+            }
+            let workdir = expand(&workdir);
+            let journal = journal
+                .map(|j| expand(&j))
+                .unwrap_or_else(|| workdir.join("events.jsonl"));
+
+            println!("JJ asks: {asked}\n");
+            let mut chain = carl::army::Chain::new("claude", &workdir, &journal)?.aloud(true);
+            let passage = carl::army::campaign(&mut chain, &asked)?;
+
+            println!("\n--- what each agent was handed ---");
+            println!("\ncarl to adrian:\n{}", passage.for_adrian);
+            println!("\nadrian to mason:\n{}", passage.for_mason);
+            println!("\nmason to nora:\n{}", passage.for_nora);
+
+            println!("\n--- the tasks ---");
+            for t in &passage.tasks {
+                println!(
+                    "  {} {:<7} from {:<7} {} after {} attempt(s)",
+                    t.id, t.owner, t.created_by, t.status, t.attempts
+                );
+            }
+
+            println!("\n--- carl to JJ ---\n{}", passage.answer);
+            println!("\nthe record is at {}", journal.display());
+            if !passage.accepted {
+                anyhow::bail!(
+                    "the work was not accepted after {} attempts",
+                    passage.attempts
+                );
             }
             Ok(())
         }

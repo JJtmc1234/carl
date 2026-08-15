@@ -33,6 +33,7 @@ use crate::claude::Runner;
 use crate::{Result, SessionId};
 
 mod campaign;
+pub mod chain;
 pub mod event;
 pub mod org;
 mod report;
@@ -40,6 +41,7 @@ mod roster;
 pub mod task;
 
 pub use campaign::{Departmental, JOBS_PER_HEAD, Outcome, parse_jobs, run_department};
+pub use chain::{Chain, Passage, brief_for as chain_brief, campaign, tools_for};
 pub use event::{Event, Journal, Record};
 pub use org::{Agent, Rank, check_delegation, check_may_implement, may_delegate};
 pub use report::{Report, Summary};
