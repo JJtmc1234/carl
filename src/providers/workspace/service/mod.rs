@@ -126,6 +126,36 @@ impl Workspace {
         }
     }
 
+    /// Forgets every terminal whose shell has exited, returning which were removed.
+    ///
+    /// A dead session is kept until somebody asks, so a panel can draw the fact that a shell
+    /// exited rather than having the row vanish underneath JJ. That is the right default and
+    /// it also means the table would grow for the life of the process if nothing ever cleared
+    /// it, so this is the clearing. A panel is expected to call it when it redraws.
+    pub fn reap(&mut self) -> Vec<SessionId> {
+        // A loop rather than a filter, because asking whether a child is alive reaps it and so
+        // needs it mutably, which a filter closure cannot hand out.
+        let mut dead: Vec<SessionId> = Vec::new();
+        for (id, terminal) in self.terminals.iter_mut() {
+            if !terminal.is_alive() {
+                dead.push(*id);
+            }
+        }
+
+        for id in &dead {
+            if let Some(mut terminal) = self.terminals.remove(id) {
+                // Already exited, so this only reaps the entry rather than killing anything.
+                let _ = terminal.close();
+            }
+        }
+        dead
+    }
+
+    /// How many sessions are being held, for a caller watching for a leak.
+    pub fn held(&self) -> (usize, usize) {
+        (self.terminals.len(), self.editors.len())
+    }
+
     fn terminal_mut(&mut self, id: SessionId) -> Result<&mut Terminal> {
         self.terminals
             .get_mut(&id)

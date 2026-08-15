@@ -9,6 +9,7 @@
 //! No user interface, no transport, no army is founded and no project is invented. Every check
 //! runs against a temporary home so it says the same thing on any machine.
 
+use carl::providers::diagnostics::Intervals;
 use carl::providers::health::{Kind, Reading};
 use carl::providers::projects::{Achievement, NewMilestone, Project, ProjectId, Projects, Source};
 use carl::providers::{Diagnostics, Health, Snapshot};
@@ -248,4 +249,228 @@ fn both_boards_have_components() {
     assert!(army >= 5, "only {army} army components");
     assert!(machine >= 5, "only {machine} machine components");
     assert_eq!(taken.all().len(), army + machine);
+}
+
+// ---- read only audit ----
+
+/// Every path and size under `root`, so two moments can be compared exactly.
+fn tree(root: &std::path::Path) -> Vec<(String, u64)> {
+    fn walk(at: &std::path::Path, base: &std::path::Path, into: &mut Vec<(String, u64)>) {
+        let Ok(entries) = std::fs::read_dir(at) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            match entry.metadata() {
+                Ok(meta) if meta.is_dir() => {
+                    into.push((format!("{name}/"), 0));
+                    walk(&path, base, into);
+                }
+                Ok(meta) => into.push((name, meta.len())),
+                Err(_) => into.push((name, 0)),
+            }
+        }
+    }
+
+    let mut found = Vec::new();
+    walk(root, root, &mut found);
+    found.sort();
+    found
+}
+
+/// The audit: no conceptually read only provider call may leave a mark on disk.
+///
+/// This is the promise a panel depends on most quietly. A panel is an observer, and an
+/// observer that changes what it looks at is worse than no panel, because the change happens
+/// on somebody's real machine and nobody connects it to having opened a window.
+#[test]
+fn no_read_only_provider_operation_writes_to_disk() {
+    let d = home();
+    let before = tree(d.path());
+    assert!(before.is_empty(), "the fixture should start empty");
+
+    // Diagnostics, every read path it has.
+    let mut diagnostics = Diagnostics::new(d.path());
+    diagnostics.snapshot();
+    diagnostics.snapshot_at(1_000);
+    diagnostics.army();
+    diagnostics.army_at(1_000);
+    diagnostics.machine();
+    diagnostics.machine_at(1_000);
+    diagnostics.records();
+    diagnostics.probes_at(1_000);
+    diagnostics.last_sampled_at();
+    diagnostics.last_probed_at();
+    diagnostics.home();
+
+    // The army provider directly, including the paths that touch personnel.
+    let army = carl::providers::army::Army::new(d.path());
+    army.founded();
+    army.records();
+    army.processes(None);
+    army.snapshot(None);
+    army.overall(None);
+    army.army_root();
+    army.journal_path();
+
+    // The project store, every read path it has.
+    let projects = Projects::open(d.path());
+    let id = ProjectId::new("nothing-here").unwrap();
+    projects.list().unwrap();
+    projects.get(&id).unwrap();
+    projects.view(&id).unwrap();
+    projects.milestones(&id).unwrap();
+    projects.recent_milestones(&id, 5).unwrap();
+    projects.milestone_gaps(&id).unwrap();
+    projects.suggestions(&id).unwrap();
+    projects.root();
+    projects.folder(&id);
+
+    // Workspace investigation, which is a lookup and must open nothing.
+    let snapshot = diagnostics.snapshot_at(2_000);
+    let workspace = carl::providers::workspace::Workspace::new();
+    workspace.investigate(&snapshot, "system.memory");
+    workspace.investigate(&snapshot, "army.personnel");
+    workspace.investigate(&snapshot, "; touch /tmp/should-not-exist");
+    workspace.investigate(&snapshot, "../../etc/passwd");
+
+    let after = tree(d.path());
+    assert_eq!(
+        after, before,
+        "a read only operation changed the filesystem: {after:?}"
+    );
+    assert!(
+        !d.path().join("army").exists(),
+        "the army directory appeared without anybody founding one"
+    );
+}
+
+/// The two expensive clocks are independent, so a caller can tune one without the other.
+#[test]
+fn sample_and_probe_clocks_are_independent() {
+    let d = home();
+    let mut diagnostics = Diagnostics::new(d.path()).every(Intervals {
+        machine_secs: 1,
+        probe_secs: 10,
+    });
+
+    for second in 0..10 {
+        diagnostics.snapshot_at(9_000 + second);
+    }
+    assert_eq!(
+        diagnostics.samples_taken(),
+        10,
+        "the fast clock did not run"
+    );
+    assert_eq!(diagnostics.probes_taken(), 1, "the slow clock followed it");
+}
+
+/// Rich unknown, which is the semantics agreed with the panel.
+#[test]
+fn unknown_readings_keep_their_detail() {
+    let d = home();
+    let taken = snapshot_of(d.path());
+
+    // An unfounded army is the reliable unknown on any fresh machine.
+    let personnel = taken.find("army.personnel").expect("the row exists");
+    assert_eq!(personnel.health, Health::Unknown);
+    assert!(
+        !personnel.metrics.is_empty(),
+        "a rich unknown still names what was missing"
+    );
+    for metric in &personnel.metrics {
+        assert_eq!(metric.rendered(), "unknown");
+        assert!(!metric.value.is_known());
+    }
+
+    // The lossy view is available, and does not change what it was made from.
+    let flat = personnel.flattened();
+    assert!(flat.metrics.is_empty(), "the flattened view is a gap");
+    assert_eq!(flat.measured_at, None);
+    assert!(
+        !personnel.metrics.is_empty(),
+        "flattening emptied the canonical value it was made from"
+    );
+    assert_eq!(
+        personnel.metrics[0].rendered(),
+        "unknown",
+        "and the canonical metric still reads as unmeasurable rather than gone"
+    );
+}
+
+/// A hole in a history has to be visible, or a panel shows a shorter timeline and calls it
+/// complete.
+#[test]
+fn a_damaged_milestone_history_reports_its_gap() {
+    let d = home();
+    let projects = Projects::open(d.path());
+    let id = ProjectId::new("jjtorio").unwrap();
+    projects
+        .save(&Project::new(id.clone(), "JJtorio", "A mod that works"))
+        .unwrap();
+
+    let record = |title: &str, at: u64| NewMilestone {
+        project: id.clone(),
+        at,
+        title: title.to_string(),
+        detail: None,
+        evidence: None,
+        achievement: Achievement::PhaseCompleted,
+        source: Source::Carl,
+    };
+    projects.record(record("one", 1)).unwrap();
+    projects.record(record("two", 2)).unwrap();
+
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+    let whole = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, &whole[..whole.len() - 20]).unwrap();
+
+    // The damage is counted, and the next append still lands whole.
+    assert_eq!(projects.milestone_gaps(&id).unwrap(), 1);
+    projects.record(record("three", 3)).unwrap();
+
+    let reopened = Projects::open(d.path());
+    let titles: Vec<String> = reopened
+        .milestones(&id)
+        .unwrap()
+        .into_iter()
+        .map(|m| m.title)
+        .collect();
+    assert_eq!(titles, ["one", "three"], "the damage spread");
+    assert_eq!(reopened.milestone_gaps(&id).unwrap(), 1);
+    assert_eq!(reopened.view(&id).unwrap().unwrap().milestone_gaps, 1);
+}
+
+/// A component id is a key. It is never run, never a path, and never anything else.
+#[test]
+fn workspace_investigation_is_inert() {
+    let d = home();
+    let snapshot = snapshot_of(d.path());
+    let workspace = carl::providers::workspace::Workspace::new();
+
+    let sentinel = std::path::Path::new("/tmp/carl-panel-oracle-should-not-exist");
+    for hostile in [
+        "; touch /tmp/carl-panel-oracle-should-not-exist",
+        "$(touch /tmp/carl-panel-oracle-should-not-exist)",
+        "`touch /tmp/carl-panel-oracle-should-not-exist`",
+        "system.memory && rm -rf /",
+        "../../../etc/passwd",
+        "system.memory\nsystem.cpu",
+        "",
+    ] {
+        assert_eq!(
+            workspace.investigate(&snapshot, hostile),
+            None,
+            "{hostile:?} matched a component"
+        );
+    }
+    assert!(!sentinel.exists(), "a component id was executed");
+
+    // A real id still works, so the check is not simply refusing everything.
+    assert!(workspace.investigate(&snapshot, "system.memory").is_some());
 }

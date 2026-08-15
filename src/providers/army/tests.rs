@@ -358,3 +358,79 @@ fn an_agent_row_reports_only_what_its_folder_says() {
     );
     assert_eq!(nora.summary, "idle", "which is what her folder says");
 }
+
+// ---- read only audit ----
+
+/// The reported symptom, reproduced against the shared API so the culprit is named.
+///
+/// Somebody observed an empty `~/.carl/army` appear after starting the panel. This is where it
+/// comes from: `Personnel::open` calls `create_dir_all` on the army root, which is correct for
+/// the thing that founds an army and wrong for anything that only looks at one. It is shared
+/// code and not mine to change, so the provider guards it instead and this test pins the
+/// behaviour so nobody is surprised by it twice.
+#[test]
+fn the_shared_personnel_open_is_what_creates_the_army_directory() {
+    let d = tempfile::tempdir().unwrap();
+    assert!(!d.path().join("army").exists());
+
+    let people = personnel::Personnel::open(d.path()).unwrap();
+    assert!(people.is_empty(), "there is nobody in it");
+    assert!(
+        d.path().join("army").exists(),
+        "if this ever stops being true, the guard in this module can go"
+    );
+}
+
+/// And the provider never takes that path on a home with no army.
+#[test]
+fn no_army_diagnostic_creates_the_directory_it_is_looking_for() {
+    let d = tempfile::tempdir().unwrap();
+    let army = Army::new(d.path());
+
+    // Every read only entry point this module has.
+    army.founded();
+    army.records();
+    army.processes(Some(1_000.0));
+    army.processes_with("/nonexistent/systemctl", None);
+    army.snapshot(Some(1_000.0));
+    army.snapshot(None);
+    army.overall(None);
+
+    assert!(
+        !d.path().join("army").exists(),
+        "a diagnostic founded an army by looking at one"
+    );
+    assert!(!d.path().join("run").exists(), "and wrote a journal");
+    assert_eq!(
+        std::fs::read_dir(d.path()).unwrap().count(),
+        0,
+        "the home should still be empty"
+    );
+}
+
+/// The guard is a check on the directory, so it has to survive the directory existing but
+/// being empty, which is exactly the state the reported symptom left behind.
+#[test]
+fn an_empty_army_directory_reads_as_an_army_with_nobody_in_it() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::create_dir(d.path().join("army")).unwrap();
+
+    let taken = Army::new(d.path()).snapshot(None);
+    let people = taken
+        .iter()
+        .find(|x| x.component == "army.personnel")
+        .unwrap();
+
+    // Founded, so it loads. Nobody has a folder, so every agent is missing.
+    assert_eq!(people.health, Health::Degraded, "{}", people.summary);
+    assert!(people.summary.contains("0 agents"), "{}", people.summary);
+    for who in ["carl", "adrian", "mason", "nora"] {
+        assert!(people.summary.contains(who), "{} not named", who);
+    }
+
+    // And no agent rows are invented for folders that are not there.
+    assert!(
+        !taken.iter().any(|x| x.component.starts_with("army.agent.")),
+        "an agent row appeared without a folder"
+    );
+}

@@ -744,3 +744,82 @@ fn a_project_is_never_observed_half_written() {
     let reads = reading.join().expect("the reader panicked");
     assert!(reads > 0, "the reader never ran");
 }
+
+/// The interrupted append, end to end, including the reopen.
+///
+/// This is the sequence a crash actually produces: a record is half written, the process dies,
+/// something else appends, and later a fresh process reads the file. Before the boundary
+/// repair the new record was glued to the broken one and both were lost, which meant an
+/// interruption silently cost the milestone somebody had just recorded.
+#[test]
+fn a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen() {
+    let (s, d) = saved();
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+
+    s.record(milestone("first", 100)).unwrap();
+    s.record(milestone("second", 200)).unwrap();
+
+    // Cut the file mid record, as a process dying during a write would leave it.
+    let whole = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, &whole[..whole.len() - 25]).unwrap();
+    assert!(
+        !std::fs::read_to_string(&path).unwrap().ends_with('\n'),
+        "the fixture is not actually a torn write"
+    );
+
+    // Two successive valid appends after the damage.
+    let third = s.record(milestone("third", 300)).unwrap();
+    let fourth = s.record(milestone("fourth", 400)).unwrap();
+    assert_eq!(third.id, "jjtorio-2", "ids continue past the hole");
+    assert_eq!(fourth.id, "jjtorio-3");
+
+    // Reopen from nothing, exactly as a later process would.
+    let reopened = Projects::open(d.path());
+    let survived = reopened.milestones(&id()).unwrap();
+    let titles: Vec<&str> = survived.iter().map(|m| m.title.as_str()).collect();
+
+    assert_eq!(
+        titles,
+        ["first", "third", "fourth"],
+        "the damaged line took a neighbour with it"
+    );
+    assert_eq!(
+        reopened.milestone_gaps(&id()).unwrap(),
+        1,
+        "the damage is counted exactly once"
+    );
+
+    // The new records are whole, not merely present.
+    let third_back = survived.iter().find(|m| m.title == "third").unwrap();
+    assert_eq!(third_back.id, "jjtorio-2");
+    assert_eq!(third_back.at, 300);
+    assert_eq!(third_back.evidence.as_deref(), Some("commit abc123"));
+    assert_eq!(third_back.achievement, Achievement::FeatureWorks);
+    assert_eq!(third_back.source, Source::Jj);
+
+    // And the view a panel would draw shows the hole rather than hiding it.
+    let view = reopened.view(&id()).unwrap().unwrap();
+    assert_eq!(view.milestone_gaps, 1);
+    assert_eq!(view.milestones[0].title, "fourth", "newest first");
+}
+
+/// A file that never ends in a newline at all, which is the degenerate version of the same
+/// thing: the very first record was interrupted.
+#[test]
+fn an_append_onto_a_file_that_is_entirely_one_torn_record_still_lands() {
+    let (s, d) = saved();
+    let path = d.path().join("projects/jjtorio/milestones.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{\"id\":\"jjtorio-1\",\"proj").unwrap();
+
+    let recorded = s.record(milestone("after the wreck", 500)).unwrap();
+    assert_eq!(
+        recorded.id, "jjtorio-1",
+        "nothing readable was there to follow"
+    );
+
+    let back = s.milestones(&id()).unwrap();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].title, "after the wreck");
+    assert_eq!(s.milestone_gaps(&id()).unwrap(), 1);
+}
