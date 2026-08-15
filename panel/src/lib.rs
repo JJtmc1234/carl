@@ -18,6 +18,7 @@
 
 pub mod app;
 pub mod command;
+pub mod launch;
 pub mod model;
 pub mod source;
 pub mod theme;

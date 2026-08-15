@@ -244,6 +244,63 @@ mod tests {
         assert_eq!(ctx.style().visuals.panel_fill, once.panel_fill);
     }
 
+    /// The bug that cost three wrong diagnoses.
+    ///
+    /// `eframe` is declared with `default-features = false`, and `default_fonts` is one of the
+    /// defaults. Without it egui has no fonts at all: every shape still draws, so the panel
+    /// came up with correct colours, borders, status pips and hairlines and not one glyph. It
+    /// looked exactly like black text on a black background and was nothing of the sort.
+    ///
+    /// The earlier check inspected the colour each text shape asked for, which was always
+    /// right, and so never noticed there were no glyphs to paint in it. This measures the
+    /// glyphs instead.
+    #[test]
+    fn there_are_fonts_and_they_produce_actual_glyphs() {
+        let ctx = eframe::egui::Context::default();
+        install(&ctx);
+        // A frame, so the font atlas is built.
+        let _ = ctx.run(Default::default(), |_| {});
+
+        for font in [heading(), body(), label(), big()] {
+            let galley = ctx.fonts(|f| f.layout_no_wrap("CARL".to_string(), font.clone(), TEXT));
+            assert!(
+                galley.size().x > 1.0,
+                "{font:?} laid out no width, which means no font is loaded"
+            );
+            assert!(galley.size().y > 1.0, "{font:?} laid out no height");
+            let glyphs: usize = galley.rows.iter().map(|r| r.glyphs.len()).sum();
+            assert_eq!(
+                glyphs, 4,
+                "{font:?} produced {glyphs} glyphs for four letters"
+            );
+        }
+    }
+
+    /// Both families have to work, because the interface asks for monospace everywhere and a
+    /// missing monospace atlas would be invisible in a proportional check.
+    #[test]
+    fn both_font_families_are_present() {
+        use eframe::egui::{FontFamily, FontId};
+
+        let ctx = eframe::egui::Context::default();
+        install(&ctx);
+        let _ = ctx.run(Default::default(), |_| {});
+
+        for family in [FontFamily::Monospace, FontFamily::Proportional] {
+            let galley = ctx.fonts(|f| {
+                f.layout_no_wrap(
+                    "AGENTS".to_string(),
+                    FontId::new(13.0, family.clone()),
+                    TEXT,
+                )
+            });
+            assert!(
+                galley.size().x > 1.0,
+                "{family:?} is not loaded, so anything drawn in it is invisible"
+            );
+        }
+    }
+
     /// Spacing a label rather than shrinking it is how the small type stays legible.
     #[test]
     fn a_label_is_spread_not_shrunk() {

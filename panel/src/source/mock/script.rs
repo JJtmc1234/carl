@@ -459,18 +459,23 @@ pub fn projects(now: u64) -> Vec<ProjectView> {
             ],
             active_tasks: vec![carl::army::task::TaskId::quoted("t-belt-throughput")],
             active_agents: vec!["nora".into()],
+            // One line of the milestone file that would not parse, so the pane has something
+            // to be honest about rather than only ever showing a clean list.
+            milestone_gaps: 1,
         },
         ProjectView {
             project: panel,
             milestones: Vec::new(),
             active_tasks: Vec::new(),
             active_agents: Vec::new(),
+            milestone_gaps: 0,
         },
         ProjectView {
             project: aos,
             milestones: Vec::new(),
             active_tasks: Vec::new(),
             active_agents: Vec::new(),
+            milestone_gaps: 0,
         },
     ]
 }

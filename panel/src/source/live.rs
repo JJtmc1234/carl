@@ -236,6 +236,13 @@ impl LivePanelDataSource {
                 self.link = link_of(health);
                 out.push(PanelEvent::LinkChanged(self.link.clone()));
             }
+            // Machine readings replace the machine readings and touch nothing else. No
+            // sequence is invented for it, because it has none and the stream's position is
+            // the journal's business.
+            Update::Telemetry { at, diagnostics } => {
+                translate::replace_telemetry(&mut self.latest, &diagnostics);
+                out.push(PanelEvent::TelemetryChanged { at, diagnostics });
+            }
             Update::Event(event) => translate::from_event(&event, &mut self.latest, out),
         }
     }

@@ -338,3 +338,149 @@ fn a_failed_command_is_surfaced() {
 
     assert!(matches!(got.as_slice(), [PanelEvent::CommandRefused(_)]));
 }
+
+/// Telemetry is the machine being sampled, not the army doing something.
+///
+/// It must replace the readings and leave every other part of the model exactly where it was.
+/// The failure this guards against is subtle and expensive: telemetry arriving on the event
+/// timeline shows a row saying an agent acted when nobody did, and telemetry moving the
+/// sequence makes the panel ask the backend to resume from a point the journal never reached.
+#[test]
+fn telemetry_replaces_readings_and_touches_nothing_else() {
+    use carl::providers::health::{Diagnostic, Health, Kind};
+
+    let mut held = Snapshot {
+        agents: vec![AgentView::unknown("nora")],
+        tasks: vec![task("t1", "in hand")],
+        diagnostics: vec![
+            Diagnostic::new("system.cpu", Health::Healthy, "load 2.1", Kind::Sampled).measured(100),
+            Diagnostic::new(
+                "army.tasks",
+                Health::Healthy,
+                "1 in hand",
+                Kind::EventDriven,
+            ),
+        ],
+        events: Vec::new(),
+        ..Default::default()
+    };
+
+    let fresh = vec![
+        Diagnostic::new("system.cpu", Health::Degraded, "load 7.8", Kind::Sampled).measured(500),
+    ];
+    translate::replace_telemetry(&mut held, &fresh);
+
+    let cpu = held
+        .diagnostics
+        .iter()
+        .find(|d| d.component == "system.cpu")
+        .expect("the cpu row");
+    assert_eq!(cpu.health, Health::Degraded, "the reading was replaced");
+    assert_eq!(cpu.measured_at, Some(500));
+
+    // The army rows are untouched, and a sampler that only reads the machine must not delete
+    // the state beside it.
+    assert_eq!(held.diagnostics.len(), 2, "the army row survived");
+    assert!(held.events.is_empty(), "telemetry is not a journal record");
+    assert_eq!(held.tasks[0].status, "in hand", "no task reducer ran");
+    assert_eq!(held.agents[0].last_activity, None, "nobody acted");
+}
+
+/// A component the sample did not mention is left alone rather than dropped.
+#[test]
+fn a_reading_that_was_not_sampled_is_kept() {
+    use carl::providers::health::{Diagnostic, Health, Kind};
+
+    let mut held = Snapshot {
+        diagnostics: vec![Diagnostic::new(
+            "system.gpu",
+            Health::Unknown,
+            "no card",
+            Kind::Sampled,
+        )],
+        ..Default::default()
+    };
+
+    translate::replace_telemetry(
+        &mut held,
+        &[Diagnostic::new(
+            "system.cpu",
+            Health::Healthy,
+            "fine",
+            Kind::Sampled,
+        )],
+    );
+
+    assert_eq!(held.diagnostics.len(), 2);
+    assert!(
+        held.diagnostics.iter().any(|d| d.component == "system.gpu"),
+        "an unmentioned component must not vanish"
+    );
+}
+
+/// The two reducers are separate functions and stay that way.
+///
+/// Driven through the source so the ordering is the real one: telemetry in, then an event, and
+/// neither has done the other's job.
+#[test]
+fn the_event_reducer_and_the_telemetry_reducer_do_not_meet() {
+    use carl::providers::health::{Diagnostic, Health, Kind};
+
+    let held = Snapshot {
+        agents: vec![AgentView::unknown("nora")],
+        tasks: vec![task("t1", "in hand")],
+        ..Default::default()
+    };
+    let (mut source, tx, _orders) = LivePanelDataSource::detached(held);
+
+    tx.send(FromBackend::Update(Box::new(Update::Telemetry {
+        at: 500,
+        diagnostics: vec![
+            Diagnostic::new("system.cpu", Health::Degraded, "load high", Kind::Sampled)
+                .measured(500),
+        ],
+    })))
+    .unwrap();
+
+    let from_telemetry = source.poll();
+    assert!(
+        matches!(
+            from_telemetry.as_slice(),
+            [PanelEvent::TelemetryChanged { at: 500, .. }]
+        ),
+        "telemetry produces exactly one telemetry update: {from_telemetry:?}"
+    );
+    assert!(
+        !from_telemetry
+            .iter()
+            .any(|e| matches!(e, PanelEvent::Recorded(_) | PanelEvent::TaskChanged(_))),
+        "and never anything that belongs to the army timeline"
+    );
+
+    tx.send(FromBackend::Update(Box::new(Update::Event(Box::new(
+        frame(
+            "moved",
+            "nora",
+            JournalEvent::Moved {
+                task: carl::army::task::TaskId::quoted("t1"),
+                from: "in hand".into(),
+                to: "submitted".into(),
+            },
+        ),
+    )))))
+    .unwrap();
+
+    let from_event = source.poll();
+    assert!(
+        from_event
+            .iter()
+            .any(|e| matches!(e, PanelEvent::Recorded(_))),
+        "an event still produces a record"
+    );
+    assert!(
+        !from_event
+            .iter()
+            .any(|e| matches!(e, PanelEvent::TelemetryChanged { .. })),
+        "and never telemetry"
+    );
+}

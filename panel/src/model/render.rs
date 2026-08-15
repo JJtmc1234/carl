@@ -11,15 +11,15 @@ pub const STALE_AFTER: u64 = 30;
 
 /// Which board a component belongs on.
 ///
-/// One rule, and it survives the rename Process 3 is making. The machine board is `system.`
-/// and the army board is everything else, so `army.agent.nora` and the older `agent.nora` both
-/// land in the right place and nothing needs a list of legacy prefixes kept up to date.
+/// Straight through to `Diagnostic::group()`, which is the contract now: every id is `army.`
+/// or `system.` and anything else is a stray. The panel used to classify prefixes itself and
+/// no longer does, so there is one answer to this question rather than two.
 ///
-/// This is a question about layout rather than about health, which is why the collector does
-/// not answer it. When `Diagnostic::group()` lands this becomes a call to it.
-pub fn group_of(component: &str) -> &'static str {
-    match component.split(['.', ':']).next() {
-        Some("system") => "system",
+/// A stray lands on the army board rather than vanishing, because a component nobody can
+/// place is still a component somebody should see.
+pub fn board_of(d: &Diagnostic) -> &'static str {
+    match d.group() {
+        "system" => "system",
         _ => "army",
     }
 }
@@ -46,22 +46,18 @@ mod tests {
     use super::*;
     use carl::providers::health::Health;
 
-    /// The rule has to work for the ids on main today and the ones Process 3 is renaming to,
-    /// without a list of legacy prefixes to keep up to date.
+    /// The board comes from the canonical `group()`, and a stray still has to be visible
+    /// somewhere rather than falling off the screen.
     #[test]
-    fn the_board_is_decided_by_one_rule_that_survives_the_rename() {
-        assert_eq!(group_of("system.cpu"), "system");
-        assert_eq!(group_of("army.agent.nora"), "army");
-        assert_eq!(group_of("army.service.carl-slack"), "army");
-        assert_eq!(group_of("system.disk:/"), "system");
+    fn the_board_comes_from_the_canonical_group() {
+        let of = |c: &str| board_of(&Diagnostic::new(c, Health::Healthy, "", Kind::EventDriven));
+        assert_eq!(of("system.cpu"), "system");
+        assert_eq!(of("system.disk:/"), "system");
+        assert_eq!(of("army.agent.nora"), "army");
+        assert_eq!(of("army.service.carl-slack"), "army");
 
-        // The ids on main today, which must still land on the right board.
-        assert_eq!(group_of("carl.service"), "army");
-        assert_eq!(group_of("agent.nora"), "army");
-        assert_eq!(group_of("claude.processes"), "army");
-
-        // And anything unexpected goes to the army board rather than vanishing.
-        assert_eq!(group_of("something-else"), "army");
+        // `group()` calls this unknown. It must still be drawn, not dropped.
+        assert_eq!(of("something-else"), "army");
     }
 
     /// A state does not decay and a sample does, and drawing them the same way says one of them

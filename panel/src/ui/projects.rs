@@ -125,6 +125,16 @@ fn detail(app: &mut App, ui: &mut Ui) {
             widgets::field(ui, "phase", Some(&p.project.phase));
             widgets::field(ui, "department", p.project.department.as_deref());
             widgets::field(ui, "next objective", p.project.next_objective.as_deref());
+            let agents = p.active_agents.join(", ");
+            widgets::field(
+                ui,
+                "active agents",
+                if agents.is_empty() {
+                    None
+                } else {
+                    Some(agents.as_str())
+                },
+            );
             widgets::field(ui, "path", p.project.path.as_ref().and_then(|x| x.to_str()));
 
             if !p.project.blockers.is_empty() {
@@ -154,6 +164,21 @@ fn detail(app: &mut App, ui: &mut Ui) {
 
             ui.add_space(14.0);
             widgets::section(ui, "MILESTONES");
+            // A milestone file with lines that would not parse is a hole in the history, and
+            // the pane says so. Skipping them quietly is right, because one bad append must
+            // not hide every milestone after it, but it also means a reader would never learn
+            // the list is short unless it is said out loud.
+            if p.milestone_gaps > 0 {
+                ui.label(
+                    RichText::new(format!(
+                        "{} milestone line(s) could not be read, so this list is incomplete",
+                        p.milestone_gaps
+                    ))
+                    .font(theme::label())
+                    .color(theme::WARN),
+                );
+                ui.add_space(4.0);
+            }
             if p.milestones.is_empty() {
                 ui.label(
                     RichText::new("nothing recorded as a milestone yet")

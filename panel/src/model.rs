@@ -241,4 +241,4 @@ impl Snapshot {
 
 mod render;
 
-pub use render::{STALE_AFTER, age_secs, group_of, stale};
+pub use render::{STALE_AFTER, age_secs, board_of, stale};

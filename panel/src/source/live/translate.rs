@@ -15,7 +15,7 @@ use carl::panel::PanelCommand;
 use carl::panel::wire::{Entity, PanelEvent as WireEvent};
 
 use crate::command::{Command, InterventionKind};
-use crate::model::Snapshot;
+use crate::model::{Diagnostic, Snapshot};
 use crate::source::PanelEvent;
 
 /// What the backend should be asked to do, or `None` when it is not the backend's business.
@@ -52,6 +52,27 @@ pub fn to_wire(command: &Command) -> Option<PanelCommand> {
         // opening a pane belongs on the army's command channel.
         Command::Workspace(_) => return None,
     })
+}
+
+/// Puts fresh machine readings in place of the old ones.
+///
+/// Its own function, next to the event reducer and sharing nothing with it, because the two
+/// must never drift into each other. An event says the army did something and carries a place
+/// in a sequence. Telemetry says a number was measured again and carries no place at all.
+///
+/// A component the sample did not mention is left exactly as it was. A sampler that only reads
+/// the machine must not silently delete the army rows beside them.
+pub fn replace_telemetry(snapshot: &mut Snapshot, fresh: &[Diagnostic]) {
+    for reading in fresh {
+        match snapshot
+            .diagnostics
+            .iter_mut()
+            .find(|d| d.component == reading.component)
+        {
+            Some(slot) => *slot = reading.clone(),
+            None => snapshot.diagnostics.push(reading.clone()),
+        }
+    }
 }
 
 /// Folds one journal frame into what the screen holds.

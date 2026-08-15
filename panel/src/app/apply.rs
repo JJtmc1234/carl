@@ -37,6 +37,23 @@ impl App {
 
             PanelEvent::CommandRefused(why) => self.notice = Some((why, false)),
 
+            // Diagnostics and nothing else. Not an event, not a record, and it does not move
+            // anything the army's ordering depends on.
+            PanelEvent::TelemetryChanged { at, diagnostics } => {
+                for reading in diagnostics {
+                    match self
+                        .snapshot
+                        .diagnostics
+                        .iter_mut()
+                        .find(|d| d.component == reading.component)
+                    {
+                        Some(slot) => *slot = reading,
+                        None => self.snapshot.diagnostics.push(reading),
+                    }
+                }
+                self.sampled_at = Some(at);
+            }
+
             PanelEvent::AgentChanged(view) => {
                 let name = view.name.clone();
                 match self.snapshot.agents.iter_mut().find(|a| a.name == name) {

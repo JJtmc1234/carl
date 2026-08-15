@@ -87,6 +87,17 @@ pub enum PanelEvent {
         project: String,
         milestone: Box<crate::model::Milestone>,
     },
+    /// Fresh machine readings, and nothing else.
+    ///
+    /// Deliberately not a `Recorded` and deliberately carrying no sequence. Telemetry is the
+    /// machine being sampled, not the army doing something. Putting it on the event timeline
+    /// would show a row saying an agent acted when nobody did, and letting it move the last
+    /// sequence would make the panel ask the backend to resume from a point the journal never
+    /// reached.
+    TelemetryChanged {
+        at: u64,
+        diagnostics: Vec<crate::model::Diagnostic>,
+    },
     /// The whole world was replaced after a gap the stream could not bridge.
     ///
     /// Carries the new snapshot rather than a signal to go and fetch one, so applying it cannot

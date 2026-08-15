@@ -14,7 +14,7 @@ use eframe::egui::{Align, Layout, RichText, ScrollArea, Ui, vec2};
 
 use crate::app::App;
 use crate::command::WorkspaceRequest;
-use crate::model::{Diagnostic, Health, group_of, stale};
+use crate::model::{Diagnostic, Health, board_of, stale};
 use crate::theme;
 
 use super::{shell, widgets};
@@ -114,10 +114,7 @@ fn board(app: &mut App, ui: &mut Ui, group: &str, title: &str) {
 
 /// One board's rows, worst first and then by name so the order is stable frame to frame.
 pub fn sorted<'a>(all: &'a [Diagnostic], group: &str) -> Vec<&'a Diagnostic> {
-    let mut rows: Vec<&Diagnostic> = all
-        .iter()
-        .filter(|d| group_of(&d.component) == group)
-        .collect();
+    let mut rows: Vec<&Diagnostic> = all.iter().filter(|d| board_of(d) == group).collect();
     // Worst first, then by name so the order is stable frame to frame and rows do not swap
     // places under the pointer.
     rows.sort_by(|a, b| {

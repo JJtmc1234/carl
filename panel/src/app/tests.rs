@@ -388,8 +388,8 @@ fn the_contextual_workspace_opens_and_closes() {
     let open = a.workspace.clone().expect("open");
     assert_eq!(open.open.title(), "org.rs");
     assert!(
-        open.content.is_none(),
-        "the panel draws the container and never invents its contents"
+        matches!(open.pane, crate::app::Pane::Editor { .. }) || open.trouble.is_some(),
+        "the facade either opened it or said why not, and the pane shows whichever happened"
     );
 
     a.open_workspace(WorkspaceRequest::Close);
@@ -527,4 +527,204 @@ fn a_carl_answer_marks_the_conversation_as_wanting_the_bottom() {
         streaming: false,
     });
     assert!(a.conversation_at_end, "new words pull the view to them");
+}
+
+/// Telemetry updates the boards and leaves the army's ordering alone.
+///
+/// Checked at the app level as well as the reducer, because this is the one place both models
+/// are held together and a mistake here would be invisible in either half on its own.
+#[test]
+fn telemetry_moves_the_boards_and_not_the_journal() {
+    use crate::model::Kind;
+
+    let mut a = app();
+    let events_before = a.snapshot.events.len();
+    let tasks_before = a.snapshot.tasks.clone();
+    let conversation_before = a.snapshot.conversation.len();
+
+    a.apply(PanelEvent::TelemetryChanged {
+        at: 1_760_000_500,
+        diagnostics: vec![
+            Diagnostic::new(
+                "system.cpu",
+                Health::Degraded,
+                "load high while four agents build",
+                Kind::Sampled,
+            )
+            .measured(1_760_000_500),
+        ],
+    });
+
+    let cpu = a
+        .snapshot
+        .diagnostics
+        .iter()
+        .find(|d| d.component == "system.cpu")
+        .expect("the cpu row");
+    assert_eq!(cpu.health, Health::Degraded);
+    assert_eq!(a.sampled_at, Some(1_760_000_500));
+
+    assert_eq!(
+        a.snapshot.events.len(),
+        events_before,
+        "telemetry is not a record and must not appear on the timeline"
+    );
+    assert_eq!(a.snapshot.tasks, tasks_before, "no task reducer ran");
+    assert_eq!(a.snapshot.conversation.len(), conversation_before);
+}
+
+/// Sampling repeatedly must not grow the boards.
+#[test]
+fn repeated_telemetry_replaces_rather_than_appends() {
+    use crate::model::Kind;
+
+    let mut a = app();
+    let before = a.snapshot.diagnostics.len();
+
+    for n in 0..5 {
+        a.apply(PanelEvent::TelemetryChanged {
+            at: 1_000 + n,
+            diagnostics: vec![
+                Diagnostic::new("system.cpu", Health::Healthy, "fine", Kind::Sampled)
+                    .measured(1_000 + n),
+            ],
+        });
+    }
+
+    assert_eq!(
+        a.snapshot.diagnostics.len(),
+        before,
+        "five samples of one component is still one row"
+    );
+}
+
+/// An unreadable reading must never be drawn as a real zero, and a real zero must stay zero.
+#[test]
+fn unknown_and_zero_are_different_things_on_screen() {
+    use crate::model::Kind;
+    use carl::providers::health::{Metric, Reading};
+
+    let unreadable = Diagnostic::new("system.gpu", Health::Unknown, "no card", Kind::Sampled)
+        .with(Metric::new("vram", Reading::Unknown, "MiB"));
+    let genuinely_zero =
+        Diagnostic::new("system.swap", Health::Healthy, "none used", Kind::Sampled)
+            .with(Metric::new("used", Reading::Int(0), "MiB"));
+
+    let gap = unreadable.metric_pairs();
+    let zero = genuinely_zero.metric_pairs();
+
+    assert!(
+        gap[0].1.to_lowercase().contains("unknown"),
+        "an unreadable value must say so, got {:?}",
+        gap[0].1
+    );
+    assert!(
+        zero[0].1.contains('0'),
+        "a real zero is a real measurement and stays a number, got {:?}",
+        zero[0].1
+    );
+    assert_ne!(gap[0].1, zero[0].1, "the two must never render the same");
+}
+
+/// The pane survives moving between tabs, because it is a tool you opened from somewhere and
+/// going to look at something else is not a reason to close it.
+#[test]
+fn the_workspace_survives_changing_tabs() {
+    let mut a = app();
+    a.open_workspace(WorkspaceRequest::Terminal { cwd: "/tmp".into() });
+    assert!(a.workspace.is_some());
+
+    for tab in Tab::ALL {
+        a.select_tab(tab);
+        assert!(
+            a.workspace.is_some(),
+            "the pane closed when the tab changed to {tab:?}"
+        );
+    }
+}
+
+/// An investigation is a lookup into what is already on screen. The component string is never
+/// turned into a path or a command, and one that names nothing says so.
+#[test]
+fn investigating_looks_up_a_reading_and_never_runs_anything() {
+    let mut a = app();
+
+    let real = a.snapshot.diagnostics[0].component.clone();
+    a.open_workspace(WorkspaceRequest::Investigate {
+        component: real.clone(),
+    });
+    let open = a.workspace.clone().expect("a pane");
+    match open.pane {
+        crate::app::Pane::Investigating(found) => assert_eq!(found.component, real),
+        other => panic!("expected an investigation, got {other:?}"),
+    }
+
+    // Shell metacharacters are a component name that matches nothing, and nothing more.
+    a.open_workspace(WorkspaceRequest::Investigate {
+        component: "system.cpu; rm -rf /".into(),
+    });
+    let open = a.workspace.clone().expect("a pane");
+    assert!(
+        open.trouble.is_some(),
+        "a component that names nothing must say so rather than doing anything"
+    );
+}
+
+/// A terminal opened through the seam is a real process, and closing the pane closes it.
+///
+/// The one test here that touches a real pty, because the lifecycle is the thing worth
+/// proving: the facade opened something, the pane knows its id, and nothing is left running.
+#[test]
+fn a_terminal_opens_and_closes_through_the_facade() {
+    let mut a = app();
+    a.open_workspace(WorkspaceRequest::Terminal { cwd: "/tmp".into() });
+
+    let open = a.workspace.clone().expect("a pane");
+    match &open.pane {
+        crate::app::Pane::Terminal { alive, cwd, .. } => {
+            assert!(open.session.is_some(), "the facade handed back a session");
+            assert!(*alive, "it should be running the moment it opened");
+            assert!(cwd.is_some(), "and know where it is");
+        }
+        // A machine with no shell is a real outcome, and it must be reported rather than
+        // silently drawing an empty pane.
+        other => assert!(
+            open.trouble.is_some(),
+            "expected a terminal or a stated reason, got {other:?}"
+        ),
+    }
+
+    a.close_workspace();
+    assert!(a.workspace.is_none(), "closing releases the pane");
+}
+
+/// Opening something else replaces what was there rather than leaking it.
+#[test]
+fn opening_a_second_thing_releases_the_first() {
+    let mut a = app();
+    a.open_workspace(WorkspaceRequest::Terminal { cwd: "/tmp".into() });
+    let first = a.workspace.as_ref().and_then(|w| w.session);
+
+    a.open_workspace(WorkspaceRequest::Investigate {
+        component: a.snapshot.diagnostics[0].component.clone(),
+    });
+    let second = a.workspace.as_ref().and_then(|w| w.session);
+
+    assert_ne!(
+        first, second,
+        "the pane must not still be holding the terminal it was showing"
+    );
+}
+
+/// A comparison with nothing open says so rather than guessing at a file.
+#[test]
+fn a_diff_with_nothing_open_refuses_to_guess() {
+    let mut a = app();
+    a.open_workspace(WorkspaceRequest::Diff {
+        task: "t-belt-throughput".into(),
+    });
+
+    let open = a.workspace.clone().expect("a pane");
+    let why = open.trouble.expect("a stated reason");
+    assert!(why.contains("will not guess"), "{why}");
 }

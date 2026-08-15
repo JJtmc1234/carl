@@ -15,21 +15,9 @@
 //! silently only works when you are already looking at the window is worse than one that is
 //! honest about needing a line of setup.
 
-use std::io::Write;
-
 use carl_panel::source::{LivePanelDataSource, PanelDataSource};
-use carl_panel::{App, MockPanelDataSource, theme, ui};
+use carl_panel::{App, MockPanelDataSource, launch, theme, ui};
 use eframe::egui::{Key, ViewportCommand};
-
-/// Where a running panel listens for the toggle. A file rather than a socket, because the
-/// whole message is one bit and a file cannot fail to bind.
-fn toggle_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("carl-panel-{}.toggle", whoami()))
-}
-
-fn whoami() -> String {
-    std::env::var("USER").unwrap_or_else(|_| "user".into())
-}
 
 /// How the panel was asked to start.
 struct Args {
@@ -80,14 +68,21 @@ fn parse_args() -> Args {
 }
 
 fn main() -> eframe::Result<()> {
+    // What a desktop shortcut is pointed at. One key, whether or not a panel is up: flip the
+    // one that is running, or start one if none is. A shortcut that only worked once a panel
+    // already existed would do nothing on the first press of the day, which is exactly when
+    // somebody wants it.
     if std::env::args().any(|a| a == "--toggle") {
-        // Asks whatever panel is running to flip, then exits. This is what a desktop shortcut
-        // is pointed at.
-        let path = toggle_path();
-        if let Ok(mut f) = std::fs::File::create(&path) {
-            let _ = f.write_all(b"1");
+        match launch::wanted() {
+            launch::Wanted::Flip(pid) => match launch::ask_toggle() {
+                Ok(()) => println!("asked the panel to show or hide, pid {pid}"),
+                Err(e) => eprintln!("could not reach the running panel: {e}"),
+            },
+            launch::Wanted::Start => match launch::start_detached() {
+                Ok(pid) => println!("no panel was running, started one, pid {pid}"),
+                Err(e) => eprintln!("could not start a panel: {e}"),
+            },
         }
-        println!("asked the panel to toggle");
         return Ok(());
     }
 
@@ -97,20 +92,22 @@ fn main() -> eframe::Result<()> {
             .with_title("AOS Command Panel")
             .with_inner_size([1600.0, 940.0])
             .with_fullscreen(!args.windowed),
-        // Built with the wgpu feature when the OpenGL backend cannot draw text on this
-        // machine. Same interface, different renderer, and the choice is made here rather than
-        // anywhere the interface can see it.
+        // Only when built for it. OpenGL was blamed for the missing text and was innocent.
         #[cfg(feature = "wgpu")]
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+
+    // Says this process is the panel, so a later shortcut press finds it instead of starting
+    // a second one on top.
+    launch::claim(std::process::id());
 
     let mut app = App::new(source(&args));
     let mut drawn = 0u32;
     let began = std::time::Instant::now();
     let mut said_at = 0u64;
 
-    eframe::run_simple_native("carl-panel", options, move |ctx, _frame| {
+    let ran = eframe::run_simple_native("carl-panel", options, move |ctx, _frame| {
         // Every frame rather than once. Setting it at startup left the desktop free to put a
         // light theme back over the top, and the panel would rather spend a few microseconds
         // than be unreadable.
@@ -119,7 +116,7 @@ fn main() -> eframe::Result<()> {
         // Live by polling the source every frame, never by asking a person to refresh.
         app.tick();
 
-        if ctx.input(|i| i.key_pressed(Key::F9)) || asked_to_toggle() {
+        if ctx.input(|i| i.key_pressed(Key::F9)) || launch::toggle_asked() {
             app.toggle_visible();
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(app.visible));
             ctx.send_viewport_cmd(ViewportCommand::Minimized(!app.visible));
@@ -185,7 +182,13 @@ fn main() -> eframe::Result<()> {
         // The panel is live, so it redraws on a clock rather than only on input. Modest, so an
         // idle panel is not a busy loop.
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
-    })
+    });
+
+    // Forgets this process, so the next shortcut press starts a fresh panel rather than asking
+    // one that has gone to flip. A crash leaves the file behind, which is why `running` checks
+    // the process is genuinely a panel rather than trusting the id.
+    launch::release();
+    ran
 }
 
 /// Whatever the panel should be attached to.
@@ -243,14 +246,4 @@ fn tour(app: &mut App, frame: u32) {
         270 => app.select_tab(Tab::Carl),
         _ => {}
     }
-}
-
-/// Whether something asked for a toggle since the last frame.
-fn asked_to_toggle() -> bool {
-    let path = toggle_path();
-    if path.exists() {
-        let _ = std::fs::remove_file(&path);
-        return true;
-    }
-    false
 }

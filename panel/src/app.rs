@@ -24,8 +24,11 @@ use crate::command::{Command, InterventionKind, WorkspaceRequest};
 use crate::model::{Link, Snapshot, Speaker, Turn};
 use crate::source::PanelDataSource;
 
+pub use workspace::{Pane, Workspace};
+
 mod apply;
 mod intervene;
+mod workspace;
 
 #[cfg(test)]
 mod tests;
@@ -63,19 +66,13 @@ impl Tab {
     }
 }
 
-/// What the contextual workspace is showing, if anything.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Workspace {
-    pub open: WorkspaceRequest,
-    /// Set once Process 3 can fill it. Until then the pane says so rather than faking content.
-    pub content: Option<String>,
-}
-
 /// The state that has to survive being hidden.
 ///
 /// Its own struct so the test for that can assert on the whole thing rather than on a list of
 /// fields somebody will forget to extend.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Not `Eq`, because an open investigation carries a reading that can be a float.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Kept {
     pub tab: Tab,
     pub agent: Option<String>,
@@ -88,6 +85,9 @@ pub struct Kept {
 
 pub struct App {
     source: Box<dyn PanelDataSource>,
+    /// Process 3's facade. Every terminal, file and comparison goes through it, and nothing in
+    /// the interface below `app` ever touches a process or a path.
+    service: carl::providers::workspace::service::Workspace,
     pub snapshot: Snapshot,
     pub link: Link,
 
@@ -116,6 +116,11 @@ pub struct App {
     pub lit: Vec<(String, Instant)>,
     /// Set when a reconnect has just replaced the world, so the panel can say so.
     pub resynced_at: Option<Instant>,
+    /// When the machine was last sampled, from telemetry.
+    ///
+    /// Kept apart from anything to do with the journal. This moves when a number was measured
+    /// again, which is a different clock from the army doing something.
+    pub sampled_at: Option<u64>,
 }
 
 /// An intervention part way through being written.
@@ -137,6 +142,7 @@ impl App {
         let link = source.link();
         Self {
             source,
+            service: carl::providers::workspace::service::Workspace::new(),
             snapshot,
             link,
             tab: Tab::Carl,
@@ -151,6 +157,7 @@ impl App {
             notice: None,
             lit: Vec::new(),
             resynced_at: None,
+            sampled_at: None,
         }
     }
 
@@ -164,6 +171,7 @@ impl App {
         for event in events {
             self.apply(event);
         }
+        self.pump_workspace();
         self.lit.retain(|(_, at)| at.elapsed() < LIT_FOR);
     }
 
@@ -241,19 +249,179 @@ impl App {
         self.project = Some(name.to_string());
     }
 
+    /// Opens something in the pane, through the facade.
+    ///
+    /// Whatever was open is closed first, so a pane cannot leak a pty or a file handle by
+    /// being replaced.
     pub fn open_workspace(&mut self, request: WorkspaceRequest) {
         if request == WorkspaceRequest::Close {
-            self.workspace = None;
+            self.close_workspace();
             return;
         }
-        self.workspace = Some(Workspace {
-            open: request,
-            content: None,
-        });
+        self.close_workspace();
+
+        let mut opened = workspace::open(&mut self.service, request.clone(), 24, 100);
+
+        // An investigation is a lookup into the diagnostics already on screen. The component
+        // string is never turned into a path or a command, here or in the facade.
+        if let WorkspaceRequest::Investigate { component } = &request {
+            match self
+                .service
+                .investigate(&self.diagnostics_snapshot(), component)
+            {
+                Some(found) => opened.pane = Pane::Investigating(Box::new(found)),
+                None => {
+                    opened.trouble = Some(format!("nothing on the boards is called {component}"))
+                }
+            }
+        }
+        self.workspace = Some(opened);
     }
 
+    /// The diagnostics the boards are drawing, in the shape the facade looks things up in.
+    fn diagnostics_snapshot(&self) -> carl::providers::diagnostics::Snapshot {
+        carl::providers::diagnostics::Snapshot {
+            army: self
+                .snapshot
+                .diagnostics
+                .iter()
+                .filter(|d| d.group() == "army")
+                .cloned()
+                .collect(),
+            machine: self
+                .snapshot
+                .diagnostics
+                .iter()
+                .filter(|d| d.group() == "system")
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Closes the pane and lets the facade release whatever was behind it.
     pub fn close_workspace(&mut self) {
-        self.workspace = None;
+        if let Some(open) = self.workspace.take()
+            && let Some(id) = open.session
+        {
+            let _ = match open.pane {
+                Pane::Terminal { .. } => self.service.close_terminal(id),
+                Pane::Editor { .. } => self.service.close_file(id),
+                _ => Ok(()),
+            };
+        }
+    }
+
+    /// Reads whatever the terminal has said and notices when it has gone.
+    ///
+    /// Called every frame. `drain` never blocks, which is what makes that safe.
+    pub fn pump_workspace(&mut self) {
+        let Some(open) = self.workspace.as_mut() else {
+            return;
+        };
+        let Some(id) = open.session else {
+            return;
+        };
+        if let Pane::Terminal { output, alive, .. } = &mut open.pane {
+            if let Ok(bytes) = self.service.drain(id)
+                && !bytes.is_empty()
+            {
+                output.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            *alive = self.service.is_alive(id);
+        }
+    }
+
+    /// Sends a line to the terminal, which is the only way the interface talks to a process.
+    pub fn terminal_send(&mut self) {
+        let Some(open) = self.workspace.as_mut() else {
+            return;
+        };
+        let Some(id) = open.session else {
+            return;
+        };
+        if let Pane::Terminal { input, .. } = &mut open.pane {
+            let line = std::mem::take(input);
+            let _ = self.service.input_line(id, &line);
+        }
+    }
+
+    /// Tells the pty how big the pane is now.
+    pub fn terminal_resize(&mut self, rows: u16, cols: u16) {
+        let Some(open) = self.workspace.as_ref() else {
+            return;
+        };
+        let Some(id) = open.session else {
+            return;
+        };
+        if matches!(open.pane, Pane::Terminal { .. }) {
+            let _ = self.service.resize(
+                id,
+                carl::providers::workspace::terminal::Size { rows, cols },
+            );
+        }
+    }
+
+    /// Saves the editor buffer, and shows a refusal rather than swallowing it.
+    pub fn editor_save(&mut self) {
+        let Some(open) = self.workspace.as_mut() else {
+            return;
+        };
+        let Some(id) = open.session else {
+            return;
+        };
+        if let Pane::Editor {
+            buffer, refused, ..
+        } = &mut open.pane
+        {
+            match self.service.save(id, buffer) {
+                Ok(()) => *refused = None,
+                // A read only file, or somebody else has changed it underneath. Either way the
+                // facade refused and the pane says so instead of pretending it saved.
+                Err(e) => *refused = Some(e.to_string()),
+            }
+        }
+    }
+
+    /// Takes what is on disk, discarding the buffer.
+    pub fn editor_reload(&mut self) {
+        let Some(open) = self.workspace.as_mut() else {
+            return;
+        };
+        let Some(id) = open.session else {
+            return;
+        };
+        if let Pane::Editor {
+            buffer,
+            refused,
+            changed_on_disk,
+            ..
+        } = &mut open.pane
+        {
+            match self.service.reload(id) {
+                Ok(()) => {
+                    *buffer = self.service.contents(id).unwrap_or_default().to_string();
+                    *refused = None;
+                    *changed_on_disk = false;
+                }
+                Err(e) => *refused = Some(e.to_string()),
+            }
+        }
+    }
+
+    /// Whether the file has moved under the editor since it was opened.
+    pub fn editor_check_disk(&mut self) {
+        let Some(open) = self.workspace.as_mut() else {
+            return;
+        };
+        let Some(id) = open.session else {
+            return;
+        };
+        if let Pane::Editor {
+            changed_on_disk, ..
+        } = &mut open.pane
+        {
+            *changed_on_disk = self.service.changed_on_disk(id).unwrap_or(false);
+        }
     }
 
     /// Hides or shows the whole panel, keeping everything either way.
