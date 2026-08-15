@@ -57,7 +57,8 @@ field an older panel ignores.
 
 ## Backend to panel
 
-`reply` is one of `pong`, `snapshot`, `event`, `live`, `gap`, `done`, `speaking`, `refused`.
+`reply` is one of `pong`, `snapshot`, `event`, `live`, `telemetry`, `gap`, `done`, `speaking`,
+`refused`.
 
 Replies to a request carry your `id`. **Stream frames have no `id`**, because nothing asked for
 them. Do not treat one as a late answer to a request you made.
@@ -112,6 +113,32 @@ agent it happened to shows nothing.
 
 `kind` is one of: `delegated`, `moved`, `submitted`, `reviewed`, `refused`,
 `emergency_declared`, `decided`, `intervened`, `notified`.
+
+### `telemetry`
+
+Fresh machine readings, pushed to a subscribed panel because nothing else would have said.
+
+```json
+{"v":1,"reply":"telemetry","at":1786831196,"diagnostics":[ ... sampled Diagnostics ... ]}
+```
+
+**It carries no `seq`, deliberately, and no `id`.** Army events are ordered by the journal and
+that is the only ordering there is. A CPU number is not a thing that happened, it is a thing that
+was true when somebody looked. Giving it a sequence would put it in a line it does not belong in
+and let a panel believe telemetry and history are one stream.
+
+So: **replace the diagnostics you are holding, and leave `last_seq` alone.** `LivePanel` already
+does exactly that.
+
+Sent only when the sampler has actually taken a **new** reading, so receiving one means the
+numbers really are newer than the last. The refresh rate is Process 3's `Intervals::machine_secs`
+and there is no second interval anywhere that could drift from it.
+
+Only `Kind::Sampled` rows travel this way. Nothing about the army does, and no machine telemetry
+is ever written to the journal.
+
+One practical consequence: **a subscribed connection is never idle now.** `nc -U -w 3` will not
+time out on one, because telemetry keeps arriving.
 
 ### `gap`
 
@@ -207,6 +234,49 @@ Rules, each with a test:
   that project. An unlinked task never drifts into the only project that exists
 - milestones come only from explicitly recorded ones. Nothing is derived from git
 
+## Diagnostic component ids
+
+Two families and no others. `Diagnostic::group()` returns `"army"`, `"system"`, or `"unknown"`
+for a stray. **Use it rather than reproducing prefix logic**, so a new component lands on the
+right board without the UI changing.
+
+```text
+army.journal          army.tasks           army.personnel      army.latency
+army.claude.processes army.service.<unit>  army.agent.<name>
+system.cpu            system.memory        system.gpu          system.network
+system.temperature    system.disk:<path>
+```
+
+The old `carl.*`, `agent.*` and `claude.*` names are gone. Do not accept them: they are not
+produced, and diagnostics are ephemeral so there is nothing persisted to be compatible with.
+
+Ids are unique, and `Snapshot::duplicate_components()` exists so that can be asserted rather than
+assumed. It found a real case: a home on the root filesystem produced two rows both called
+`system.disk/`, which a panel keyed by component would have silently collapsed. The separator is
+now `:`, and watched paths are resolved and deduplicated.
+
+## What a snapshot costs
+
+Safe to ask for continuously. Measured against a running backend, one connection, 300 requests:
+
+```text
+300 pings         10ms,    0 forks system wide
+300 snapshots    314ms,    6 forks system wide, 19 diagnostics each
+```
+
+The six are one probe cycle and one sample. Before Process 3's fix, `army()` forked `systemctl`
+three times per call, so those 300 snapshots would have started **900** processes on their own,
+and a panel drawing at sixty frames a second would have started a hundred and eighty a second.
+
+The rate limit lives in `Diagnostics`, the backend holds exactly one of them for the whole
+process, and the clock is injectable so the limit is proved by `samples_taken()` and
+`probes_taken()` rather than by waiting. **Do not add a cache on your side.** Two things deciding
+how old a number is is how a panel shows a timestamp that disagrees with the value beside it.
+
+The army half is split by cost, not by meaning: `records()` is file reads, never cached and always
+current, because an event driven source that lags is not event driven. Probes are rate limited
+separately. Both are still `EventDriven` and neither carries a timestamp.
+
 ## Diagnostics, and the two distinctions that survive the wire
 
 `DiagnosticView` **is** `providers::health::Diagnostic`, re-exported. The panel's own version was
@@ -227,6 +297,11 @@ sampled  system.cpu  utilisation  "unknown"        <- could not be read
 ```
 
 Those are different facts. With the old `f64` they were the same one.
+
+**`Diagnostic::flattened()` exists and the backend never calls it.** It is intentionally lossy: a
+component nobody could read loses both its age and the names of the metrics that were missing.
+Call it in your UI adapter if your widget has no room for a gap, and never anywhere that another
+consumer reads afterwards. A test asserts the backend does not call it.
 
 **Sampling is rate limited inside `Diagnostics::machine`**, and the backend holds one sampler for
 the whole process. A snapshot taken twice in a second returns the earlier readings with their
@@ -388,7 +463,7 @@ mock fixtures need the new field shapes; your UI logic should not.
 
 ## Verified
 
-624 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
+678 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
 
 The full path, with the real binaries and a real restart, as run:
 

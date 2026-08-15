@@ -29,6 +29,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Update::Health(h) => println!("  link   {h:?}"),
             Update::Resynced(s) => println!("  RESYNCED to seq {} after a gap", s.seq),
+            Update::Telemetry { at, diagnostics } => println!(
+                "  sample at {at}, {} machine readings (no sequence: not a thing that happened)",
+                diagnostics.len()
+            ),
         }
         if live.health() == Health::Disconnected {
             println!("         (backend gone, still trying)");

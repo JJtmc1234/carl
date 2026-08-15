@@ -167,12 +167,17 @@ pub struct Events {
 }
 
 /// One thing off the live stream.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Incoming {
     /// A journal record, in order.
     Event(Box<PanelEvent>),
     /// The replay is finished and everything after this is live.
     CaughtUp { seq: u64 },
+    /// Fresh machine readings. Carries no sequence, because it is not a thing that happened.
+    Telemetry {
+        at: u64,
+        diagnostics: Vec<crate::providers::health::Diagnostic>,
+    },
     /// The backend cannot honour the sequence asked for. Take a fresh snapshot.
     Gap {
         asked_for: u64,
@@ -221,6 +226,10 @@ impl Events {
                 self.last = self.last.max(seq);
                 Ok(Incoming::CaughtUp { seq })
             }
+            // Deliberately does not touch `self.last`. Telemetry is outside the sequence and
+            // letting it move the resume point would make a reconnect ask to continue from a
+            // number the journal never issued.
+            Reply::Telemetry { at, diagnostics } => Ok(Incoming::Telemetry { at, diagnostics }),
             Reply::Gap {
                 asked_for,
                 have_from,

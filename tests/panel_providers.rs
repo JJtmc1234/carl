@@ -380,7 +380,7 @@ fn a_resynced_snapshot_replaces_provider_state_rather_than_merging_it() {
     let fresh = loop {
         match live.next_update() {
             Update::Resynced(s) => break s,
-            Update::Health(_) => continue,
+            Update::Health(_) | Update::Telemetry { .. } => continue,
             Update::Event(e) => panic!("nothing was resumable: {}", e.seq),
         }
     };

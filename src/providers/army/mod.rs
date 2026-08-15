@@ -57,15 +57,42 @@ impl Army {
     }
 
     /// Every army diagnostic, read now.
+    ///
+    /// The two halves below joined, for a caller that does not care about the cost difference.
+    /// `providers::Diagnostics` does care and calls them separately.
     pub fn snapshot(&self, machine_uptime: Option<f64>) -> Vec<Diagnostic> {
-        let mut out = services::diagnostics(machine_uptime);
-        let folded = journal::fold_file(&self.journal_path());
+        let mut out = self.records();
+        out.extend(self.processes(machine_uptime));
+        out
+    }
 
-        out.push(self.personnel());
+    /// The half that is only file reads.
+    ///
+    /// Cheap enough to call whenever something happened, which is the point of an event driven
+    /// source. No process is started and nothing is cached, so this is always current.
+    pub fn records(&self) -> Vec<Diagnostic> {
+        let folded = journal::fold_file(&self.journal_path());
+        let mut out = vec![self.personnel()];
         out.extend(self.agents());
         out.push(journal_health(&folded, &self.journal_path()));
         out.push(tasks(&folded));
         out.push(latency(&folded));
+        out
+    }
+
+    /// The half that starts processes.
+    ///
+    /// Three `systemctl` calls and a walk of `/proc`. Still event driven in meaning, because a
+    /// service is running or it is not, but expensive enough that a render loop must not call
+    /// it every frame. `providers::Diagnostics` rate limits it for exactly that reason.
+    pub fn processes(&self, machine_uptime: Option<f64>) -> Vec<Diagnostic> {
+        self.processes_with(services::SYSTEMCTL, machine_uptime)
+    }
+
+    /// The same, against a named systemctl, so a test can prove a missing one degrades to
+    /// unknown rather than taking the snapshot down.
+    pub fn processes_with(&self, systemctl: &str, machine_uptime: Option<f64>) -> Vec<Diagnostic> {
+        let mut out = services::diagnostics_with(systemctl, machine_uptime);
         out.push(claude_processes());
         out
     }
@@ -147,7 +174,7 @@ impl Army {
                     None => "idle".to_string(),
                 };
                 Diagnostic::new(
-                    &format!("agent.{name}"),
+                    &format!("army.agent.{name}"),
                     Health::Healthy,
                     summary,
                     Kind::EventDriven,
@@ -309,7 +336,7 @@ fn claude_processes() -> Diagnostic {
         (n, z) => format!("{n} claude processes, {z} unreaped"),
     };
 
-    Diagnostic::new("claude.processes", health, summary, Kind::EventDriven)
+    Diagnostic::new("army.claude.processes", health, summary, Kind::EventDriven)
         .with(Metric::new(
             "processes",
             Reading::Int(found.len() as u64),

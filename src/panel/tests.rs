@@ -459,11 +459,22 @@ fn an_event_written_by_the_army_reaches_a_subscribed_panel_live() {
     let t = a_real_run(&mut journal);
 
     let mut seen = Vec::new();
-    for _ in 0..4 {
+    while seen.len() < 4 {
         match panel.next().body {
             Reply::Event { event } => {
                 assert!(event.seq > caught_up, "and in order after the catch up");
                 seen.push(event.kind.clone());
+            }
+            // The machine is sampled whether or not the army is busy, so these interleave. The
+            // property worth checking is that one can never be mistaken for history.
+            Reply::Telemetry { at, diagnostics } => {
+                assert!(at > 0, "a sample knows when it was taken");
+                assert!(
+                    diagnostics
+                        .iter()
+                        .all(|d| d.kind == crate::providers::Kind::Sampled),
+                    "only sampled telemetry is pushed; army state travels as events"
+                );
             }
             other => panic!("wrong reply: {other:?}"),
         }

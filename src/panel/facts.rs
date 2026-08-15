@@ -49,6 +49,19 @@ impl Facts {
     /// snapshot needs it too and folding twice would be the same work done to get the same
     /// answer.
     pub fn gather(diagnostics: &mut Diagnostics, projects: &Projects, tasks: &[TaskView]) -> Self {
+        Self::gather_at(diagnostics, projects, tasks, crate::army::event::now())
+    }
+
+    /// The same, as of a given moment.
+    ///
+    /// The clock is a parameter so the rate limit can be tested without waiting for real seconds
+    /// to pass, which is the convention the provider layer already uses.
+    pub fn gather_at(
+        diagnostics: &mut Diagnostics,
+        projects: &Projects,
+        tasks: &[TaskView],
+        at: u64,
+    ) -> Self {
         let listed = projects.list().unwrap_or_default();
         let mut views = Vec::new();
 
@@ -64,7 +77,9 @@ impl Facts {
         }
 
         Self {
-            diagnostics: diagnostics.snapshot(),
+            // `snapshot_at` decides for itself whether anything expensive is due. Asking it
+            // often is free, and there is no second cache here that could disagree with it.
+            diagnostics: diagnostics.snapshot_at(at),
             projects: views,
         }
     }
