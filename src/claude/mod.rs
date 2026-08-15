@@ -107,7 +107,7 @@ impl Runner {
         self
     }
 
-    pub(crate) fn program(&self) -> &Path {
+    pub fn program(&self) -> &Path {
         &self.program
     }
 

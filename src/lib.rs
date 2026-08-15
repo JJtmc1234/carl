@@ -20,6 +20,7 @@
 //! Slack thread last week. Only memory does that.
 
 pub mod aec;
+pub mod army;
 pub mod audio;
 pub mod brief;
 pub mod capture;
