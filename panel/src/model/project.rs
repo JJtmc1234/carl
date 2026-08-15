@@ -5,8 +5,6 @@
 //! one produces a wall where nothing stands out, which is the same as having no milestones at
 //! all. So milestones arrive as milestones and the panel never promotes anything into one.
 
-use carl::army::task::TaskId;
-
 /// Roughly where a project has got to.
 ///
 /// Coarse on purpose. Fine grained phases are a scheduler, and the panel is not one.
@@ -63,10 +61,14 @@ pub struct Project {
     pub phase: Phase,
     /// A line of current status, from whoever owns it.
     pub status: Option<String>,
-    /// The department accountable, by agent name.
+    /// The agent accountable, when the backend names one.
     pub owner: Option<String>,
+    /// The department that owns it, which is a different fact from an accountable agent and is
+    /// kept separate rather than folded into `owner`.
+    pub department: Option<String>,
     pub active_agents: Vec<String>,
-    pub active_tasks: Vec<TaskId>,
+    /// Task ids, joined against `Snapshot::tasks` rather than held twice.
+    pub active_tasks: Vec<String>,
     pub blockers: Vec<String>,
     pub milestones: Vec<Milestone>,
     pub next_objective: Option<String>,
@@ -80,6 +82,7 @@ impl Project {
             phase: Phase::Unknown,
             status: None,
             owner: None,
+            department: None,
             active_agents: Vec::new(),
             active_tasks: Vec::new(),
             blockers: Vec::new(),

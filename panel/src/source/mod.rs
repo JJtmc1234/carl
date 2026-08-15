@@ -24,7 +24,11 @@
 use crate::command::Command;
 use crate::model::{Link, Snapshot};
 
+mod live;
+mod mapping;
 mod mock;
+
+pub use live::LivePanelDataSource;
 pub use mock::MockPanelDataSource;
 
 /// Where the panel gets everything.
@@ -60,8 +64,8 @@ pub enum PanelEvent {
     /// One agent's live overlay changed. Carries the whole new view rather than a patch, so
     /// applying it twice does the same thing as applying it once.
     AgentChanged(Box<crate::model::AgentView>),
-    /// A task was created or moved.
-    TaskChanged(Box<carl::army::task::Task>),
+    /// A task was created or moved, as the backend describes it.
+    TaskChanged(Box<carl::panel::view::TaskView>),
     /// Something was written to the army's record.
     Recorded(Box<carl::army::event::Record>),
     /// Carl said something, or is saying it.
@@ -83,6 +87,13 @@ pub enum PanelEvent {
         project: String,
         milestone: Box<crate::model::Milestone>,
     },
+    /// The whole world was replaced after a gap the stream could not bridge.
+    ///
+    /// Carries the new snapshot rather than a signal to go and fetch one, so applying it cannot
+    /// race with whatever arrives next.
+    Resynced(Box<Snapshot>),
+    /// A command did not go. Shown, never swallowed, because JJ otherwise believes it did.
+    CommandRefused(String),
     /// The link changed. The panel stops claiming to be live the moment this says otherwise.
     LinkChanged(Link),
 }

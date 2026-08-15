@@ -15,7 +15,7 @@
 use std::time::{Duration, Instant};
 
 use carl::army::org;
-use carl::army::task::{Status, Task, Verification};
+use carl::panel::view::{Maybe, TaskView};
 
 use super::{PanelDataSource, PanelEvent};
 use crate::command::Command;
@@ -258,21 +258,24 @@ fn opening_state() -> Snapshot {
     }
 }
 
-fn seed_task() -> Task {
-    let mut t = Task::assign(
-        "mason",
-        "nora",
-        "Correct the express belt rate and prove it with run-tests.sh",
-        Verification::of([
-            "run-tests.sh passes with no failures",
-            "the suite fails against the unfixed code",
-        ])
-        .expect("two conditions"),
-    )
-    .expect("mason may assign nora");
-    t.workspace = Some("/home/jj_tmc/Projects/jjtorio-belts".into());
-    let _ = t.advance("nora", Status::InHand);
-    t
+/// The task the timeline moves around, in the shape the backend sends.
+fn seed_task() -> TaskView {
+    TaskView {
+        id: "t-belt-throughput".into(),
+        goal: "Correct the express belt rate and prove it with run-tests.sh".into(),
+        owner: "nora".into(),
+        assigner: "mason".into(),
+        parent: None,
+        status: "in hand".into(),
+        attempts: 0,
+        must: vec![
+            "run-tests.sh passes with no failures".into(),
+            "the suite fails against the unfixed code".into(),
+        ],
+        review: Maybe::Unknown,
+        delegated_at: EPOCH - 900,
+        updated_at: EPOCH - 60,
+    }
 }
 
 #[cfg(test)]

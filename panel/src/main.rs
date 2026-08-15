@@ -17,6 +17,7 @@
 
 use std::io::Write;
 
+use carl_panel::source::{LivePanelDataSource, PanelDataSource};
 use carl_panel::{App, MockPanelDataSource, theme, ui};
 use eframe::egui::{Key, ViewportCommand};
 
@@ -51,6 +52,12 @@ struct Args {
     /// the layout painted, and only elapsed time says the scripted blocker, decision,
     /// disconnection and milestone actually reached the screen.
     seconds: Option<u64>,
+    /// Run against the scripted mock rather than the backend.
+    ///
+    /// For demonstrating and for working on the interface with no backend running. Never the
+    /// default, because a panel that quietly shows invented figures when the army is down is
+    /// the worst thing this whole design is trying to avoid.
+    mock: bool,
 }
 
 fn parse_args() -> Args {
@@ -58,6 +65,7 @@ fn parse_args() -> Args {
     Args {
         windowed: all.iter().any(|a| a == "--windowed"),
         tour: all.iter().any(|a| a == "--tour"),
+        mock: all.iter().any(|a| a == "--mock"),
         seconds: all
             .iter()
             .position(|a| a == "--seconds")
@@ -89,10 +97,15 @@ fn main() -> eframe::Result<()> {
             .with_title("AOS Command Panel")
             .with_inner_size([1600.0, 940.0])
             .with_fullscreen(!args.windowed),
+        // Built with the wgpu feature when the OpenGL backend cannot draw text on this
+        // machine. Same interface, different renderer, and the choice is made here rather than
+        // anywhere the interface can see it.
+        #[cfg(feature = "wgpu")]
+        renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
 
-    let mut app = App::new(Box::new(MockPanelDataSource::new()));
+    let mut app = App::new(source(&args));
     let mut drawn = 0u32;
     let began = std::time::Instant::now();
     let mut said_at = 0u64;
@@ -173,6 +186,34 @@ fn main() -> eframe::Result<()> {
         // idle panel is not a busy loop.
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
     })
+}
+
+/// Whatever the panel should be attached to.
+///
+/// The live backend unless told otherwise, and if it cannot be reached the panel says so and
+/// falls back to the mock **while saying which one it is on**, in the rail, at all times. The
+/// alternative is refusing to start, which leaves JJ with no way to see that the army is down.
+fn source(args: &Args) -> Box<dyn PanelDataSource> {
+    if args.mock {
+        return Box::new(MockPanelDataSource::new());
+    }
+
+    let socket = LivePanelDataSource::default_socket();
+    match LivePanelDataSource::open(&socket) {
+        Ok(live) => {
+            println!("attached to {}", socket.display());
+            Box::new(live)
+        }
+        Err(why) => {
+            eprintln!(
+                "could not reach the backend at {}: {why}\n\
+                 start it with `carl panel`, or run with --mock to work on the interface.\n\
+                 falling back to the mock, and the rail will say so.",
+                socket.display()
+            );
+            Box::new(MockPanelDataSource::new())
+        }
+    }
 }
 
 /// Drives the panel through everything worth painting, on a schedule.

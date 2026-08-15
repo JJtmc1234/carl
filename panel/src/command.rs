@@ -6,8 +6,6 @@
 //! panel that updates optimistically is a panel that disagrees with the army whenever the
 //! command fails, and it is always the panel that is wrong.
 
-use carl::army::task::TaskId;
-
 /// Something JJ wants to happen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -102,7 +100,7 @@ pub enum WorkspaceRequest {
     },
     /// What one task changed.
     Diff {
-        task: TaskId,
+        task: String,
     },
     /// A shell, in a directory somebody already has.
     Terminal {
@@ -122,7 +120,7 @@ impl WorkspaceRequest {
             WorkspaceRequest::File { path, .. } => {
                 path.rsplit('/').next().unwrap_or(path.as_str()).to_string()
             }
-            WorkspaceRequest::Diff { task } => format!("diff {}", short(task.as_str())),
+            WorkspaceRequest::Diff { task } => format!("diff {}", short(task)),
             WorkspaceRequest::Terminal { cwd } => {
                 format!("shell {}", cwd.rsplit('/').next().unwrap_or(cwd.as_str()))
             }

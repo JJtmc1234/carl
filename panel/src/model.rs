@@ -14,7 +14,7 @@
 //! shows a made up figure is worse than one that shows a gap.
 
 use carl::army::org::{Agent, Rank};
-use carl::army::task::{Task, TaskId};
+use carl::panel::view::TaskView;
 
 /// How the panel is currently getting its data.
 ///
@@ -58,7 +58,7 @@ pub struct AgentView {
     pub sub_department: Option<String>,
     pub status: AgentStatus,
     /// The task it holds, if it holds one.
-    pub task: Option<TaskId>,
+    pub task: Option<String>,
     pub blocker: Option<String>,
     /// What it last actually did, in its own words, and when.
     pub last_activity: Option<String>,
@@ -169,14 +169,19 @@ pub struct Delegation {
     pub from: String,
     pub to: String,
     pub goal: String,
-    pub task: Option<TaskId>,
+    pub task: Option<String>,
 }
 
 /// Everything the panel knows at one instant.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub agents: Vec<AgentView>,
-    pub tasks: Vec<Task>,
+    /// The backend's own task view, used as it is.
+    ///
+    /// Not rebuilt into an `army::task::Task`. Constructing one would mean running
+    /// `Task::assign`, which mints a fresh id and re-checks a delegation that already happened,
+    /// so the panel would be drawing a task the army never issued.
+    pub tasks: Vec<TaskView>,
     pub projects: Vec<Project>,
     pub diagnostics: Vec<Diagnostic>,
     pub conversation: Vec<Turn>,
@@ -192,8 +197,8 @@ impl Snapshot {
         self.agents.iter().find(|a| a.name == name)
     }
 
-    pub fn task(&self, id: &TaskId) -> Option<&Task> {
-        self.tasks.iter().find(|t| &t.id == id)
+    pub fn task(&self, id: &str) -> Option<&TaskView> {
+        self.tasks.iter().find(|t| t.id == id)
     }
 
     pub fn project(&self, name: &str) -> Option<&Project> {
@@ -201,10 +206,10 @@ impl Snapshot {
     }
 
     /// Everything recorded about one task, newest last.
-    pub fn events_about(&self, id: &TaskId) -> Vec<&carl::army::event::Record> {
+    pub fn events_about(&self, id: &str) -> Vec<&carl::army::event::Record> {
         self.events
             .iter()
-            .filter(|r| r.event.task() == Some(id))
+            .filter(|r| r.event.task().is_some_and(|t| t.as_str() == id))
             .collect()
     }
 }

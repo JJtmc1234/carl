@@ -155,8 +155,8 @@ fn task_block(app: &mut App, ui: &mut Ui, view: &crate::model::AgentView) {
             .color(theme::TEXT),
     );
     ui.add_space(6.0);
-    widgets::field(ui, "status", Some(&task.status.to_string()));
-    widgets::field(ui, "assigned by", Some(&task.created_by));
+    widgets::field(ui, "status", Some(&task.status));
+    widgets::field(ui, "assigned by", Some(&task.assigner));
     widgets::field(
         ui,
         "attempts",
@@ -177,7 +177,7 @@ fn task_block(app: &mut App, ui: &mut Ui, view: &crate::model::AgentView) {
 
     ui.add_space(6.0);
     widgets::small(ui, "DONE WHEN");
-    for must in &task.verification.must {
+    for must in &task.must {
         ui.label(
             RichText::new(format!("  {must}"))
                 .font(theme::label())

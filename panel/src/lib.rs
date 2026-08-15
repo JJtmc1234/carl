@@ -26,4 +26,4 @@ pub mod ui;
 pub use app::{App, Tab};
 pub use command::{Command, Intervention, InterventionKind, WorkspaceRequest};
 pub use model::{Link, Snapshot};
-pub use source::{MockPanelDataSource, PanelDataSource, PanelEvent};
+pub use source::{LivePanelDataSource, MockPanelDataSource, PanelDataSource, PanelEvent};

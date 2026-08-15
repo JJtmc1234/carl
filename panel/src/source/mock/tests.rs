@@ -31,13 +31,13 @@ fn the_seed_task_went_through_the_real_chain() {
     let snap = m.snapshot();
     let task = snap.tasks.first().expect("a task");
 
-    assert_eq!(task.created_by, "mason");
+    assert_eq!(task.assigner, "mason");
     assert_eq!(task.owner, "nora");
     assert!(
-        carl::army::org::may_delegate(&task.created_by, &task.owner),
+        carl::army::org::may_delegate(&task.assigner, &task.owner),
         "the fixture must not invent a delegation the chain forbids"
     );
-    assert!(!task.verification.must.is_empty());
+    assert!(!task.must.is_empty());
 }
 
 /// The board must include something nothing has measured, or the honest gap can never be seen.

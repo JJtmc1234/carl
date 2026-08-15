@@ -23,6 +23,20 @@ impl App {
         match event {
             PanelEvent::LinkChanged(link) => self.relink(link),
 
+            // Fresh truth, replacing rather than merging. The conversation is carried across
+            // because it is this session's talking and the backend never held it.
+            PanelEvent::Resynced(fresh) => {
+                let talking = std::mem::take(&mut self.snapshot.conversation);
+                self.snapshot = *fresh;
+                if self.snapshot.conversation.is_empty() {
+                    self.snapshot.conversation = talking;
+                }
+                self.resynced_at = Some(Instant::now());
+                self.lit.clear();
+            }
+
+            PanelEvent::CommandRefused(why) => self.notice = Some((why, false)),
+
             PanelEvent::AgentChanged(view) => {
                 let name = view.name.clone();
                 match self.snapshot.agents.iter_mut().find(|a| a.name == name) {
