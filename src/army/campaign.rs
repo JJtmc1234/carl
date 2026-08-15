@@ -30,7 +30,7 @@
 
 use std::time::Duration;
 
-use super::{Army, Report, Task, report, roster};
+use super::{Army, Dispatch, Report, report, roster};
 use crate::Result;
 
 /// How many jobs a head may split its brief into.
@@ -141,7 +141,7 @@ pub fn run_department(army: &Army, head: &str, brief: &str) -> Result<Department
 /// Forgiving about shape and strict about names. A head that answers with a bullet or a number
 /// in front of the worker meant the same thing, and a head that names somebody who does not
 /// work for it did not.
-pub fn parse_jobs(said: &str, under: &[&roster::Role]) -> Vec<Task> {
+pub fn parse_jobs(said: &str, under: &[&roster::Role]) -> Vec<Dispatch> {
     let mut tasks = Vec::new();
 
     for line in said.lines() {
@@ -162,7 +162,7 @@ pub fn parse_jobs(said: &str, under: &[&roster::Role]) -> Vec<Task> {
         }
 
         if let Some(role) = under.iter().find(|r| r.name == name) {
-            tasks.push(Task::new(role.name, what));
+            tasks.push(Dispatch::new(role.name, what));
         }
     }
 
@@ -178,7 +178,7 @@ impl Army {
     pub fn ask_one(&self, role: &roster::Role, instruction: &str) -> Result<String> {
         let reports = self
             .clone_for(Duration::from_secs(180))
-            .deploy(&[Task::new(role.name, instruction)]);
+            .deploy(&[Dispatch::new(role.name, instruction)]);
 
         match reports.into_iter().next() {
             Some(r) if r.worked() => Ok(r.said),

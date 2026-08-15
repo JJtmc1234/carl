@@ -33,12 +33,18 @@ use crate::claude::Runner;
 use crate::{Result, SessionId};
 
 mod campaign;
+pub mod event;
+pub mod org;
 mod report;
 mod roster;
+pub mod task;
 
 pub use campaign::{Departmental, JOBS_PER_HEAD, Outcome, parse_jobs, run_department};
+pub use event::{Event, Journal, Record};
+pub use org::{Agent, Rank, check_delegation, check_may_implement, may_delegate};
 pub use report::{Report, Summary};
 pub use roster::{Role, Roster, brief_for, department, heads, roles};
+pub use task::{Status, Task, TaskId, Verification};
 
 /// How many agents may be working at once.
 ///
@@ -53,16 +59,21 @@ pub const AT_ONCE: usize = 6;
 /// deadline holds up everything waiting on it.
 pub const DEADLINE: Duration = Duration::from_secs(300);
 
-/// One job for one agent.
+/// One instruction sent to one agent, and the unit the concurrency runner works in.
+///
+/// Not a `Task`. A task is a governed thing with a goal, an owner, verification and a status,
+/// and it may take several dispatches to finish one. Calling both of them Task was the first
+/// thing that had to go, because two types with one name is how two people build two
+/// incompatible halves of the same system.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Task {
+pub struct Dispatch {
     /// Which role does it. Must name something in the roster.
     pub role: String,
     /// What this one agent is being asked for, on its own, with no reference to the others.
     pub instruction: String,
 }
 
-impl Task {
+impl Dispatch {
     pub fn new(role: impl Into<String>, instruction: impl Into<String>) -> Self {
         Self {
             role: role.into(),
@@ -116,7 +127,7 @@ impl Army {
     /// Always one report per task, in the order the tasks were given. A failure is a report
     /// that says so rather than a missing entry, because a caller counting answers should not
     /// have to work out which one is absent.
-    pub fn deploy(&self, tasks: &[Task]) -> Vec<Report> {
+    pub fn deploy(&self, tasks: &[Dispatch]) -> Vec<Report> {
         if tasks.is_empty() {
             return Vec::new();
         }
@@ -173,7 +184,7 @@ impl Army {
 }
 
 /// One agent, start to finish.
-fn work(runner: &Runner, workdir: &std::path::Path, task: &Task, deadline: Duration) -> Report {
+fn work(runner: &Runner, workdir: &std::path::Path, task: &Dispatch, deadline: Duration) -> Report {
     let Some(role) = roster::find(&task.role) else {
         return Report::failed(
             &task.role,
@@ -252,7 +263,7 @@ pub fn summarise(reports: &[Report]) -> Summary {
 ///
 /// Cheaper to refuse a task naming a role that does not exist than to start it and find out.
 /// With twenty tasks, one typo otherwise means one silent gap in a wall of output.
-pub fn check(tasks: &[Task]) -> Result<()> {
+pub fn check(tasks: &[Dispatch]) -> Result<()> {
     let unknown: Vec<&str> = tasks
         .iter()
         .filter(|t| roster::find(&t.role).is_none())
@@ -287,7 +298,7 @@ mod tests {
     /// before anything starts.
     #[test]
     fn a_plan_naming_a_role_that_does_not_exist_is_refused() {
-        let tasks = vec![Task::new("nobody-by-that-name", "do a thing")];
+        let tasks = vec![Dispatch::new("nobody-by-that-name", "do a thing")];
         let err = check(&tasks).unwrap_err().to_string();
         assert!(err.contains("no such role"), "{err}");
         assert!(err.contains("The roster is"), "and says what is available");
@@ -296,7 +307,7 @@ mod tests {
     #[test]
     fn a_plan_of_real_roles_passes() {
         let first = roles()[0].name;
-        assert!(check(&[Task::new(first, "do a thing")]).is_ok());
+        assert!(check(&[Dispatch::new(first, "do a thing")]).is_ok());
     }
 
     /// Always one report per task, even when everything fails. A caller counting answers
@@ -305,8 +316,8 @@ mod tests {
     fn every_task_comes_back_with_something() {
         let army = Army::new(Runner::at("/nonexistent/definitely-not-claude"), "/tmp");
         let first = roles()[0].name;
-        let tasks: Vec<Task> = (0..5)
-            .map(|i| Task::new(first, format!("job {i}")))
+        let tasks: Vec<Dispatch> = (0..5)
+            .map(|i| Dispatch::new(first, format!("job {i}")))
             .collect();
 
         let reports = army.deploy(&tasks);
@@ -319,7 +330,7 @@ mod tests {
     fn reports_come_back_in_the_order_they_were_asked_for() {
         let army = Army::new(Runner::at("/nonexistent"), "/tmp").at_once(4);
         let names: Vec<&str> = roles().iter().take(3).map(|r| r.name).collect();
-        let tasks: Vec<Task> = names.iter().map(|n| Task::new(*n, "x")).collect();
+        let tasks: Vec<Dispatch> = names.iter().map(|n| Dispatch::new(*n, "x")).collect();
 
         let reports = army.deploy(&tasks);
         let back: Vec<&str> = reports.iter().map(|r| r.role.as_str()).collect();
