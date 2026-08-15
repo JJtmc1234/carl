@@ -64,6 +64,66 @@ half typed boxes, and whether the conversation was pinned to the bottom. That se
 `app::Kept`, so the test asserts on all of it at once rather than on a list somebody will
 forget to extend.
 
+## attached to the real backend
+
+`LivePanelDataSource` implements the same four methods the mock does, so nothing above the
+seam can tell which it is on. The UI never sees a socket, a sequence, a gap or a frame.
+
+**Two threads, because the client blocks and a frame loop must not.**
+
+The reader owns the `LivePanel` and sits in `next_update()`, which returns only when something
+actually happened. Blocking is what that thread is for. The commander runs one command at a
+time on its own short lived `PanelClient`, for the reason Process 1 documented on
+`LivePanel::command`: a subscribed connection cannot carry a request, and the reader is parked
+inside a blocking call and cannot be borrowed to send one.
+
+`poll()` drains with `try_recv` and returns, always. There is a test that fails if it ever
+takes more than 50ms on a silent backend, because a panel that freezes whenever the army goes
+quiet is frozen most of the day.
+
+| backend | what the panel does |
+|---|---|
+| initial snapshot | replaces the whole model |
+| `Update::Event` | applies only what the record states |
+| `Update::Resynced` | replaces the whole model, never merges |
+| `Update::Health` | moves the badge and nothing else |
+
+A journal record says what happened, not what everything looks like afterwards, so a `moved`
+frame moves that task and nothing else. Guessing at the rest is how a screen drifts and stays
+confidently wrong until the next snapshot.
+
+The conversation is the one thing carried across a resync. It is this session's talking, the
+backend keeps none of it, and wiping what JJ just said to punish him for a dropped socket would
+be the wrong way round.
+
+## shared types, and the ones that were deleted
+
+The panel had its own `Diagnostic` and `Project`. Both are gone. Main carries Process 3's as
+canonical and both of mine were worse in the same way: a metric held a formatted string, so an
+unreadable disk and a full one arrived as the same kind of thing, and a phase was an enum, so a
+project whose phase was worded differently drew as unknown rather than as what it said.
+
+What is left on this side is what the screen genuinely has to decide.
+
+**Which board a component sits on.** `model::render::group_of`. `system.` is the machine and
+everything else is the army, which survives Process 3's rename without a list of legacy
+prefixes: `army.agent.nora` and the older `agent.nora` both land in the right place. When
+`Diagnostic::group()` merges this becomes a call to it.
+
+**Whether a reading has an age.** Now `Kind` from the backend rather than guessed from a
+prefix. Sampled carries a moment and goes stale after 30s. Event driven carries none, because
+it is true until something changes it and a clock beside it would say it decays.
+
+**The agent overlay.** Unenlisted is unknown, blocked beats whatever the task says, and unknown
+stays unknown. Nothing turns a process indicator green because some Claude process exists
+somewhere.
+
+`metric_pairs()` renders an unreadable value as the word unknown, so a gap cannot read as a
+zero even for a consumer that only ever sees the flat form.
+
+`TaskView::project` is the link the projects pane walks, project to task to agent. A project
+with no tasks shows none rather than the ones that happen to read like it.
+
 ## the one boundary
 
 Everything above `PanelDataSource` draws. Everything below it fetches. No widget anywhere knows
