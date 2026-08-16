@@ -282,3 +282,64 @@ fn the_environment_this_module_sets_reaches_the_shell() {
     let seen = wait_for(&mut t, "TERM_IS=xterm-256color");
     assert!(seen.contains("TERM_IS=xterm-256color"), "{seen}");
 }
+
+/// The removal itself, checked on the builder before anything is spawned.
+///
+/// Its neighbour above asserts that `SCRUB` still lists the right names, which is a different
+/// claim and does not cover this one: delete the removal from `scrub` and the list assertion
+/// still passes while every variable leaks into JJ's shell. Both are kept because they guard
+/// different things, one that the list has not been thinned and one that the loop still runs.
+///
+/// No environment is mutated to do this. `CommandBuilder` holds its own map seeded from the
+/// base environment, so a removal is observable in process, which is what makes this testable
+/// without `set_var` and without racing the other tests spawning shells in parallel.
+#[test]
+fn the_scrubbed_variables_are_actually_removed_from_the_child_environment() {
+    let mut cmd = CommandBuilder::new("/bin/sh");
+
+    // Put every one of them in, as an inherited environment would.
+    for name in SCRUB {
+        cmd.env(name, "/tmp/should-not-reach-the-shell");
+    }
+    for name in SCRUB {
+        assert!(
+            cmd.get_env(name).is_some(),
+            "{name} was not set, so removing it would prove nothing"
+        );
+    }
+
+    scrub(&mut cmd);
+
+    for name in SCRUB {
+        assert_eq!(
+            cmd.get_env(name),
+            None,
+            "{name} survived the scrub and would reach the shell"
+        );
+    }
+}
+
+/// And the variable the same function sets does reach the child, so a scrub that simply
+/// emptied the environment would not pass.
+#[test]
+fn scrubbing_keeps_what_it_is_supposed_to_set() {
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    cmd.env("KEEP_ME", "yes");
+    cmd.env("LD_PRELOAD", "/tmp/evil.so");
+
+    scrub(&mut cmd);
+
+    assert_eq!(cmd.get_env("LD_PRELOAD"), None, "the dangerous one went");
+    assert_eq!(
+        cmd.get_env("TERM")
+            .map(|t| t.to_string_lossy().into_owned()),
+        Some("xterm-256color".to_string()),
+        "the one it sets is there"
+    );
+    assert_eq!(
+        cmd.get_env("KEEP_ME")
+            .map(|t| t.to_string_lossy().into_owned()),
+        Some("yes".to_string()),
+        "an unrelated variable was removed, so the scrub is too broad"
+    );
+}
