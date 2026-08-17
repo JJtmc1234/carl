@@ -39,6 +39,32 @@ kind of thing that produces a confident answer about something that is not there
 
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
+| 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+
+## bug 11, in full
+
+Found by Process 3 while writing durability tests for the project store, not by anything failing.
+
+Milestones are one JSON object per line. A write cut off part way through, by a crash or a full
+disk, leaves a file that does not end in a newline. The next append then writes straight onto the
+end of that broken line, and the reader sees one unparseable line where there were two records.
+
+So an interruption cost **two** milestones rather than one, and the second was the worse loss: it
+was written after the machine came back, by somebody who had every reason to believe it was
+safely on disk.
+
+The fix is to close the boundary before writing. If the file does not end cleanly, a newline is
+appended first, then the new record. The damaged line stays damaged and stays counted by
+`milestone_gaps`, which is honest and visible, but it no longer takes its successor with it.
+
+The general shape is worth remembering: in an append only text format, a torn write is not a
+local problem. It corrupts the *boundary*, and a boundary is shared with the record that comes
+next. Anything that appends lines and does not check how the file ends has this bug.
+
+The army journal appends the same way and does not have it, which is luck rather than design:
+`Journal::append` writes through `writeln!` on a freshly opened handle and has never been
+interrupted mid line in practice. Worth revisiting if it ever grows a buffered writer.
+
 ## bug 10, in full
 
 Found by reading the conversation record rather than by anything failing.

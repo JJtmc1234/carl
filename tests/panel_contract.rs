@@ -270,3 +270,58 @@ fn founding_still_creates_the_army_directory() {
     assert!(dir.path().join("army").exists());
     assert!(dir.path().join("army/nora").exists(), "with folders in it");
 }
+
+/// A shell that exited must still be there to be drawn, until somebody clears it.
+///
+/// The provider's own reap test proves dead sessions are cleared and leak no processes, and its
+/// comment says they are kept until asked, but nothing checked that half: it reaps immediately.
+/// This is the half the UI depends on. A terminal row that vanishes the instant its shell exits
+/// never gets to say why it exited, and JJ is left with a panel that had a terminal a moment ago
+/// and now does not.
+#[test]
+fn a_dead_terminal_is_still_there_to_be_drawn_until_it_is_reaped() {
+    use carl::providers::workspace::Workspace;
+    use carl::providers::workspace::terminal::Size;
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut workspace = Workspace::new();
+
+    let alive = workspace
+        .open_terminal(dir.path(), Size::default())
+        .unwrap();
+    let doomed = workspace
+        .open_terminal(dir.path(), Size::default())
+        .unwrap();
+    assert_eq!(workspace.held().0, 2);
+
+    workspace.input_line(doomed, "exit").unwrap();
+
+    // Wait for the shell to actually be gone, without reaping on the way.
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if !workspace.terminals().contains(&doomed) {
+            panic!("the dead session disappeared before anybody reaped it");
+        }
+        if !workspace.is_alive(doomed) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    assert!(
+        !workspace.is_alive(doomed),
+        "the shell never exited, so this proves nothing"
+    );
+    assert_eq!(
+        workspace.held().0,
+        2,
+        "a dead session is still held, so a panel can draw that it died"
+    );
+    assert!(workspace.terminals().contains(&doomed));
+
+    // And only now does it go.
+    let reaped = workspace.reap();
+    assert_eq!(reaped, vec![doomed]);
+    assert_eq!(workspace.held().0, 1, "and the living one is untouched");
+    assert!(workspace.is_alive(alive));
+}
