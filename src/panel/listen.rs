@@ -14,6 +14,7 @@
 //! and the code is not, which is written down here so the next person knows the duplication was
 //! considered rather than missed.
 
+use std::io::Read;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -75,6 +76,88 @@ impl Drop for Bound {
         }
     }
 }
+
+/// What, if anything, is behind a socket file that is in the way.
+enum Behind {
+    /// Something is serving. Do not touch it.
+    Backend,
+    /// Debris from a process that died. Safe to clear.
+    Nothing,
+    /// Could not find out, which is not the same as nothing.
+    CannotTell(String),
+}
+
+/// What a failed connect proves, which is much less than it looks.
+///
+/// `ECONNREFUSED` is the one error that means what it says: the address is there and nothing is
+/// listening on it. Every other error is an admission of ignorance. `EAGAIN` in particular comes
+/// from a live listener whose backlog is full, which is what a loaded machine produces, and
+/// `EMFILE` comes from this process being out of descriptors. Reading either as debris would
+/// delete a running backend's socket.
+///
+/// Split out as a pure function so the table can be checked without arranging for the kernel to
+/// produce each error, which mostly means exhausting a real resource and disturbing whatever else
+/// is running.
+fn failed_connect(kind: std::io::ErrorKind, why: &str) -> Behind {
+    match kind {
+        std::io::ErrorKind::ConnectionRefused => Behind::Nothing,
+        _ => Behind::CannotTell(why.to_string()),
+    }
+}
+
+/// Asks what is behind a socket, three ways rather than two.
+///
+/// Two mistakes were made here and both were found by a flaky test rather than by reasoning,
+/// which is why the shape is now this careful.
+///
+/// A successful `connect` is not proof of life. The kernel can complete a connection into a
+/// listener's backlog and that listener can then close, so the connect succeeds against a server
+/// that is already gone. Reading settles it: a peer that has gone gives end of file at once, and
+/// a live one sends nothing on a fresh connection because this protocol speaks only when spoken
+/// to, so the read times out with the connection still open. Silence is the liveness signal,
+/// which is unusual enough to be worth saying.
+///
+/// A *failed* connect is not proof of death either, and believing it was is the worse of the two
+/// mistakes. Under load, connecting to a live listener whose backlog is full returns `EAGAIN`,
+/// and treating that as debris would delete a running backend's socket and strand it. Only
+/// `ECONNREFUSED` actually means nothing is there. Everything else is an admission of ignorance,
+/// and the answer to ignorance is to refuse rather than to guess in the destructive direction.
+fn behind(path: &Path) -> Behind {
+    let stream = match UnixStream::connect(path) {
+        Ok(s) => s,
+        Err(e) => return failed_connect(e.kind(), &e.to_string()),
+    };
+
+    if let Err(e) = stream.set_read_timeout(Some(PROBE)) {
+        return Behind::CannotTell(e.to_string());
+    }
+
+    // Retried on `EINTR`, which means the wait was interrupted by a signal and says nothing at
+    // all about the peer. Rust does not retry it, and under a loaded machine it happens often
+    // enough that without this a second backend reports "could not find out" instead of the true
+    // and much more useful "already listening". Bounded, so a storm of signals cannot spin here.
+    let deadline = std::time::Instant::now() + PROBE * 4;
+    loop {
+        match (&stream).read(&mut [0u8; 1]) {
+            Ok(0) => return Behind::Nothing,
+            Ok(_) => return Behind::Backend,
+            Err(e) => match e.kind() {
+                // Waited the full time with the connection still open, which is exactly what a
+                // live backend looks like: it speaks only when spoken to.
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                    return Behind::Backend;
+                }
+                std::io::ErrorKind::Interrupted if std::time::Instant::now() < deadline => continue,
+                _ => return Behind::CannotTell(e.to_string()),
+            },
+        }
+    }
+}
+
+/// How long to wait for a socket in the way to prove it is alive.
+///
+/// Paid only at startup and only when a socket file is already there.
+const PROBE: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Binds and returns something that will tidy up.
 pub fn hold(path: &Path) -> Result<Bound> {
@@ -153,14 +236,23 @@ pub fn bind(path: &Path) -> Result<UnixListener> {
     }
 
     if path.exists() {
-        match UnixStream::connect(path) {
-            Ok(_) => {
+        match behind(path) {
+            Behind::Backend => {
                 return Err(Error::Refused(format!(
                     "a panel backend is already listening on {}",
                     path.display()
                 )));
             }
-            Err(_) => std::fs::remove_file(path)?,
+            Behind::Nothing => std::fs::remove_file(path)?,
+            Behind::CannotTell(why) => {
+                return Err(Error::Refused(format!(
+                    "there is a socket at {} and this could not find out whether anything is \
+                     behind it: {why}. Refusing rather than guessing, because deleting a live \
+                     backend's socket would strand it. Try again, or remove the file if you are \
+                     sure nothing is running.",
+                    path.display()
+                )));
+            }
         }
     }
 
@@ -234,6 +326,47 @@ mod tests {
         assert!(e.contains("108"), "says what the limit is: {e}");
         assert!(e.contains(&at.display().to_string()), "and which path: {e}");
         assert!(!deep.exists(), "and made no directory on the way out");
+    }
+
+    /// The mistake worth a test of its own, because it is the destructive one.
+    ///
+    /// A failed connect is not proof that nothing is there. `EAGAIN` comes from a live listener
+    /// whose backlog is full, which is what a loaded machine produces, and `EMFILE` from running
+    /// out of descriptors. Reading either as debris would delete a running backend's socket and
+    /// strand it, so only a refused connection may ever lead to a delete.
+    #[test]
+    fn only_a_refused_connection_means_nothing_is_there() {
+        use std::io::ErrorKind;
+
+        assert!(matches!(
+            failed_connect(ErrorKind::ConnectionRefused, "refused"),
+            Behind::Nothing
+        ));
+
+        for uncertain in [
+            ErrorKind::WouldBlock,
+            ErrorKind::Interrupted,
+            ErrorKind::PermissionDenied,
+            ErrorKind::TimedOut,
+            ErrorKind::Other,
+        ] {
+            assert!(
+                matches!(failed_connect(uncertain, "x"), Behind::CannotTell(_)),
+                "{uncertain:?} must never lead to deleting a socket"
+            );
+        }
+    }
+
+    /// And the message says what to do, because refusing without a way forward is a dead end.
+    #[test]
+    fn refusing_to_guess_explains_itself() {
+        match failed_connect(
+            std::io::ErrorKind::WouldBlock,
+            "resource temporarily unavailable",
+        ) {
+            Behind::CannotTell(why) => assert!(why.contains("resource"), "{why}"),
+            other => panic!("wrong answer: {}", matches!(other, Behind::Nothing)),
+        }
     }
 
     /// And the other half: a crash must not need a manual cleanup before Carl will start.

@@ -308,13 +308,16 @@ fn carry_out(
 ) -> Result<Reply> {
     command.check()?;
 
-    let mut journal = Journal::open(Personnel::open(home)?.journal_path())?;
-
+    // The journal is opened only where something is written, because opening it creates the
+    // directory it lives in. `say` and `inspect` change nothing, and a command that changes
+    // nothing must leave nothing behind: a `run/` directory that appeared because somebody
+    // looked would be indistinguishable from one where an army had worked and stopped.
     let intervention = match &command {
         PanelCommand::Say { text } => return speak(home, text, out, id),
         PanelCommand::Objective { text } => {
             // An objective goes to Carl as well as into the record, because an objective nobody
             // was told about is a note to self.
+            let mut journal = open_journal(home)?;
             let recorded =
                 command::record(&mut journal, Intervention::Objective { what: text.clone() })?;
             let _ = speak(home, &format!("New objective from JJ: {text}"), out, id);
@@ -358,6 +361,7 @@ fn carry_out(
         },
     };
 
+    let mut journal = open_journal(home)?;
     let recorded = command::record(&mut journal, intervention)?;
     Ok(Reply::Done {
         seq: Some(recorded.seq),
@@ -366,6 +370,14 @@ fn carry_out(
             recorded.told.join(" and ")
         ),
     })
+}
+
+/// Opens the record for writing, which creates its directory.
+///
+/// Separate so that every caller of it is visibly a writer. Reads go through `event::read`,
+/// which returns nothing for a file that is not there rather than making one.
+fn open_journal(home: &Path) -> Result<Journal> {
+    Journal::open(Personnel::open(home)?.journal_path())
 }
 
 /// The task this agent is actually holding, refusing rather than guessing.
