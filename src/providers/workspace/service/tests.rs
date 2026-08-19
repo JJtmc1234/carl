@@ -610,3 +610,174 @@ fn a_file_with_spaces_in_its_path_opens_and_saves() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
     assert!(w.file_info(id).unwrap().path.ends_with("a file.txt"));
 }
+
+// ---- leak audit ----
+
+/// Every pid this process still has as a child, from /proc.
+fn living(pids: &[u32]) -> Vec<u32> {
+    pids.iter()
+        .copied()
+        .filter(|p| crate::providers::system::process::read(*p).is_some())
+        .collect()
+}
+
+fn gone_within(pids: &[u32], patience: std::time::Duration) -> Vec<u32> {
+    let deadline = std::time::Instant::now() + patience;
+    while std::time::Instant::now() < deadline {
+        if living(pids).is_empty() {
+            return Vec::new();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    living(pids)
+}
+
+/// The leak that would matter: a panel opening and closing terminals all day.
+#[test]
+fn twenty_open_and_close_cycles_leave_nothing_behind() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+    let mut pids = Vec::new();
+
+    for round in 0..20 {
+        let id = w.open_terminal(d.path(), Size::default()).unwrap();
+        pids.push(w.terminals.get(&id).unwrap().pid().unwrap());
+        w.input_line(id, "echo round").unwrap();
+        w.close_terminal(id).unwrap();
+        assert_eq!(w.held().0, 0, "a session was kept after round {round}");
+    }
+
+    let leaked = gone_within(&pids, std::time::Duration::from_secs(10));
+    assert!(leaked.is_empty(), "shells left running: {leaked:?}");
+    assert_eq!(w.terminals().len(), 0);
+}
+
+/// Sessions that die on their own must not pile up in the table for the life of the process.
+#[test]
+fn dead_sessions_are_reaped_rather_than_accumulating() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+    let mut pids = Vec::new();
+
+    for _ in 0..10 {
+        let id = w.open_terminal(d.path(), Size::default()).unwrap();
+        pids.push(w.terminals.get(&id).unwrap().pid().unwrap());
+        w.input_line(id, "exit").unwrap();
+    }
+    assert_eq!(w.held().0, 10, "all ten are still known while they die");
+
+    // They are kept until somebody asks, so a panel can show that they exited.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::time::Instant::now() < deadline {
+        if w.reap().len() + w.held().0 == 10 && w.held().0 == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    assert_eq!(w.held().0, 0, "dead sessions were never cleared");
+    assert!(w.reap().is_empty(), "reaping twice found more");
+    let leaked = gone_within(&pids, std::time::Duration::from_secs(5));
+    assert!(
+        leaked.is_empty(),
+        "reaped sessions left processes: {leaked:?}"
+    );
+}
+
+/// Reaping must not touch a session that is still working.
+#[test]
+fn reaping_leaves_the_living_alone() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+
+    let alive = w.open_terminal(d.path(), Size::default()).unwrap();
+    let doomed = w.open_terminal(d.path(), Size::default()).unwrap();
+    w.input_line(doomed, "exit").unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let reaped = w.reap();
+        if reaped.contains(&doomed) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the dead session was never reaped"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    assert_eq!(w.terminals(), vec![alive], "the living one was reaped too");
+    w.input_line(alive, "echo still-working").unwrap();
+    wait_for(&mut w, alive, "still-working");
+}
+
+/// Files are held until released, and releasing them frees the table.
+#[test]
+fn file_sessions_are_released_when_closed() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+
+    let mut ids = Vec::new();
+    for n in 0..25 {
+        let path = d.path().join(format!("f{n}.txt"));
+        std::fs::write(&path, "x\n").unwrap();
+        ids.push(w.open_file(&path, Mode::ReadWrite).unwrap());
+    }
+    assert_eq!(w.held().1, 25);
+
+    for id in ids {
+        w.close_file(id).unwrap();
+    }
+    assert_eq!(w.held().1, 0, "file sessions were not released");
+    assert!(w.files().is_empty());
+}
+
+/// Investigation holds nothing, so clicking a row a thousand times costs nothing.
+#[test]
+fn repeated_investigation_accumulates_no_state() {
+    let d = tempfile::tempdir().unwrap();
+    let snapshot = Diagnostics::new(d.path()).snapshot_at(1_000);
+    let w = Workspace::new();
+
+    let before = w.held();
+    let first = w.investigate(&snapshot, "system.memory").unwrap();
+    for _ in 0..1_000 {
+        let again = w.investigate(&snapshot, "system.memory").unwrap();
+        assert_eq!(again, first, "investigation is not a pure lookup");
+        assert_eq!(w.investigate(&snapshot, "nothing.here"), None);
+    }
+    assert_eq!(w.held(), before, "investigating opened a session");
+    assert_eq!(w.held(), (0, 0));
+}
+
+/// Output stays bounded across many drains rather than only on the first.
+#[test]
+fn bounded_output_stays_bounded_over_a_long_session() {
+    let d = tempfile::tempdir().unwrap();
+    let mut w = Workspace::new();
+    let id = w.open_terminal(d.path(), Size::default()).unwrap();
+
+    for _ in 0..3 {
+        w.input_line(
+            id,
+            "for i in $(seq 1 8000); do echo aaaaaaaaaaaaaaaaaaaaaaaaaaaa; done",
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let _ = w.drain(id);
+            if w.terminals.get(&id).unwrap().scrollback().len()
+                >= super::super::terminal::SCROLLBACK_BYTES
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let held = w.terminals.get(&id).unwrap().scrollback().len();
+        assert!(
+            held <= super::super::terminal::SCROLLBACK_BYTES,
+            "scrollback reached {held} bytes"
+        );
+    }
+}

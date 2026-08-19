@@ -491,9 +491,26 @@ Four things, all in the shared layer:
 Nothing about the transport, the frames, `LivePanel` or the reconnect behaviour changed. Your
 mock fixtures need the new field shapes; your UI logic should not.
 
+## Workspace sessions
+
+`Workspace` now exposes two things a panel needs and could not previously ask for:
+
+- `reap() -> Vec<SessionId>` — forgets every terminal whose shell has exited, returning which
+  ones went. **A panel is expected to call it when it redraws.**
+- `held() -> (terminals, editors)` — how many sessions are open, so a leak is visible.
+
+**A dead session is kept until somebody reaps it, on purpose.** A terminal row that vanished the
+instant its shell exited would never get to say why, so the row survives, `is_alive` reports
+false, and only `reap` removes it. Do not treat the disappearance of a session as the signal that
+it died: the `is_alive` flag is the signal, and reaping is what you do afterwards.
+
+Repeated open and close does not grow the table, dropping the `Workspace` closes every terminal,
+and closing one leaves the others running. All of that is tested, including that no child shell
+processes are left behind.
+
 ## Verified
 
-727 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
+746 tests, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean.
 
 The full path, with the real binaries and a real restart, as run:
 

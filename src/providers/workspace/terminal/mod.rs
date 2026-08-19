@@ -53,6 +53,21 @@ const SCRUB: &[&str] = &[
     "GSETTINGS_SCHEMA_DIR",
 ];
 
+/// Strips the inherited environment that must not reach the shell, and sets what must.
+///
+/// A function rather than a loop inside `open`, so a test can call the thing that actually
+/// runs and check the result. The previous test asserted that `SCRUB` still listed the right
+/// names, which is a different claim: delete the removal and that test still passes while
+/// every variable leaks. A test that cannot fail for the real reason is worse than none,
+/// because it is evidence pointing the wrong way.
+fn scrub(cmd: &mut CommandBuilder) {
+    for name in SCRUB {
+        cmd.env_remove(name);
+    }
+    // Says to the shell and to anything it runs that this is an interactive terminal.
+    cmd.env("TERM", "xterm-256color");
+}
+
 /// How big the terminal is, in character cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Size {
@@ -109,11 +124,7 @@ impl Terminal {
 
         let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(cwd);
-        for name in SCRUB {
-            cmd.env_remove(name);
-        }
-        // Says to the shell and to anything it runs that this is an interactive terminal.
-        cmd.env("TERM", "xterm-256color");
+        scrub(&mut cmd);
 
         let child = pair
             .slave
