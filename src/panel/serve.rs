@@ -71,13 +71,22 @@ impl Server {
         for stream in bound.listener().incoming() {
             let stream = match stream {
                 Ok(s) => s,
-                // One panel failing to connect is not a reason to stop serving the next.
-                Err(_) => continue,
+                // One panel failing to connect is not a reason to stop serving the next, but a
+                // listener that is failing every time should say so rather than look idle.
+                Err(e) => {
+                    eprintln!("  panel accept failed: {e:#}");
+                    continue;
+                }
             };
             let home = self.home.clone();
             let machine = Arc::clone(&self.machine);
             std::thread::spawn(move || {
-                let _ = talk(&home, &machine, stream);
+                // Under systemd this is the only place a connection failure can land, so a
+                // dropped error here means the largest subsystem is the one that cannot be
+                // debugged from its own output.
+                if let Err(e) = talk(&home, &machine, stream) {
+                    eprintln!("  panel connection ended: {e:#}");
+                }
             });
         }
         Ok(())
