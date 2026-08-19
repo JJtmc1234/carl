@@ -26,6 +26,7 @@ impl App {
             // Fresh truth, replacing rather than merging. The conversation is carried across
             // because it is this session's talking and the backend never held it.
             PanelEvent::Resynced(fresh) => {
+                self.last_seq = self.last_seq.max(fresh.seq_at);
                 let talking = std::mem::take(&mut self.snapshot.conversation);
                 self.snapshot = *fresh;
                 if self.snapshot.conversation.is_empty() {
@@ -71,6 +72,9 @@ impl App {
             }
 
             PanelEvent::Recorded(record) => {
+                // The record's own sequence, so the screen agrees with the journal rather than
+                // counting for itself.
+                self.last_seq = self.last_seq.max(record.seq);
                 self.snapshot.events.push(*record);
                 // Bounded, because the panel shows the recent past and the journal is the
                 // place the whole of it lives.

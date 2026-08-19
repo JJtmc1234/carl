@@ -72,6 +72,7 @@ pub fn snapshot(wire: PanelSnapshot) -> Snapshot {
         tasks,
         events: Vec::new(),
         at: wire.at,
+        seq_at: wire.seq,
     }
 }
 

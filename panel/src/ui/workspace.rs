@@ -9,7 +9,7 @@
 
 use eframe::egui::{Align, Context, Key, Layout, RichText, ScrollArea, TextEdit, TopBottomPanel};
 
-use crate::app::{App, Pane};
+use crate::app::{App, Comparison, Pane};
 use crate::theme;
 
 use super::widgets;
@@ -76,7 +76,7 @@ pub fn draw(app: &mut App, ctx: &Context) {
             match app.workspace.as_ref().map(|w| w.pane.clone()) {
                 Some(Pane::Terminal { .. }) => terminal(app, ui),
                 Some(Pane::Editor { .. }) => editor(app, ui),
-                Some(Pane::Diff { text }) => scroll(ui, "diff", &text, theme::TEXT),
+                Some(Pane::Diff(outcome)) => comparison(ui, &outcome),
                 Some(Pane::Investigating(found)) => investigation(ui, &found),
                 _ => {}
             }
@@ -100,9 +100,11 @@ fn terminal(app: &mut App, ui: &mut eframe::egui::Ui) {
                 .font(theme::label())
                 .color(theme::FAINT),
         );
+        // A shell that has gone says so and keeps its scrollback. Closing the pane is what
+        // releases it, so whatever it printed on the way out can still be read.
         if !alive {
             ui.label(
-                RichText::new("the shell has exited")
+                RichText::new("the shell has exited, its output is kept until you close this")
                     .font(theme::label())
                     .color(theme::WARN),
             );
@@ -132,7 +134,12 @@ fn terminal(app: &mut App, ui: &mut eframe::egui::Ui) {
             [ui.available_width(), 24.0],
             TextEdit::singleline(input)
                 .font(theme::body())
-                .hint_text("type, then enter"),
+                .interactive(alive)
+                .hint_text(if alive {
+                    "type, then enter"
+                } else {
+                    "the shell has gone, nothing to type into"
+                }),
         );
         if response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
             app.terminal_send();
@@ -148,16 +155,18 @@ fn terminal(app: &mut App, ui: &mut eframe::egui::Ui) {
 fn editor(app: &mut App, ui: &mut eframe::egui::Ui) {
     app.editor_check_disk();
 
-    let (read_only, changed, refused, path) = match app.workspace.as_ref().map(|w| w.pane.clone()) {
-        Some(Pane::Editor {
-            read_only,
-            changed_on_disk,
-            refused,
-            path,
-            ..
-        }) => (read_only, changed_on_disk, refused, path),
-        _ => return,
-    };
+    let (read_only, changed, refused, conflict, path) =
+        match app.workspace.as_ref().map(|w| w.pane.clone()) {
+            Some(Pane::Editor {
+                read_only,
+                changed_on_disk,
+                refused,
+                conflict,
+                path,
+                ..
+            }) => (read_only, changed_on_disk, refused, conflict, path),
+            _ => return,
+        };
 
     ui.horizontal(|ui| {
         ui.label(
@@ -195,9 +204,34 @@ fn editor(app: &mut App, ui: &mut eframe::egui::Ui) {
         });
     });
 
-    // A refusal is the facade's answer, shown as it was given.
+    // A refusal is the facade's answer, shown as it was given. A conflict gets more than that,
+    // because it is the one refusal with a choice attached and nothing was overwritten.
     if let Some(why) = refused {
-        ui.label(RichText::new(why).font(theme::label()).color(theme::BAD));
+        if conflict {
+            eframe::egui::Frame::none()
+                .fill(theme::RAISED)
+                .stroke(theme::edge(theme::WARN))
+                .rounding(theme::CORNER)
+                .inner_margin(eframe::egui::Margin::symmetric(8.0, 6.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new(theme::spaced("NOT SAVED, THE FILE CHANGED UNDERNEATH"))
+                            .font(theme::label())
+                            .color(theme::WARN),
+                    );
+                    ui.label(RichText::new(why).font(theme::label()).color(theme::DIM));
+                    ui.label(
+                        RichText::new(
+                            "Nothing was written. Your text is still here. Reload to take what \
+                             is on disk and lose your changes, or copy what you need out first.",
+                        )
+                        .font(theme::label())
+                        .color(theme::TEXT),
+                    );
+                });
+        } else {
+            ui.label(RichText::new(why).font(theme::label()).color(theme::BAD));
+        }
     }
     ui.add_space(4.0);
 
@@ -214,6 +248,55 @@ fn editor(app: &mut App, ui: &mut eframe::egui::Ui) {
                 TextEdit::multiline(buffer).font(theme::body()),
             );
         });
+}
+
+/// A comparison, with the four outcomes drawn as four different things.
+///
+/// The one that matters is `Unavailable`. A repository with no commits cannot be compared at
+/// all, and drawing that as a clean tree would tell somebody their work was committed when
+/// nothing is.
+fn comparison(ui: &mut eframe::egui::Ui, outcome: &Comparison) {
+    match outcome {
+        Comparison::Changes(text) => scroll(ui, "diff", text, theme::TEXT),
+        Comparison::Same => {
+            ui.label(
+                RichText::new("no difference against HEAD")
+                    .font(theme::body())
+                    .color(theme::GOOD),
+            );
+            ui.label(
+                RichText::new("compared successfully, and there is nothing to show")
+                    .font(theme::label())
+                    .color(theme::FAINT),
+            );
+        }
+        Comparison::Binary => {
+            ui.label(
+                RichText::new("the files differ and git will not say how")
+                    .font(theme::body())
+                    .color(theme::COLD),
+            );
+            ui.label(
+                RichText::new("binary, so there is no text to compare")
+                    .font(theme::label())
+                    .color(theme::FAINT),
+            );
+        }
+        Comparison::Unavailable(why) => {
+            ui.label(
+                RichText::new(theme::spaced("COMPARISON UNAVAILABLE"))
+                    .font(theme::label())
+                    .color(theme::WARN),
+            );
+            ui.label(RichText::new(why).font(theme::body()).color(theme::TEXT));
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("this is not the same as having no changes")
+                    .font(theme::label())
+                    .color(theme::WARN),
+            );
+        }
+    }
 }
 
 fn investigation(

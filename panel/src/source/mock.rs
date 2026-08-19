@@ -255,6 +255,7 @@ fn opening_state() -> Snapshot {
         }],
         events: Vec::new(),
         at: EPOCH + 60,
+        seq_at: 17,
     }
 }
 

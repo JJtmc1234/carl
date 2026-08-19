@@ -39,6 +39,12 @@ pub enum Pane {
         input: String,
         cwd: Option<String>,
         alive: bool,
+        /// True once it has been seen to have exited.
+        ///
+        /// The session is deliberately not closed at that moment. A shell that died left its
+        /// scrollback behind and that is usually the only evidence of why, so it stays open and
+        /// readable until the pane is dismissed, and dismissing it is what releases it.
+        exited: bool,
     },
     Editor {
         /// The buffer being edited, which may differ from the file.
@@ -48,11 +54,15 @@ pub enum Pane {
         changed_on_disk: bool,
         /// Set when a save was refused, and why.
         refused: Option<String>,
+        /// True when the refusal was because the file moved underneath.
+        ///
+        /// Its own flag rather than a substring check on the message, because the pane offers a
+        /// different way out for this one: the buffer is kept and reloading is a deliberate
+        /// choice, where a read only file has nothing to resolve.
+        conflict: bool,
         path: String,
     },
-    Diff {
-        text: String,
-    },
+    Diff(Comparison),
     Investigating(Box<Investigation>),
     /// Opened, and the facade could not do it.
     Empty,
@@ -61,6 +71,40 @@ pub enum Pane {
 impl Workspace {
     pub fn title(&self) -> String {
         self.open.title()
+    }
+}
+
+/// What a comparison came back as.
+///
+/// Four outcomes and not three, because "no changes" and "cannot be compared" are different
+/// answers and collapsing them is the specific mistake worth avoiding: a repository with no
+/// commits yet cannot be diffed at all, and showing that as a clean tree would tell somebody
+/// their work is committed when nothing is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Comparison {
+    /// Real differences, as text.
+    Changes(String),
+    /// Compared successfully, and there are none.
+    Same,
+    /// Git said the files differ and would not say how.
+    Binary,
+    /// The comparison could not be made. Never shown as cleanliness.
+    Unavailable(String),
+}
+
+impl Comparison {
+    /// Reads what the facade returned into one of the four.
+    pub fn of(result: Result<String, String>) -> Self {
+        match result {
+            Err(why) => Comparison::Unavailable(why),
+            Ok(text) if text.trim().is_empty() => Comparison::Same,
+            // Git says this instead of a hunk, and dumping the bytes of an image into a text
+            // widget is a wall of replacement characters at best.
+            Ok(text) if text.contains("Binary files") && !text.contains("\n@@") => {
+                Comparison::Binary
+            }
+            Ok(text) => Comparison::Changes(safe(&text)),
+        }
     }
 }
 
@@ -87,6 +131,7 @@ pub fn open(service: &mut Service, request: WorkspaceRequest, rows: u16, cols: u
                     input: String::new(),
                     cwd: service.cwd(id).map(|p| p.display().to_string()),
                     alive: true,
+                    exited: false,
                 };
             }
             Err(e) => w.trouble = Some(e.to_string()),
@@ -104,6 +149,7 @@ pub fn open(service: &mut Service, request: WorkspaceRequest, rows: u16, cols: u
                         read_only: info.as_ref().is_some_and(|i| i.read_only),
                         changed_on_disk: false,
                         refused: None,
+                        conflict: false,
                         path: path.clone(),
                     };
                 }
@@ -115,15 +161,11 @@ pub fn open(service: &mut Service, request: WorkspaceRequest, rows: u16, cols: u
             // Nothing here turns a task id into a path. A diff needs a file the workspace
             // already has open, so with none this says so rather than guessing at one.
             match service.files().first().copied() {
-                Some(id) => match service.diff_against_head(id) {
-                    Ok(text) if text.trim().is_empty() => {
-                        w.pane = Pane::Diff {
-                            text: "no difference against HEAD".into(),
-                        }
-                    }
-                    Ok(text) => w.pane = Pane::Diff { text: safe(&text) },
-                    Err(e) => w.trouble = Some(e.to_string()),
-                },
+                Some(id) => {
+                    w.pane = Pane::Diff(Comparison::of(
+                        service.diff_against_head(id).map_err(|e| e.to_string()),
+                    ))
+                }
                 None => {
                     w.trouble = Some(format!(
                         "nothing is open to compare. Task {task} does not name a file, and the \

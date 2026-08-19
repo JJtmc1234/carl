@@ -728,3 +728,264 @@ fn a_diff_with_nothing_open_refuses_to_guess() {
     let why = open.trouble.expect("a stated reason");
     assert!(why.contains("will not guess"), "{why}");
 }
+
+/// The four comparison outcomes, and the one that must never look like the others.
+///
+/// A repository with no commits cannot be compared at all. Drawing that as a clean tree would
+/// tell somebody their work was committed when nothing is, which is the worst way for a diff
+/// pane to be wrong.
+#[test]
+fn a_comparison_that_could_not_be_made_is_not_a_clean_tree() {
+    use crate::app::Comparison;
+
+    assert_eq!(Comparison::of(Ok(String::new())), Comparison::Same);
+    assert_eq!(Comparison::of(Ok("   \n  ".into())), Comparison::Same);
+
+    let unborn = Comparison::of(Err(
+        "fatal: ambiguous argument 'HEAD': unknown revision".into()
+    ));
+    match &unborn {
+        Comparison::Unavailable(why) => assert!(why.contains("HEAD"), "{why}"),
+        other => panic!("an unborn repository must be unavailable, got {other:?}"),
+    }
+    assert_ne!(unborn, Comparison::Same, "and never the same as no changes");
+
+    assert_eq!(
+        Comparison::of(Ok("Binary files a/logo.png and b/logo.png differ\n".into())),
+        Comparison::Binary
+    );
+
+    match Comparison::of(Ok("@@ -1 +1 @@\n-old\n+new\n".into())) {
+        Comparison::Changes(text) => assert!(text.contains("+new")),
+        other => panic!("expected changes, got {other:?}"),
+    }
+}
+
+/// A diff that mentions a binary file among real hunks is still a diff worth reading.
+#[test]
+fn a_mixed_diff_is_not_written_off_as_binary() {
+    use crate::app::Comparison;
+
+    let mixed = "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n\
+                 diff --git a/main.rs b/main.rs\n@@ -1 +1 @@\n-old\n+new\n";
+    match Comparison::of(Ok(mixed.into())) {
+        Comparison::Changes(text) => assert!(text.contains("+new")),
+        other => panic!("a mixed diff has text worth showing, got {other:?}"),
+    }
+}
+
+/// A shell that dies keeps its scrollback until the pane is dismissed.
+///
+/// The scrollback is usually the only evidence of why it went, so reaping it the moment it
+/// exited would throw away the answer at exactly the moment somebody wanted it.
+#[test]
+fn a_dead_shell_keeps_its_output_until_the_pane_is_dismissed() {
+    let mut a = app();
+    a.open_workspace(WorkspaceRequest::Terminal { cwd: "/tmp".into() });
+
+    let Some(open) = a.workspace.clone() else {
+        return;
+    };
+    // A machine with no shell is a real outcome and is reported rather than drawn empty.
+    if open.trouble.is_some() {
+        return;
+    }
+    let session = open.session.expect("a session");
+
+    // Ask it to leave, then let the frame loop notice.
+    a.terminal_send();
+    if let Some(crate::app::Pane::Terminal { input, .. }) =
+        a.workspace.as_mut().map(|w| &mut w.pane)
+    {
+        *input = "exit".into();
+    }
+    a.terminal_send();
+
+    for _ in 0..80 {
+        a.pump_workspace();
+        let dead = matches!(
+            a.workspace.as_ref().map(|w| &w.pane),
+            Some(crate::app::Pane::Terminal { exited: true, .. })
+        );
+        if dead {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    assert_eq!(
+        a.workspace.as_ref().and_then(|w| w.session),
+        Some(session),
+        "the session is still held, so the scrollback can still be read"
+    );
+    match a.workspace.as_ref().map(|w| &w.pane) {
+        Some(crate::app::Pane::Terminal {
+            exited,
+            alive,
+            output,
+            ..
+        }) => {
+            // A shell that was told to exit will have exited. Asserted rather than branched
+            // on, so this cannot pass by never noticing.
+            assert!(
+                *exited,
+                "the shell was told to exit and the pane never saw it go"
+            );
+            assert!(!*alive);
+            assert!(
+                output.contains("the shell exited"),
+                "the pane should say it went: {output:?}"
+            );
+        }
+        other => panic!("expected a terminal pane, got {other:?}"),
+    }
+
+    // Dismissing is what releases it.
+    a.close_workspace();
+    assert!(a.workspace.is_none());
+}
+
+/// A save refused because the file moved underneath must not overwrite, and must offer a way
+/// out that is different from a read only refusal.
+#[test]
+fn a_save_that_loses_a_race_keeps_the_buffer_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("belts.py");
+    std::fs::write(&path, "original\n").unwrap();
+
+    let mut a = app();
+    a.open_workspace(WorkspaceRequest::File {
+        path: path.display().to_string(),
+        line: None,
+    });
+    let Some(open) = a.workspace.clone() else {
+        return;
+    };
+    if open.trouble.is_some() {
+        return;
+    }
+
+    // JJ types something.
+    if let Some(crate::app::Pane::Editor { buffer, .. }) = a.workspace.as_mut().map(|w| &mut w.pane)
+    {
+        *buffer = "what JJ typed\n".into();
+    }
+
+    // Somebody else writes the file underneath. A different length as well as different
+    // content, so the change is detectable however the provider checks.
+    std::fs::write(&path, "somebody else got here first, and wrote more\n").unwrap();
+    a.editor_check_disk();
+    a.editor_save();
+
+    match a.workspace.as_ref().map(|w| &w.pane) {
+        Some(crate::app::Pane::Editor {
+            buffer,
+            refused,
+            conflict,
+            ..
+        }) => {
+            // The provider refuses a save on a file that changed underneath, so this is an
+            // assertion rather than a branch. A test that can quietly take neither path is the
+            // kind that passes while the behaviour is gone.
+            assert!(
+                refused.is_some(),
+                "the provider must refuse a save that lost the race"
+            );
+            assert!(*conflict, "a lost race is a conflict, not a plain refusal");
+            assert_eq!(
+                buffer, "what JJ typed\n",
+                "the buffer must be kept so it can be copied out"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                "somebody else got here first, and wrote more\n",
+                "and nothing may be overwritten"
+            );
+        }
+        other => panic!("expected an editor pane, got {other:?}"),
+    }
+}
+
+/// Opening and dismissing panes must not leave sessions behind.
+///
+/// `held` is the provider's own count, so this asks the facade rather than trusting the
+/// panel's bookkeeping about it.
+#[test]
+fn the_panel_leaks_no_sessions_across_open_and_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("f.txt");
+    std::fs::write(&path, "x\n").unwrap();
+
+    let mut a = app();
+    assert_eq!(a.held(), (0, 0), "nothing held before anything opened");
+
+    for _ in 0..3 {
+        a.open_workspace(WorkspaceRequest::Terminal {
+            cwd: dir.path().display().to_string(),
+        });
+        a.open_workspace(WorkspaceRequest::File {
+            path: path.display().to_string(),
+            line: None,
+        });
+        a.close_workspace();
+        a.sweep_workspace();
+    }
+
+    assert_eq!(
+        a.held(),
+        (0, 0),
+        "three open and close cycles left something behind"
+    );
+}
+
+/// A dead shell on screen survives the sweep, because the sweep is what would take it away.
+///
+/// This is the lifecycle the brief is careful about: reaping collects every dead terminal, so
+/// doing it while a pane is showing one destroys the scrollback at exactly the moment somebody
+/// wants to read why it went.
+#[test]
+fn sweeping_never_takes_away_the_pane_that_is_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut a = app();
+
+    a.open_workspace(WorkspaceRequest::Terminal {
+        cwd: dir.path().display().to_string(),
+    });
+    let Some(open) = a.workspace.clone() else {
+        return;
+    };
+    if open.trouble.is_some() {
+        return;
+    }
+
+    // Kill it and let the pane notice.
+    if let Some(crate::app::Pane::Terminal { input, .. }) =
+        a.workspace.as_mut().map(|w| &mut w.pane)
+    {
+        *input = "exit".into();
+    }
+    a.terminal_send();
+    for _ in 0..80 {
+        a.pump_workspace();
+        a.sweep_workspace();
+        if matches!(
+            a.workspace.as_ref().map(|w| &w.pane),
+            Some(crate::app::Pane::Terminal { exited: true, .. })
+        ) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    let (terminals, _) = a.held();
+    assert_eq!(
+        terminals, 1,
+        "the dead shell on screen was reaped while its pane was still open"
+    );
+    assert!(a.workspace.is_some());
+
+    // Dismissing releases it, and only then.
+    a.close_workspace();
+    a.sweep_workspace();
+    assert_eq!(a.held(), (0, 0));
+}

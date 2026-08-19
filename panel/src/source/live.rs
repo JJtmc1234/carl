@@ -53,6 +53,13 @@ pub struct LivePanelDataSource {
     link: Link,
     /// True while Carl is mid answer, so the end of the stream can close the turn.
     speaking: bool,
+    /// The journal sequence the screen is caught up to.
+    ///
+    /// Advanced by army events and by a resync, and by nothing else. Telemetry carries no
+    /// sequence and must never move this, because this is what a reconnection resumes from: a
+    /// number pushed past the journal would ask the backend to continue from a record that
+    /// never existed, and everything between would be silently skipped.
+    last_seq: u64,
 }
 
 impl LivePanelDataSource {
@@ -62,6 +69,7 @@ impl LivePanelDataSource {
     /// army with no agents is worse than one that says it could not connect.
     pub fn open(socket: &Path) -> Result<Self, String> {
         let (live, first) = LivePanel::open(socket).map_err(|e| e.to_string())?;
+        let first_seq = first.seq;
 
         let (tx, incoming) = channel();
         let (orders, take_orders) = channel::<Command>();
@@ -76,6 +84,7 @@ impl LivePanelDataSource {
             orders,
             link: Link::Live,
             speaking: false,
+            last_seq: first_seq,
         })
     }
 
@@ -96,6 +105,7 @@ impl LivePanelDataSource {
                 orders,
                 link: Link::Live,
                 speaking: false,
+                last_seq: 0,
             },
             tx,
             taken,
@@ -109,6 +119,14 @@ impl LivePanelDataSource {
 
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// The journal sequence the screen is caught up to.
+    ///
+    /// Exposed so the separation between the two kinds of update can be asserted rather than
+    /// reasoned about. Telemetry must never move it.
+    pub fn last_seq(&self) -> u64 {
+        self.last_seq
     }
 }
 
@@ -229,6 +247,9 @@ impl LivePanelDataSource {
             // happened during the gap was never delivered and laying the next event on top of
             // it would leave a version nobody ever sent.
             Update::Resynced(fresh) => {
+                // A resync carries its own sequence and the stream continues from exactly
+                // there, so this is the one thing other than an event that may move it.
+                self.last_seq = fresh.seq;
                 self.replace(*fresh);
                 out.push(PanelEvent::Resynced(Box::new(self.latest.clone())));
             }
@@ -243,7 +264,13 @@ impl LivePanelDataSource {
                 translate::replace_telemetry(&mut self.latest, &diagnostics);
                 out.push(PanelEvent::TelemetryChanged { at, diagnostics });
             }
-            Update::Event(event) => translate::from_event(&event, &mut self.latest, out),
+            Update::Event(event) => {
+                // The only thing that advances the sequence. Taken from the frame rather than
+                // counted here, so a replay after a reconnection lands on the same number the
+                // backend has.
+                self.last_seq = self.last_seq.max(event.seq);
+                translate::from_event(&event, &mut self.latest, out);
+            }
         }
     }
 

@@ -24,7 +24,7 @@ use crate::command::{Command, InterventionKind, WorkspaceRequest};
 use crate::model::{Link, Snapshot, Speaker, Turn};
 use crate::source::PanelDataSource;
 
-pub use workspace::{Pane, Workspace};
+pub use workspace::{Comparison, Pane, Workspace};
 
 mod apply;
 mod intervene;
@@ -116,6 +116,10 @@ pub struct App {
     pub lit: Vec<(String, Instant)>,
     /// Set when a reconnect has just replaced the world, so the panel can say so.
     pub resynced_at: Option<Instant>,
+    /// The journal sequence the screen is caught up to.
+    ///
+    /// Moved by an army event and by a resync, never by telemetry, which has no sequence.
+    pub last_seq: u64,
     /// When the machine was last sampled, from telemetry.
     ///
     /// Kept apart from anything to do with the journal. This moves when a number was measured
@@ -157,12 +161,18 @@ impl App {
             notice: None,
             lit: Vec::new(),
             resynced_at: None,
+            last_seq: 0,
             sampled_at: None,
         }
     }
 
     pub fn source_name(&self) -> String {
         self.source.describe()
+    }
+
+    /// The journal sequence the screen is caught up to, for saying so on screen and in a run.
+    pub fn last_seq(&self) -> u64 {
+        self.last_seq
     }
 
     /// Takes everything waiting and applies it. Called every frame, and by tests directly.
@@ -172,6 +182,7 @@ impl App {
             self.apply(event);
         }
         self.pump_workspace();
+        self.sweep_workspace();
         self.lit.retain(|(_, at)| at.elapsed() < LIT_FOR);
     }
 
@@ -311,6 +322,24 @@ impl App {
         }
     }
 
+    /// Releases dead sessions that nothing is showing.
+    ///
+    /// Only when no pane is open, and that condition is the whole point. `reap` collects every
+    /// dead terminal, so calling it while a pane is displaying one would take away the
+    /// scrollback at the exact moment somebody wanted to read why the shell went. A dead shell
+    /// on screen is kept until it is dismissed, and this is for anything left behind after that.
+    pub fn sweep_workspace(&mut self) {
+        if self.workspace.is_some() {
+            return;
+        }
+        let _ = self.service.reap();
+    }
+
+    /// How many terminals and files the facade is holding, for proving nothing leaks.
+    pub fn held(&self) -> (usize, usize) {
+        self.service.held()
+    }
+
     /// Reads whatever the terminal has said and notices when it has gone.
     ///
     /// Called every frame. `drain` never blocks, which is what makes that safe.
@@ -321,13 +350,29 @@ impl App {
         let Some(id) = open.session else {
             return;
         };
-        if let Pane::Terminal { output, alive, .. } = &mut open.pane {
+        if let Pane::Terminal {
+            output,
+            alive,
+            exited,
+            ..
+        } = &mut open.pane
+        {
+            // Drained first, so whatever the shell said on its way out is kept. Draining after
+            // noticing it had gone would lose the last thing it printed, which is usually the
+            // reason it went.
             if let Ok(bytes) = self.service.drain(id)
                 && !bytes.is_empty()
             {
                 output.push_str(&String::from_utf8_lossy(&bytes));
             }
+
             *alive = self.service.is_alive(id);
+            if !*alive && !*exited {
+                *exited = true;
+                // Deliberately not closed here. The scrollback is the evidence and it stays
+                // readable until the pane is dismissed, which is what releases the session.
+                output.push_str("\n[the shell exited]\n");
+            }
         }
     }
 
@@ -363,21 +408,38 @@ impl App {
 
     /// Saves the editor buffer, and shows a refusal rather than swallowing it.
     pub fn editor_save(&mut self) {
+        let Some(id) = self.workspace.as_ref().and_then(|w| w.session) else {
+            return;
+        };
+        // Asked before saving, so a file that moved underneath is known about rather than
+        // discovered from the shape of an error message.
+        let moved = self.service.changed_on_disk(id).unwrap_or(false);
+
         let Some(open) = self.workspace.as_mut() else {
             return;
         };
-        let Some(id) = open.session else {
-            return;
-        };
         if let Pane::Editor {
-            buffer, refused, ..
+            buffer,
+            refused,
+            conflict,
+            changed_on_disk,
+            ..
         } = &mut open.pane
         {
             match self.service.save(id, buffer) {
-                Ok(()) => *refused = None,
-                // A read only file, or somebody else has changed it underneath. Either way the
-                // facade refused and the pane says so instead of pretending it saved.
-                Err(e) => *refused = Some(e.to_string()),
+                Ok(()) => {
+                    *refused = None;
+                    *conflict = false;
+                    *changed_on_disk = false;
+                }
+                // Nothing is overwritten and the buffer is untouched. A read only file has
+                // nothing to resolve, and a file that moved underneath has a choice to make,
+                // so the two are told apart rather than sharing one message.
+                Err(e) => {
+                    *refused = Some(e.to_string());
+                    *conflict = moved;
+                    *changed_on_disk = moved;
+                }
             }
         }
     }
@@ -394,6 +456,7 @@ impl App {
             buffer,
             refused,
             changed_on_disk,
+            conflict,
             ..
         } = &mut open.pane
         {
@@ -402,6 +465,7 @@ impl App {
                     *buffer = self.service.contents(id).unwrap_or_default().to_string();
                     *refused = None;
                     *changed_on_disk = false;
+                    *conflict = false;
                 }
                 Err(e) => *refused = Some(e.to_string()),
             }

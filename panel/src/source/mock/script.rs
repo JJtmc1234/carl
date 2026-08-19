@@ -177,6 +177,34 @@ pub fn timeline() -> Vec<(Duration, PanelEvent)> {
             ))),
         ),
         // Something that actually mattered.
+        // A sampled reading replaced live, which must move the board and nothing else.
+        (
+            secs(50),
+            PanelEvent::TelemetryChanged {
+                at: EPOCH + 430,
+                diagnostics: vec![
+                    one_diagnostic(
+                        "system.memory",
+                        "system",
+                        Health::Healthy,
+                        "11.2 GB of 31 GB in use",
+                        &[("used", "11.2 GB")],
+                        Kind::Sampled,
+                        EPOCH + 430,
+                    ),
+                    // A real zero, next to an unreadable one on the same board, so the two can
+                    // be compared on screen rather than only in a test.
+                    Diagnostic::new(
+                        "system.swap",
+                        Health::Healthy,
+                        "nothing swapped",
+                        Kind::Sampled,
+                    )
+                    .with(Metric::new("used", Reading::Int(0), "MiB"))
+                    .measured(EPOCH + 430),
+                ],
+            },
+        ),
         (
             secs(53),
             PanelEvent::MilestoneReached {

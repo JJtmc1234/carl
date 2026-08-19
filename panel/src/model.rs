@@ -203,6 +203,11 @@ pub struct Snapshot {
     pub events: Vec<carl::army::event::Record>,
     /// Unix seconds the snapshot was taken.
     pub at: u64,
+    /// The journal sequence this was built from.
+    ///
+    /// Carried so a resync can join the stream at exactly the point the backend built it,
+    /// rather than the screen keeping a number of its own that could drift.
+    pub seq_at: u64,
 }
 
 impl Snapshot {

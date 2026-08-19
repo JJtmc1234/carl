@@ -137,8 +137,17 @@ fn main() -> eframe::Result<()> {
             let elapsed = began.elapsed().as_secs();
             if elapsed >= said_at + 5 {
                 said_at = elapsed;
+                // The two kinds of freshness side by side, because the whole point is that one
+                // moves and the other does not.
+                let unknown = app
+                    .snapshot
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.health == carl_panel::model::Health::Unknown)
+                    .count();
                 println!(
-                    "{elapsed:>3}s  link {:<16} nora {:<8} decisions {}  milestones {}",
+                    "{elapsed:>3}s  link {:<16} nora {:<8} decisions {}  milestones {}  \
+                     seq {}  sampled {}  unknown {unknown}",
                     app.link.label(),
                     app.snapshot
                         .agent("nora")
@@ -150,6 +159,10 @@ fn main() -> eframe::Result<()> {
                         .iter()
                         .map(|p| p.milestones.len())
                         .sum::<usize>(),
+                    app.last_seq(),
+                    app.sampled_at
+                        .map(|s| s.to_string())
+                        .unwrap_or("never".into()),
                 );
             }
         }

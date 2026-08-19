@@ -32,13 +32,17 @@ fn task(id: &str, status: &str) -> TaskView {
 }
 
 fn frame(kind: &str, actor: &str, event: JournalEvent) -> WireEvent {
+    frame_at(5, kind, actor, event)
+}
+
+fn frame_at(seq: u64, kind: &str, actor: &str, event: JournalEvent) -> WireEvent {
     WireEvent {
-        seq: 5,
+        seq,
         at: 900,
         kind: kind.into(),
         entity: Entity::Agent { name: actor.into() },
         record: Record {
-            seq: 5,
+            seq,
             at: 900,
             actor: actor.into(),
             event,
@@ -483,4 +487,131 @@ fn the_event_reducer_and_the_telemetry_reducer_do_not_meet() {
             .any(|e| matches!(e, PanelEvent::TelemetryChanged { .. })),
         "and never telemetry"
     );
+}
+
+/// The sequence is what a reconnection resumes from, and telemetry has none.
+///
+/// Walked in the exact order the two kinds arrive in real life, because the failure this
+/// prevents is not that a number is wrong on screen. It is that a number pushed past the
+/// journal makes the panel ask the backend to continue from a record that never existed, and
+/// everything between is skipped without anybody noticing.
+#[test]
+fn telemetry_never_moves_the_sequence_and_events_always_do() {
+    use carl::providers::health::{Diagnostic, Health, Kind};
+
+    let (mut source, tx, _orders) = LivePanelDataSource::detached(Snapshot::default());
+
+    let sample = || {
+        FromBackend::Update(Box::new(Update::Telemetry {
+            at: 1_000,
+            diagnostics: vec![
+                Diagnostic::new("system.cpu", Health::Healthy, "fine", Kind::Sampled)
+                    .measured(1_000),
+            ],
+        }))
+    };
+
+    // Caught up to seven.
+    tx.send(FromBackend::Update(Box::new(Update::Event(Box::new(
+        frame_at(
+            7,
+            "moved",
+            "nora",
+            JournalEvent::Refused {
+                what: "x".into(),
+                why: "y".into(),
+            },
+        ),
+    )))))
+    .unwrap();
+    source.poll();
+    assert_eq!(source.last_seq(), 7);
+
+    // Telemetry arrives. It must not move.
+    tx.send(sample()).unwrap();
+    source.poll();
+    assert_eq!(source.last_seq(), 7, "telemetry moved the sequence");
+
+    // Event eight arrives. It must move.
+    tx.send(FromBackend::Update(Box::new(Update::Event(Box::new(
+        frame_at(
+            8,
+            "moved",
+            "nora",
+            JournalEvent::Refused {
+                what: "x".into(),
+                why: "y".into(),
+            },
+        ),
+    )))))
+    .unwrap();
+    source.poll();
+    assert_eq!(source.last_seq(), 8);
+
+    // Telemetry again. Still must not move.
+    tx.send(sample()).unwrap();
+    source.poll();
+    assert_eq!(source.last_seq(), 8, "telemetry moved the sequence");
+
+    // And however much of it arrives, in a burst, it is still eight.
+    for _ in 0..20 {
+        tx.send(sample()).unwrap();
+    }
+    source.poll();
+    assert_eq!(
+        source.last_seq(),
+        8,
+        "a burst of telemetry moved the sequence"
+    );
+}
+
+/// A resync carries its own sequence and the stream continues from exactly there, so it is the
+/// one thing besides an event that may move it.
+#[test]
+fn a_resync_sets_the_sequence_to_the_snapshot_it_carries() {
+    let (mut source, tx, _orders) = LivePanelDataSource::detached(Snapshot::default());
+
+    tx.send(FromBackend::Update(Box::new(Update::Event(Box::new(
+        frame_at(
+            3,
+            "moved",
+            "nora",
+            JournalEvent::Refused {
+                what: "x".into(),
+                why: "y".into(),
+            },
+        ),
+    )))))
+    .unwrap();
+    source.poll();
+    assert_eq!(source.last_seq(), 3);
+
+    tx.send(FromBackend::Update(Box::new(Update::Resynced(Box::new(
+        wire_snapshot(41),
+    )))))
+    .unwrap();
+    source.poll();
+    assert_eq!(
+        source.last_seq(),
+        41,
+        "a resync joins the stream at its own sequence"
+    );
+}
+
+/// A backend snapshot with a given sequence and nothing else in it.
+fn wire_snapshot(seq: u64) -> carl::panel::view::PanelSnapshot {
+    carl::panel::view::PanelSnapshot {
+        seq,
+        at: 1,
+        carl: carl::panel::view::CarlView {
+            status: Maybe::Unknown,
+            pending: Vec::new(),
+            objectives: Vec::new(),
+            recent_delegations: Vec::new(),
+        },
+        agents: Vec::new(),
+        tasks: Vec::new(),
+        projects: Vec::new(),
+        diagnostics: Vec::new(),
+    }
 }
