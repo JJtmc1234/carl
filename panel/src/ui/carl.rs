@@ -95,6 +95,30 @@ fn conversation(app: &mut App, ui: &mut Ui, width: f32) {
         .max_height(height)
         .show(ui, |ui| {
             ui.set_width(width);
+
+            // An empty pane and a pane holding a conversation that has not been loaded look the
+            // same, and they mean opposite things. Blank reads as "Carl has said nothing", when
+            // what is true is "nothing from before this panel opened is here". Saying so is the
+            // whole fix: the panel does not receive Carl's earlier turns, and inventing them from
+            // the army's record would be worse, because delegations are not things Carl said.
+            if app.snapshot.conversation.is_empty() {
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("NOTHING FROM BEFORE THIS PANEL OPENED")
+                        .font(theme::label())
+                        .color(theme::FAINT),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Carl's earlier conversations are on the surfaces they happened on. \
+                         This tab fills as you talk.",
+                    )
+                    .font(theme::body())
+                    .color(theme::DIM),
+                );
+            }
+
             for turn in &app.snapshot.conversation {
                 let (who, color) = match turn.from {
                     Speaker::Jj => ("JJ", theme::COLD),

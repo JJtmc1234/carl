@@ -1,5 +1,9 @@
 # Command Panel backend, v1
 
+> **Frozen.** See `docs/command-panel-v1.md` for what v1 is, its known limitations, and what
+> freezing means. The next runtime phase is designed in `docs/army-runtime.md`, and nothing in
+> it is built.
+
 The contract Processes 2 and 3 build against. Everything here is implemented and tested in
 `src/panel/`. Every example below is copied from a real run against the real binary, not written
 by hand.

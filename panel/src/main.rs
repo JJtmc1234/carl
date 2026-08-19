@@ -40,6 +40,13 @@ struct Args {
     /// the layout painted, and only elapsed time says the scripted blocker, decision,
     /// disconnection and milestone actually reached the screen.
     seconds: Option<u64>,
+    /// Carl's home, when it is not the usual one.
+    ///
+    /// Added during final integration. Without it the panel can only ever be pointed at the real
+    /// `~/.carl`, which makes an end to end run on a temporary home impossible: the only way to
+    /// exercise the whole thing was to exercise it against JJ's actual army. A test that can only
+    /// be run against production is a test nobody runs twice.
+    home: Option<std::path::PathBuf>,
     /// Run against the scripted mock rather than the backend.
     ///
     /// For demonstrating and for working on the interface with no backend running. Never the
@@ -54,6 +61,11 @@ fn parse_args() -> Args {
         windowed: all.iter().any(|a| a == "--windowed"),
         tour: all.iter().any(|a| a == "--tour"),
         mock: all.iter().any(|a| a == "--mock"),
+        home: all
+            .iter()
+            .position(|a| a == "--home")
+            .and_then(|i| all.get(i + 1))
+            .map(std::path::PathBuf::from),
         seconds: all
             .iter()
             .position(|a| a == "--seconds")
@@ -214,7 +226,10 @@ fn source(args: &Args) -> Box<dyn PanelDataSource> {
         return Box::new(MockPanelDataSource::new());
     }
 
-    let socket = LivePanelDataSource::default_socket();
+    let socket = match &args.home {
+        Some(home) => carl::panel::socket_path(home),
+        None => LivePanelDataSource::default_socket(),
+    };
     match LivePanelDataSource::open(&socket) {
         Ok(live) => {
             println!("attached to {}", socket.display());
