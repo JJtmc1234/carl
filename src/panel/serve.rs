@@ -10,9 +10,12 @@
 //! to tell one change from a redraw.
 //!
 //! The tail is a poll rather than inotify, which would need a dependency for the one thing it
-//! would buy. The cost is up to `TICK` of latency on a file that is written a handful of times
-//! per task. Written down because it is a choice and there is a point at which it stops being
-//! the right one.
+//! would buy. It costs up to `TICK` of latency, and per tick a stat plus a read of only the
+//! bytes appended since the last one, so the work tracks what changed rather than how long the
+//! army has been running. It was the whole file from byte zero once, about seven times a
+//! second for as long as a panel stayed connected, which grew without bound because the
+//! journal is never truncated. Written down because the poll is a choice and there is a point
+//! at which it stops being the right one.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -189,6 +192,11 @@ fn stream_from(
     since: u64,
 ) -> Result<()> {
     let path = Personnel::open(home)?.journal_path();
+
+    // Sampled before the replay reads the file, never after. Anything appended between the two
+    // is then read a second time by the tail and dropped by the `seq > last` filter below.
+    // Sampling afterwards would let a record land in the gap and be skipped by both.
+    let mut offset = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     let records = event::read(&path)?;
 
     if let Some(gap) = gap(&records, since) {
@@ -210,10 +218,12 @@ fn stream_from(
     let mut told_of = machine.lock().ok().and_then(|m| m.last_sampled_at());
 
     loop {
-        let fresh: Vec<Record> = event::read(&path)?
-            .into_iter()
-            .filter(|r| r.seq > last)
-            .collect();
+        let (appended, next) = event::read_from(&path, offset)?;
+        offset = next;
+        // The offset is what makes this cheap. The sequence filter is what makes it correct,
+        // because a replayed overlap or a truncated journal can both hand back a record this
+        // panel has already been sent.
+        let fresh: Vec<Record> = appended.into_iter().filter(|r| r.seq > last).collect();
         for r in fresh {
             last = r.seq;
             // A write failure is the panel having gone away, which is ordinary.

@@ -16,6 +16,8 @@ Every bug of consequence, and the test that stops it coming back. No entry witho
 
 | 9 | Mods were read from the directory rather than from `mod-list.json`, so mods present but switched off were reported as active. | 88 mods on disk and 4 enabled, so Carl was told a vanilla Space Age save was Sea Block with Angel's and Bob's, and answered a smelting question with ore processing that does not exist in that game | `only_the_mods_that_are_switched_on_are_reported` |
 
+| 10 | A subscribed panel re-read and re-parsed the whole journal from byte zero about seven times a second, so the cost per tick grew with the length of the run rather than with what changed. | Never fired, found by reading. The journal is append only and never truncated, so this gets worse for as long as the army runs. | `a_tail_returns_only_what_was_appended_after_the_offset`, `a_half_written_line_is_left_for_next_time` |
+
 ## bug 9, in full
 
 The worst kind, because the fix made the thing worse than before and was reported as working.
@@ -120,3 +122,49 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 10, in full
+
+Found by reading rather than by anything going wrong, which is the only way this one could
+have been found before it mattered.
+
+A panel that subscribes takes over its connection and tails the journal. The tail called
+`event::read(&path)` inside the loop, and `read` is `read_to_string` plus a `serde_json`
+parse per line, starting at byte zero every time. `TICK` is 150ms, so that is the entire file
+read and parsed about seven times a second, for as long as somebody leaves a panel open.
+
+The journal is append only and is never truncated. So the work per tick is proportional to
+everything that has ever happened, and the panel gets slower for as long as the army runs.
+Nothing would ever have alerted anybody. It would just quietly stop being usable.
+
+Fix. `event::read_from(path, offset)` returns the records past a byte offset and the offset to
+resume at. The loop keeps the offset and the file is read from there. `read` is untouched and
+is still the right call for anything that wants the whole history, which is most callers.
+
+Two things about it are less obvious than they look.
+
+The starting offset is sampled before the replay reads the file, not after. Sampling afterwards
+leaves a window where a record lands between the read and the stat, and it would then be
+skipped by both the replay and the tail. Sampling first can only cause an overlap, and the
+`seq > last` filter that was already in the loop drops the duplicates. Given the choice, read
+something twice rather than never.
+
+Only whole lines are consumed. `Journal::append` writes with `writeln!`, which reaches the file
+as more than one write, so a reader genuinely can arrive with a line half there. Consuming a
+partial line would move the offset past a record that was never parsed, and that record would
+be lost permanently. The bytes are split at the last newline before being turned into text,
+which is also why the read is `read_to_end` into a `Vec<u8>` rather than `read_to_string`: a
+torn line can end mid character, and `read_to_string` would fail on the whole read.
+
+Guard. Four tests. `a_tail_returns_only_what_was_appended_after_the_offset` is the one that
+describes the bug: read once, then read again with nothing appended and get nothing back, then
+append one record and get exactly that one. `a_half_written_line_is_left_for_next_time` writes
+a record with no newline, checks it is not consumed and the offset has not moved, then finishes
+the line and checks the record arrives rather than being lost.
+
+Verified by replacing the body of `read_from` with the naive version, ignoring the offset and
+returning the whole file, which is the shape somebody would write while simplifying it back.
+Both of those tests failed. The other two, `a_shorter_file_than_the_offset_is_read_from_the_beginning`
+and `a_missing_journal_tails_as_empty`, still passed, because the naive version satisfies both
+edge cases by accident. They are worth keeping for the truncation and missing file paths, but
+they are not what guards this bug and it would be wrong to record them as though they were.

@@ -14,7 +14,7 @@
 //! only what happened cannot answer what somebody tried to do and was stopped from doing,
 //! which is the question worth asking when something has gone wrong.
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -267,6 +267,47 @@ pub fn read(path: impl AsRef<Path>) -> Result<Vec<Record>> {
         .collect())
 }
 
+/// Records appended past byte `from`, and the offset to resume at next time.
+///
+/// The journal is append only, so a reader that is following it can start where it stopped
+/// rather than parse the file from byte zero. `read` is still the right call for anything that
+/// wants the whole history. This is for the caller that already has it and only wants what is
+/// new, where reading it all again costs more the longer the run has been going.
+///
+/// Only whole lines are consumed. `Journal::append` writes through `writeln!`, which can reach
+/// the file as more than one write, so a reader really can arrive while a line is half there.
+/// The returned offset stops at the last newline and the rest is read again next time, which
+/// is why the bytes are split before they are turned into text rather than after.
+///
+/// A file shorter than `from` was truncated or replaced, so the offset means nothing and the
+/// only safe answer is to start again from the beginning.
+pub fn read_from(path: impl AsRef<Path>, from: u64) -> Result<(Vec<Record>, u64)> {
+    let mut file = match std::fs::File::open(path.as_ref()) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+        Err(e) => return Err(e.into()),
+    };
+
+    let len = file.metadata()?.len();
+    let from = if len < from { 0 } else { from };
+    if len == from {
+        return Ok((Vec::new(), from));
+    }
+
+    file.seek(SeekFrom::Start(from))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+
+    let complete = buf.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    let records = String::from_utf8_lossy(&buf[..complete])
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+
+    Ok((records, from + complete as u64))
+}
+
 /// Everything about one task, in order.
 pub fn about(records: &[Record], task: &TaskId) -> Vec<Record> {
     records
@@ -293,6 +334,100 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let j = Journal::open(d.path().join("run/events.jsonl")).unwrap();
         (j, d)
+    }
+
+    fn decided(what: &str) -> Event {
+        Event::Decided {
+            task: None,
+            what: what.into(),
+        }
+    }
+
+    /// The bug this guards. A subscribed panel re-read and re-parsed the whole journal about
+    /// seven times a second, from byte zero, so the work per tick grew with the length of the
+    /// run rather than with what had actually changed.
+    #[test]
+    fn a_tail_returns_only_what_was_appended_after_the_offset() {
+        let (mut j, _d) = journal();
+        j.append("carl", decided("one")).unwrap();
+
+        let (first, offset) = read_from(j.path(), 0).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].seq, 1);
+
+        // Nothing new, so nothing comes back and the offset does not move.
+        let (none, same) = read_from(j.path(), offset).unwrap();
+        assert!(none.is_empty());
+        assert_eq!(same, offset);
+
+        j.append("carl", decided("two")).unwrap();
+        let (second, moved) = read_from(j.path(), offset).unwrap();
+        assert_eq!(second.len(), 1, "only the new record, not the whole file");
+        assert_eq!(second[0].seq, 2);
+        assert!(moved > offset);
+    }
+
+    /// `Journal::append` writes through `writeln!`, which can reach the file as more than one
+    /// write, so a reader can arrive with a line only half there. Consuming it would drop that
+    /// record permanently, because the offset would move past a line that was never parsed.
+    #[test]
+    fn a_half_written_line_is_left_for_next_time() {
+        let (mut j, _d) = journal();
+        j.append("carl", decided("whole")).unwrap();
+        let (_, offset) = read_from(j.path(), 0).unwrap();
+
+        // A record with no newline yet, which is exactly what a torn write looks like.
+        let partial = serde_json::to_string(&Record {
+            seq: 2,
+            at: now(),
+            actor: "carl".into(),
+            event: decided("torn"),
+        })
+        .unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(j.path())
+            .unwrap();
+        write!(f, "{partial}").unwrap();
+        drop(f);
+
+        let (nothing, held) = read_from(j.path(), offset).unwrap();
+        assert!(nothing.is_empty(), "a line with no newline is not a record");
+        assert_eq!(held, offset, "the offset must not move past an unread line");
+
+        // Once the writer finishes the line, the record arrives rather than being lost.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(j.path())
+            .unwrap();
+        writeln!(f).unwrap();
+        drop(f);
+
+        let (finished, _) = read_from(j.path(), held).unwrap();
+        assert_eq!(finished.len(), 1);
+        assert_eq!(finished[0].seq, 2);
+    }
+
+    /// An offset past the end of the file means it was truncated or replaced underneath us, so
+    /// the offset describes a file that no longer exists. Starting again is the only safe move,
+    /// and the sequence filter in the panel loop is what stops the replay being sent twice.
+    #[test]
+    fn a_shorter_file_than_the_offset_is_read_from_the_beginning() {
+        let (mut j, _d) = journal();
+        j.append("carl", decided("one")).unwrap();
+        let (_, offset) = read_from(j.path(), 0).unwrap();
+
+        let (back, from) = read_from(j.path(), offset + 10_000).unwrap();
+        assert_eq!(back.len(), 1, "the whole file, not nothing");
+        assert_eq!(from, offset);
+    }
+
+    #[test]
+    fn a_missing_journal_tails_as_empty() {
+        let d = tempfile::tempdir().unwrap();
+        let (records, offset) = read_from(d.path().join("nothing.jsonl"), 0).unwrap();
+        assert!(records.is_empty());
+        assert_eq!(offset, 0);
     }
 
     #[test]
