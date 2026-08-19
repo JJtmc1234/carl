@@ -44,6 +44,44 @@ those two is survivable, so the code is arranged to only ever make that one.
 The same rule runs the AOS event log. It is the second time it has come up, which is a good
 sign it is a real rule and not a preference.
 
+## what you need installed
+
+`ask`, `chat`, `memory`, `chain` and `panel` need only the `claude` CLI. The voice path,
+`carl listen`, needs four more things, at paths the code looks for and does not search for.
+They are listed with those exact paths because a wrong location fails the same way a missing
+install does.
+
+| what | where the code looks | needed for |
+|---|---|---|
+| the `claude` CLI | on `PATH` | everything |
+| whisper.cpp | `~/.local/share/whisper.cpp/build/bin/whisper-cli` | hearing you |
+| whisper models | `~/.local/share/whisper.cpp/models/ggml-tiny.en.bin`, `ggml-base.en.bin`, and `ggml-small.en.bin` with `--accurate` | hearing you |
+| piper | `~/.local/share/piper/piper/piper` | speaking |
+| a piper voice | `~/.local/share/piper/voices/en_US-lessac-medium.onnx` | speaking |
+| `arecord` and `aplay` | on `PATH`, from `alsa-utils` | the microphone and the speakers |
+
+Three models rather than one is deliberate. The wake word check runs on every window of audio,
+so it uses the tiny one, and the slower model is only loaded once Carl is actually being
+spoken to.
+
+```sh
+sudo apt install alsa-utils cmake
+
+git clone https://github.com/ggerganov/whisper.cpp ~/.local/share/whisper.cpp
+cd ~/.local/share/whisper.cpp
+cmake -B build && cmake --build build -j
+./models/download-ggml-model.sh tiny.en
+./models/download-ggml-model.sh base.en
+```
+
+piper ships as a release archive rather than a package. Unpack it so the binary lands at
+`~/.local/share/piper/piper/piper`, and put the voice `.onnx` and its `.onnx.json` next to
+each other under `~/.local/share/piper/voices/`.
+
+One gap worth knowing about. `Voice::found` checks the piper binary exists and does not check
+the voice model does, so a missing `.onnx` is not caught at startup and shows up later as a
+failure to speak.
+
 ## try it
 
 ```sh
