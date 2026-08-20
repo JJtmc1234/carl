@@ -78,6 +78,33 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 15 | A panel `JjStop` recorded the intervention and the fold marked the task abandoned, but nothing wrote `State::put_down`, so the agent's folder went on naming the stopped task forever. | One `AgentView` contradicted itself, showing a task being held whose status was unknown, a second stop on the same agent was accepted, and a chain built with `staffed_by` would never hand that agent anything again | `stopping_a_task_clears_the_folder_that_names_it` |
+
+## bug 15, in full
+
+Numbered 15 because 12, 13 and 14 are on the branches for issues 22, 23 and 24, none landed.
+
+Two records of the same fact and only one of them was being written.
+
+The journal says what happened and the folder says what an agent is doing. `Chain::advance`
+moves a task and writes both. The panel is the other way to move a task, and it wrote only the
+journal, so `State::put_down` was reachable from exactly one of the two places that needed it.
+
+The visible damage is one `AgentView` disagreeing with itself. `holding` reads the folder and
+`task_status` reads the fold, and the fold filters settled tasks out, so the panel showed a
+task being held and its status unknown at the same time. Worse and quieter: `staffing`
+computes what an agent is free to take from `state.holding` alone, so a stopped task left an
+agent permanently busy with nothing.
+
+The fix writes the folder after `command::record` returns, in that order. If the folder write
+fails the journal still says the task was stopped, and a folder that lags the record can be
+rebuilt from the record. A folder that leads it cannot.
+
+Only for a stop. The report was clear that the replace half is not broken, and it is right: a
+replace keeps the same task id and owner and puts the status back to assigned, so a folder
+still naming that task is correct. Calling `put_down` there would have opened the same gap
+from the other side, which is why there is a test holding the replace case still.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.

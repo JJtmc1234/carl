@@ -363,6 +363,14 @@ fn carry_out(
 
     let mut journal = open_journal(home)?;
     let recorded = command::record(&mut journal, intervention)?;
+
+    // The record first, then the belief, never the other way round. If the folder write below
+    // fails the journal still says the task was stopped, and a folder that lags the record can
+    // be fixed by reading the record. A folder that leads it cannot.
+    if let PanelCommand::JjStop { agent, why } = &command {
+        put_down(home, agent, why)?;
+    }
+
     Ok(Reply::Done {
         seq: Some(recorded.seq),
         what: format!(
@@ -370,6 +378,21 @@ fn carry_out(
             recorded.told.join(" and ")
         ),
     })
+}
+
+/// Clears the task an agent's folder still names after JJ stopped it.
+///
+/// The fold marks the task abandoned from the journal, and nothing was writing the other half,
+/// so the folder went on naming a task that had been stopped. `Chain::advance` already calls
+/// this pair when the chain is the thing that moved a task. The panel is a second way to move
+/// one and had only been doing half the job. See bug 15.
+///
+/// Only for a stop. A replace keeps the same task id and owner and puts the status back to
+/// assigned, so a folder still naming that task is right rather than stale, and calling
+/// `put_down` there would create the very gap this closes.
+fn put_down(home: &Path, agent: &str, why: &str) -> Result<()> {
+    let mut people = Personnel::open(home)?;
+    people.update_state(agent, |s| s.put_down(why, event::now()))
 }
 
 /// Opens the record for writing, which creates its directory.

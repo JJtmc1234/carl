@@ -667,3 +667,110 @@ fn a_frame_is_filed_under_who_it_is_about_not_who_acted() {
         "the actor is jj throughout, and none of these belong on jj's row"
     );
 }
+
+/// A stop has to clear the folder as well as write the journal, which is the whole of bug 15.
+///
+/// The fold marked the task abandoned from the journal and nothing wrote the other half, so
+/// the agent's folder went on naming a task that had been stopped. `Chain::advance` already
+/// calls `put_down` when the chain is what moved a task. The panel is a second way to move one
+/// and had only been doing half the job.
+#[test]
+fn stopping_a_task_clears_the_folder_that_names_it() {
+    let (dir, mut people) = backend();
+    let mut journal = Journal::open(people.journal_path()).unwrap();
+    let task = a_real_run(&mut journal);
+    people
+        .update_state("nora", |s| s.take_up(&task.id, 1))
+        .unwrap();
+    // Released before the server writes to the same file.
+    drop(journal);
+
+    let mut panel = Panel::connect(dir.path());
+    panel.send(Ask::Command {
+        command: PanelCommand::JjStop {
+            agent: "nora".into(),
+            why: "the approach was wrong".into(),
+        },
+    });
+    match panel.next().body {
+        Reply::Done { .. } => {}
+        other => panic!("wrong reply: {other:?}"),
+    }
+
+    let after = Personnel::open(dir.path()).unwrap();
+    assert_eq!(
+        after.state("nora").and_then(|s| s.holding.clone()),
+        None,
+        "the folder still names the stopped task"
+    );
+    // The reason goes in the folder too, since put_down is what writes the note and a stop with
+    // no reason recorded is the kind of thing nobody can explain a week later.
+    assert!(
+        after.state("nora").is_some_and(|s| s
+            .recent
+            .iter()
+            .any(|n| n.contains("the approach was wrong"))),
+        "the reason was not written down"
+    );
+
+    // One AgentView must not contradict itself. `holding` reads the folder and `task_status`
+    // reads the fold, which filters settled tasks out, so a stale folder made the panel show a
+    // task that was being held and whose status was unknown at the same time.
+    let records = event::read(after.journal_path()).unwrap();
+    let snap = snapshot::build_from(&after, &records, &Facts::army_only()).unwrap();
+    let nora = snap.agents.iter().find(|a| a.name == "nora").unwrap();
+    assert_eq!(nora.holding, None, "{nora:?}");
+
+    // And a second stop is refused rather than writing another stop against a task that was
+    // already abandoned.
+    panel.send(Ask::Command {
+        command: PanelCommand::JjStop {
+            agent: "nora".into(),
+            why: "again".into(),
+        },
+    });
+    match panel.next().body {
+        Reply::Refused { why } => assert!(why.contains("not holding a task"), "{why}"),
+        other => panic!("a second stop was accepted: {other:?}"),
+    }
+}
+
+/// A replace keeps the task, so the folder naming it is right rather than stale.
+///
+/// The other half of bug 15, and the half where doing the same thing would be the bug. The
+/// fold keeps the same task id and owner and puts the status back to assigned. Calling
+/// `put_down` here would clear a folder that is describing a live task correctly.
+///
+/// This passes against the old code too, since the old code cleared nothing for either. It
+/// guards the fix against overreaching rather than guarding the bug. The one that fails
+/// against the old code is `stopping_a_task_clears_the_folder_that_names_it`.
+#[test]
+fn replacing_a_task_leaves_the_folder_holding_it() {
+    let (dir, mut people) = backend();
+    let mut journal = Journal::open(people.journal_path()).unwrap();
+    let task = a_real_run(&mut journal);
+    people
+        .update_state("nora", |s| s.take_up(&task.id, 1))
+        .unwrap();
+    drop(journal);
+
+    let mut panel = Panel::connect(dir.path());
+    panel.send(Ask::Command {
+        command: PanelCommand::JjReplace {
+            agent: "nora".into(),
+            goal: "cache the recipe lookup instead".into(),
+            why: "the prototype one was not the slow part".into(),
+        },
+    });
+    match panel.next().body {
+        Reply::Done { .. } => {}
+        other => panic!("wrong reply: {other:?}"),
+    }
+
+    let after = Personnel::open(dir.path()).unwrap();
+    assert_eq!(
+        after.state("nora").and_then(|s| s.holding.clone()),
+        Some(task.id.clone()),
+        "a replace gave her nothing to hold"
+    );
+}
