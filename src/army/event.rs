@@ -14,7 +14,7 @@
 //! only what happened cannot answer what somebody tried to do and was stopped from doing,
 //! which is the question worth asking when something has gone wrong.
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -200,6 +200,83 @@ pub struct Record {
 }
 
 /// The record itself.
+/// An advisory exclusive lock on an open file, released when this drops.
+///
+/// `flock` is per open file description, and every append opens its own, so two threads in one
+/// process contend exactly the same way two separate processes do. Advisory rather than
+/// mandatory means it only holds against writers that also take it, which is every writer of
+/// this file because they all go through `Journal::append`.
+struct Lock<'a>(&'a std::fs::File);
+
+impl<'a> Lock<'a> {
+    fn exclusive(file: &'a std::fs::File) -> Result<Self> {
+        use std::os::unix::io::AsRawFd;
+        // Sound because the fd is owned by `file`, which outlives this guard by the lifetime,
+        // so it cannot be closed while the lock is held.
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        Ok(Self(file))
+    }
+}
+
+impl Drop for Lock<'_> {
+    fn drop(&mut self) {
+        use std::os::unix::io::AsRawFd;
+        // Sound for the same reason as above. Nothing useful can be done if it fails, and the
+        // fd closing releases it regardless.
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+/// The sequence number of the last whole record, without reading the whole file.
+///
+/// Reads a window off the end rather than everything, because this now runs on every append
+/// rather than once at open. A record is a few hundred bytes, so the window holds many, and
+/// falling back to a full read when no newline is found keeps it correct for a file smaller
+/// than the window or one long line.
+fn last_seq(path: &Path) -> Result<Option<u64>> {
+    const WINDOW: u64 = 8 * 1024;
+
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let len = file.metadata()?.len();
+    if len == 0 {
+        return Ok(None);
+    }
+
+    let from = len.saturating_sub(WINDOW);
+    file.seek(SeekFrom::Start(from))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+    let text = String::from_utf8_lossy(&buf);
+
+    // Only whole lines. When the window starts mid line that first partial one is skipped,
+    // unless the window covers the file from the start, where there is nothing to skip.
+    let mut lines: Vec<&str> = text.lines().collect();
+    if from > 0 && !lines.is_empty() {
+        lines.remove(0);
+    }
+
+    let newest = lines
+        .iter()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .find_map(|l| serde_json::from_str::<Record>(l).ok().map(|r| r.seq));
+
+    match newest {
+        Some(seq) => Ok(Some(seq)),
+        // No parsable record in the window, so fall back to the whole file rather than
+        // restarting the numbering, which would hand out numbers already used.
+        None => Ok(read(path)?.last().map(|r| r.seq)),
+    }
+}
+
 pub struct Journal {
     path: PathBuf,
     next_seq: u64,
@@ -225,22 +302,47 @@ impl Journal {
     ///
     /// Flushed rather than buffered, because the whole value of this file is that it survives
     /// whatever happens next.
+    ///
+    /// Two things here exist because this file has more than one writer, and it is worth being
+    /// clear that they are two separate problems with two separate fixes. The chain holds one
+    /// `Journal` open for a whole run while the panel opens a fresh one per command, both
+    /// against the same file. See bug 14.
+    ///
+    /// The sequence number comes from the file rather than from memory. A cached counter is
+    /// only correct while one process is writing, and the moment a second one appends both
+    /// hand out the same numbers. A duplicate `seq` makes a reader report a hole, and the
+    /// reconnect then resumes past it, so a real record is lost for good.
+    ///
+    /// The line is built whole and written once. `writeln!` on a `File` emits the JSON and the
+    /// newline as two separate syscalls, so a second writer landing between them produces one
+    /// line holding two records followed by a blank one. `read` then discards that line and
+    /// both records with it.
     pub fn append(&mut self, actor: &str, event: Event) -> Result<Record> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+
+        // Held across reading the last number and writing the next one, because those two
+        // steps are only correct together. Released when the guard drops, including on the
+        // error paths below.
+        let _guard = Lock::exclusive(&file)?;
+
+        let seq = last_seq(&self.path)?.map_or(1, |s| s + 1);
         let record = Record {
-            seq: self.next_seq,
+            seq,
             at: now(),
             actor: actor.to_string(),
             event,
         };
 
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        writeln!(file, "{}", serde_json::to_string(&record)?)?;
-        file.flush()?;
+        // Written through a shared reference, because the lock guard holds one for as long as
+        // the lock is held. `Write` is implemented for `&File`, so this is the same syscall.
+        let line = format!("{}\n", serde_json::to_string(&record)?);
+        (&file).write_all(line.as_bytes())?;
+        (&file).flush()?;
 
-        self.next_seq += 1;
+        self.next_seq = seq + 1;
         Ok(record)
     }
 
@@ -293,6 +395,106 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let j = Journal::open(d.path().join("run/events.jsonl")).unwrap();
         (j, d)
+    }
+
+    /// The bug. `next_seq` was cached at open, so a long lived `Journal` and a short lived one
+    /// writing to the same file both handed out the same numbers. And `writeln!` on a `File`
+    /// emits the JSON and the newline as two syscalls, so a writer landing between them left
+    /// one line holding two records followed by a blank one, which `read` then discards, losing
+    /// both.
+    ///
+    /// The chain holds one journal open for a whole run while the panel opens a fresh one per
+    /// command, against the same file, so this is the ordinary case rather than a stress test.
+    #[test]
+    fn concurrent_writers_do_not_collide_or_interleave() {
+        const WRITERS: u64 = 4;
+        const EACH: u64 = 150;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/events.jsonl");
+        Journal::open(&path).unwrap();
+
+        let done: Vec<_> = (0..WRITERS)
+            .map(|w| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    // Half hold one journal for the whole run, like the chain. Half reopen per
+                    // write, like the panel. Both shapes are real and both are in this test.
+                    let mut held = Journal::open(&path).unwrap();
+                    for i in 0..EACH {
+                        let event = Event::Decided {
+                            task: None,
+                            what: format!("w{w} i{i}"),
+                        };
+                        if w % 2 == 0 {
+                            held.append("carl", event).unwrap();
+                        } else {
+                            Journal::open(&path).unwrap().append("carl", event).unwrap();
+                        }
+                    }
+                })
+            })
+            .collect();
+        for d in done {
+            d.join().unwrap();
+        }
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let expected = (WRITERS * EACH) as usize;
+
+        assert_eq!(
+            lines.len(),
+            expected,
+            "expected {expected} lines, so records were glued together or lost"
+        );
+        assert!(
+            lines.iter().all(|l| !l.trim().is_empty()),
+            "a blank line means a record was written in two syscalls"
+        );
+
+        let records = read(&path).unwrap();
+        assert_eq!(records.len(), expected, "a line failed to parse");
+
+        let mut seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+        seqs.sort_unstable();
+        let mut unique = seqs.clone();
+        unique.dedup();
+        assert_eq!(
+            seqs.len(),
+            unique.len(),
+            "duplicate sequence numbers, which a reader reports as a hole and then resumes past"
+        );
+        assert_eq!(
+            seqs,
+            (1..=expected as u64).collect::<Vec<_>>(),
+            "the sequence has to be every number once, with no gaps"
+        );
+    }
+
+    /// The tail read has to give the same answer as reading everything, including when the
+    /// window starts in the middle of a line.
+    #[test]
+    fn the_last_sequence_matches_a_full_read() {
+        let (mut j, _d) = journal();
+        for i in 0..200 {
+            j.append(
+                "carl",
+                Event::Decided {
+                    task: None,
+                    what: format!("padding {i} {}", "x".repeat(200)),
+                },
+            )
+            .unwrap();
+        }
+        let whole = read(j.path()).unwrap().last().unwrap().seq;
+        assert_eq!(last_seq(j.path()).unwrap(), Some(whole));
+    }
+
+    #[test]
+    fn the_last_sequence_of_a_missing_file_is_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(last_seq(&d.path().join("nope.jsonl")).unwrap(), None);
     }
 
     #[test]

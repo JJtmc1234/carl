@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 14 | The journal cached its sequence number in memory and wrote each line with `writeln!`, which is two syscalls. With the chain holding one journal open and the panel opening one per command against the same file, numbers collided and records were glued together. | Never fired. Reproduced with four concurrent writers: 599 lines instead of 600, 105 duplicate sequence numbers, and one line holding two records followed by a blank one. | `concurrent_writers_do_not_collide_or_interleave`, `the_last_sequence_matches_a_full_read` |
 
 ## bug 11, in full
 
@@ -157,3 +158,52 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 14, in full
+
+Two separate mistakes with two separate fixes, both caused by the same thing: this file has
+more than one writer and was written as though it had one.
+
+The chain holds a single `Journal` open for a whole run. The panel opens a fresh one per
+command, in a per connection thread. Both append to the same `events.jsonl`. So JJ answering a
+question in the panel while a chain run is going is not a stress test, it is Tuesday.
+
+**The sequence number was cached in memory at open.** A counter read once and then incremented
+locally is correct exactly while one process is writing. The moment a second one appends, both
+hand out the same numbers. A duplicate `seq` is worse than it sounds: the reader treats it as a
+hole, and the reconnect then resumes past it, so a real record is lost permanently and the
+panel never learns it existed.
+
+**`writeln!` on a `File` is two syscalls**, one for the JSON and one for the newline. A writer
+landing between them leaves one line holding two whole records, followed by a blank line.
+`read` discards the unparsable line, so both records go.
+
+Fix. `append` opens the file, takes an exclusive `flock`, reads the last sequence number from
+the file, writes, and drops the lock. The number now comes from the file rather than from
+memory, and the whole line including its newline is built first and written with one
+`write_all`.
+
+`flock` is per open file description and every append opens its own, so two threads in one
+process contend exactly as two processes do, which is what makes this testable without spawning
+anything. It is advisory, so it only holds against writers that also take it, and every writer
+of this file goes through `append`.
+
+Reading the number now happens on every append rather than once at open, so `last_seq` reads an
+8 KiB window off the end instead of the whole file. It skips the first line when the window
+starts mid line, and falls back to a full read when the window holds no parsable record, since
+restarting the numbering would hand out numbers already used.
+
+Worth noting the sibling repository already had the second half right. The AOS ledger builds its
+line and writes it once, with a comment saying why. Same lesson, one repo late.
+
+Guard. `concurrent_writers_do_not_collide_or_interleave` runs four writers, two holding a
+journal for the whole run like the chain and two reopening per write like the panel, because
+both shapes are real and a test with only one would miss it. It asserts the line count, that no
+line is blank, that every line parses, and that the sequence numbers are exactly one to six
+hundred with no duplicates and no gaps.
+
+`the_last_sequence_matches_a_full_read` checks the windowed read agrees with reading everything,
+on a file long enough that the window starts mid line.
+
+Verified by putting the cached counter and `writeln!` back. The concurrency test failed on the
+blank line assertion, which is the two syscall half, and the file was short of records.
