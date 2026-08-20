@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 26 | The memory budget gated only the notes. The preamble and the note listing what was skipped were both appended afterwards, outside the check, and that note grew by one filename per skipped note, so the overshoot grew with the pile. | Never fired in the wild, found by reading, then measured: 3000 small notes produced 60,959 bytes against a 24,000 byte budget, on every message. | `a_large_pile_still_fits_the_budget`, `the_whole_block_fits_whatever_the_budget`, `a_budget_too_small_for_anything_injects_nothing` |
 
 ## bug 11, in full
 
@@ -157,3 +158,44 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 26, in full
+
+A budget that bounded everything except the part that grew.
+
+`assemble` checked each note against `self.budget` and then appended two more things outside
+that check: the note listing everything that was skipped, and the preamble. So the finished
+block always exceeded the budget by at least the preamble.
+
+The skipped list is the serious half. It named every note that did not fit, so it grew by one
+filename for every note the budget rejected. The more notes there are, the more get skipped, and
+the longer the note about them becomes. The one thing the budget exists to bound was the one
+thing that scaled with the pile, and memory rides on every single message.
+
+Measured rather than argued. Three thousand small notes produced **60,959 bytes against a
+24,000 byte budget**. A 300 byte budget produced 2,385.
+
+The old test is worth recording as part of the bug. It set a budget of 400 and asserted the
+result was under 1200. An assertion that allows three times the budget cannot fail for the
+reason the budget exists, and this one never did.
+
+Fix, and it took two attempts, which is the useful part.
+
+The first attempt reserved a fixed number of bytes for the preamble and the shortfall note
+before the loop. That is the obvious shape and it is wrong at both ends: too small a reservation
+is not safe, and a reservation large enough to be safe swallows a modest budget whole. It made
+`assemble` return nothing at all for a 400 byte budget, which the existing test caught
+immediately.
+
+So it is worked out instead of guessed. The notes are filled greedily against the budget less
+the preamble, exactly as before. Then the note about what was skipped is paid for by giving
+notes back, one at a time, until the finished block fits. That has to be a loop rather than a
+subtraction, because it feeds itself: giving a note back adds its name to the note, which makes
+the note longer, which may need another note given back.
+
+`shortfall` names the first five and counts the rest, which keeps it to a few hundred bytes
+however many thousand there are.
+
+Guard. Three tests, all of which fail against the old code, with the numbers above. The existing
+test's assertion was also tightened from `< 1200` to `<= 400`, though that one still passes
+either way at that size, so it is not what guards this.
