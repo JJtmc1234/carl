@@ -21,6 +21,9 @@ const CALLED: [(&str, &str); 1] = [("jj_tmc multiversal", "JJ")];
 /// Names, looked up once each.
 pub struct Directory {
     known: HashMap<String, String>,
+    /// Bot id to the user id behind it, looked up once each and remembered even when there
+    /// is none, so a bot without an associated user is not asked about on every message.
+    bots: HashMap<String, Option<String>>,
 }
 
 impl Default for Directory {
@@ -33,7 +36,57 @@ impl Directory {
     pub fn new() -> Self {
         Self {
             known: HashMap::new(),
+            bots: HashMap::new(),
         }
+    }
+
+    /// Who a message is from, as a mention target and a name.
+    ///
+    /// A bot message often carries a bot id and no user field. A `B` prefixed bot id is
+    /// neither a lookup key for `users.info` nor something Slack renders as a mention, so
+    /// using one as either fails quietly: the name lookup answers `user_not_found`, and the
+    /// reply goes out as literal text reading `<@B0ALEX>` that notifies nobody. Which means
+    /// an agent is never told about the answer the protocol says is addressed to it.
+    ///
+    /// `bots.info` is the only thing that maps a bot id to a user id, and even it may not have
+    /// one, so the mention target is an `Option`. `None` means send no mention at all rather
+    /// than one Slack cannot resolve, because a message that looks addressed and is not is
+    /// worse than one that plainly is not. See bug 21.
+    pub fn sender(&mut self, api: &Api, ask: &super::Ask) -> (Option<String>, String) {
+        if !ask.user.is_empty() {
+            let name = self.name_of(api, &ask.user);
+            return (Some(ask.user.clone()), name);
+        }
+
+        let Some(bot_id) = ask.bot.as_deref() else {
+            return (None, "somebody".to_string());
+        };
+
+        if let Some(known) = self.bots.get(bot_id).cloned() {
+            let name = match &known {
+                Some(u) => self.name_of(api, u),
+                None => bot_id.to_string(),
+            };
+            return (known, name);
+        }
+
+        let (user, bot_name) = match api.bot_identity(bot_id) {
+            Ok(found) => found,
+            Err(e) => {
+                eprintln!("  could not look up the bot {bot_id}: {e}");
+                (None, None)
+            }
+        };
+        self.bots.insert(bot_id.to_string(), user.clone());
+
+        // The bot's own name is a better fallback than the raw id, and both are better than
+        // inventing one, for the same reason `name_of` says.
+        let name = match (&user, bot_name) {
+            (Some(u), _) => self.name_of(api, u),
+            (None, Some(n)) => n,
+            (None, None) => bot_id.to_string(),
+        };
+        (user, name)
     }
 
     /// What to call the person behind this user id.

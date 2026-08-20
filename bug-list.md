@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 21 | A bot message carries a bot id and no user field, and the fallback put that bot id into `Ask.user`. It was then used both as a `users.info` key and as a mention target, and a `B` prefixed id works as neither, so the name lookup failed and the reply notified nobody. | Never fired in the wild, found by reading. The failure is silent by construction: the mention renders as literal text and nothing reports it. | `a_bot_sender_is_not_put_in_the_user_field`, `a_sender_with_no_user_id_gets_no_mention_rather_than_a_broken_one`, `a_bot_message_is_still_a_question` |
 
 ## bug 11, in full
 
@@ -157,3 +158,48 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 21, in full
+
+One field holding two different kinds of identifier, and neither caller knowing which it had.
+
+A `bot_message` carries `bot_id` and `username` and no `user` field. `ask_from` ended with
+`.or(bot)`, so when there was no user field the bot id went into `Ask.user`. That reads as a
+sensible fallback and is not one, because `Ask.user` is used two ways and a bot id works as
+neither.
+
+As a lookup key, `users.info` answers `user_not_found`, so Carl logged a failure and told
+Claude "you are talking to B0ALEX". As a mention target, `compose` produced
+`<@B0ALEX> [a2a/1 reply ...]`, and Slack does not resolve a bot id to a user, so the mention
+renders as literal text and notifies nobody. The other agent is never told about the reply the
+protocol says is addressed to it, and nothing anywhere reports that. The failure is silent by
+construction.
+
+Fix, in three parts.
+
+`Ask` carries `user` and `bot` separately, and `user` is now empty rather than holding a bot
+id. The guard that used to read `if user.is_empty()` becomes `if user.is_empty() &&
+bot.is_none()`, because an agent's message still has to be heard. Losing that would be worse
+than the bug, and there is a test saying so.
+
+`bots.info` maps a bot id to the user id behind it, which is the only thing that does.
+`Directory::sender` does that lookup once per bot and remembers the answer even when there is
+none, so a bot without an associated user is not asked about on every message.
+
+`compose` takes an `Option`, and `None` means no mention at all. That is the part worth
+arguing for: a message that looks addressed and is not is worse than one that plainly is not.
+The header still carries the protocol either way, so an agent reading the thread can still act
+on it.
+
+Not every bot has a user id, which is why the mention target is an `Option` all the way through
+rather than something that could be unwrapped at the end.
+
+Guard, and the limit of it. The parsing side and the composing side are both tested, including
+that an agent message is still a question and that a person is unaffected.
+`a_bot_sender_is_not_put_in_the_user_field` fails against the old `.or(bot)` with exactly the
+symptom, a `B0ALEX` sitting in the user field.
+
+The `bots.info` call itself is not tested. `Api` is a concrete type making real HTTP calls
+rather than something with a seam, and adding one is a larger change than this fix. So what is
+guarded is that a bot id never reaches a place expecting a user id, and that an absent user id
+produces no mention. Whether Slack's `bots.info` returns what this expects is not covered.

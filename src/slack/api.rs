@@ -97,6 +97,32 @@ impl Api {
             .ok_or_else(|| Error::Refused("users.info gave no name at all".into()))
     }
 
+    /// The user id behind a bot id, and the bot's name, from `bots.info`.
+    ///
+    /// A bot id is not a user id. It cannot be looked up with `users.info` and Slack will not
+    /// render `<@B0ALEX>` as a mention, so a reply addressed that way never reaches the agent
+    /// it was addressed to. `bots.info` is the only thing that maps one to the other, and even
+    /// then the `user_id` field is optional, because not every bot has an associated user.
+    /// See bug 21.
+    pub fn bot_identity(&self, bot_id: &str) -> Result<(Option<String>, Option<String>)> {
+        let v = self.read("bots.info", &self.bot, &[("bot", bot_id)])?;
+        let b = v
+            .get("bot")
+            .ok_or_else(|| Error::Refused("bots.info gave no bot".into()))?;
+
+        let user = b
+            .get("user_id")
+            .and_then(|u| u.as_str())
+            .filter(|u| !u.trim().is_empty())
+            .map(str::to_owned);
+        let name = b
+            .get("name")
+            .and_then(|n| n.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_owned);
+        Ok((user, name))
+    }
+
     /// Replaces a message already posted.
     ///
     /// How Carl shows an answer being written. Slack has no way to stream into a message, so

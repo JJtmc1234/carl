@@ -90,8 +90,11 @@ fn spawn_worker(home: PathBuf, api: Api, bot: String) -> Sender<Ask> {
                 // Said once, in the thread, rather than silently. Silence looks like a crash
                 // and the other agent retries, which is the loop again with extra steps.
                 eprintln!("     out of agent turns in this thread, staying quiet");
+                // Resolved rather than assumed, for the same reason as the reply below: the
+                // sender may be a bot whose id cannot be mentioned.
+                let (mention, _) = directory.sender(&api, &ask);
                 let note = slack::compose(
-                    &ask.user,
+                    mention.as_deref(),
                     slack::Kind::Done,
                     0,
                     "Out of turns for this exchange. A person can start it again.",
@@ -108,7 +111,9 @@ fn spawn_worker(home: PathBuf, api: Api, bot: String) -> Sender<Ask> {
                 continue;
             }
 
-            let speaker = directory.name_of(&api, &ask.user);
+            // Both at once, because a bot sender needs one lookup to answer either and the
+            // mention target is not always the user id.
+            let (mention, speaker) = directory.sender(&api, &ask);
 
             // Posted before Claude is even asked. Twenty five seconds of nothing reads as
             // being ignored, and the only way to tell that apart from Carl being broken is
@@ -143,7 +148,9 @@ fn spawn_worker(home: PathBuf, api: Api, bot: String) -> Sender<Ask> {
             // person reading a channel does not want to see the wiring.
             let out = match slack::parse(&ask.text) {
                 Some(incoming) => match incoming.reply_kind() {
-                    Some(kind) => slack::compose(&ask.user, kind, incoming.reply_ttl(), &reply),
+                    Some(kind) => {
+                        slack::compose(mention.as_deref(), kind, incoming.reply_ttl(), &reply)
+                    }
                     // done and decline are endings. Answering them is how good manners
                     // become an infinite exchange.
                     None => {
@@ -325,7 +332,8 @@ pub fn greet(home: &Path, channel: &str, agent_user_id: &str, message: &str) -> 
         message
     };
 
-    let text = slack::compose(agent_user_id, kind, slack::START_TTL, body);
+    // Always present here: it came from the command line, where somebody typed it.
+    let text = slack::compose(Some(agent_user_id), kind, slack::START_TTL, body);
     let ts = api.announce(channel, &text)?;
     println!("opened an exchange with {agent_user_id} in {channel} at {ts}");
     Ok(())

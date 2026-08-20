@@ -128,8 +128,15 @@ pub fn header(kind: Kind, ttl: u32) -> String {
 }
 
 /// Builds a whole message body, mention included.
-pub fn compose(to_user_id: &str, kind: Kind, ttl: u32, body: &str) -> String {
-    format!("<@{to_user_id}> {}\n{}", header(kind, ttl), body.trim())
+pub fn compose(to_user_id: Option<&str>, kind: Kind, ttl: u32, body: &str) -> String {
+    match to_user_id {
+        Some(id) => format!("<@{id}> {}\n{}", header(kind, ttl), body.trim()),
+        // No mention at all, rather than one Slack cannot resolve. A bot id put here renders
+        // as the literal text `<@B0ALEX>` and notifies nobody, which is worse than nothing,
+        // because it looks addressed and is not. The header still carries the protocol, so
+        // an agent reading the thread can still act on it. See bug 21.
+        None => format!("{}\n{}", header(kind, ttl), body.trim()),
+    }
 }
 
 /// Reads a message. `None` means it is not A2A, which is the normal case for a person.
@@ -188,7 +195,7 @@ mod tests {
 
     #[test]
     fn composing_and_parsing_are_the_same_shape() {
-        let sent = compose("U0ALEX", Kind::Ask, 4, "  what is your plan?  ");
+        let sent = compose(Some("U0ALEX"), Kind::Ask, 4, "  what is your plan?  ");
         let got = parse(&sent).unwrap();
         assert_eq!(got.kind, Kind::Ask);
         assert_eq!(got.ttl, 4);
@@ -255,6 +262,33 @@ mod tests {
 
     /// The politeness loop. "Thanks" answered by "you are welcome" answered by "no problem"
     /// is an infinite exchange made entirely of good manners.
+    /// The bug. A bot id is not a user id. Slack renders `<@B0ALEX>` as literal text and
+    /// notifies nobody, so a reply addressed that way never reaches the agent the protocol
+    /// says it is addressed to. No mention is better than an unresolvable one, because a
+    /// message that looks addressed and is not is worse than one that plainly is not.
+    #[test]
+    fn a_sender_with_no_user_id_gets_no_mention_rather_than_a_broken_one() {
+        let sent = compose(None, Kind::Reply, 3, "here is the answer");
+
+        assert!(
+            !sent.contains("<@"),
+            "an unresolvable mention must not be invented: {sent}"
+        );
+        assert!(
+            sent.starts_with(&header(Kind::Reply, 3)),
+            "the header still has to carry the protocol: {sent}"
+        );
+        assert!(sent.contains("here is the answer"));
+    }
+
+    /// And the ordinary case still leads with the mention, which is what notifies the other
+    /// agent at all.
+    #[test]
+    fn a_known_user_is_still_mentioned_first() {
+        let sent = compose(Some("U0ALEX"), Kind::Reply, 3, "here is the answer");
+        assert!(sent.starts_with("<@U0ALEX> "), "{sent}");
+    }
+
     #[test]
     fn an_ending_is_never_answered() {
         for kind in [Kind::Done, Kind::Decline] {

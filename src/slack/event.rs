@@ -25,7 +25,14 @@ pub struct Ask {
     /// The thread to reply in. Slack threads a reply when this is the parent's timestamp.
     pub thread_ts: String,
     pub text: String,
+    /// The Slack user id of the sender, or empty when a bot sent this with no user field.
+    ///
+    /// Empty rather than holding the bot id, which is what it used to do. A `B` prefixed bot
+    /// id is neither a lookup key for `users.info` nor something Slack will render as a
+    /// mention, so putting one here made both of those fail quietly. See bug 21.
     pub user: String,
+    /// The bot id, when a bot sent this. Kept apart from `user` for the reason above.
+    pub bot: Option<String>,
     /// Pictures pasted into the message.
     ///
     /// Carried rather than fetched here, because this file is pure and downloading is not.
@@ -54,9 +61,11 @@ pub fn ask_from(
     let user = event
         .get("user")
         .and_then(|u| u.as_str())
-        .or(bot)
         .unwrap_or_default();
-    if user.is_empty() || user == me {
+    // One or the other has to identify the sender. A bot message often carries only a bot id,
+    // and that is fine here: what is not fine is pretending the bot id is a user id, which is
+    // what the `.or(bot)` that used to be on the end of this did.
+    if (user.is_empty() && bot.is_none()) || user == me {
         return None;
     }
 
@@ -120,6 +129,7 @@ pub fn ask_from(
             thread_ts: ts.to_string(),
             text: "What is in this picture?".to_string(),
             user: user.to_string(),
+            bot: bot.map(str::to_string),
         });
     }
 
@@ -149,6 +159,7 @@ pub fn ask_from(
         thread_ts,
         text,
         user: user.to_string(),
+        bot: bot.map(str::to_string),
     })
 }
 
@@ -176,6 +187,78 @@ mod tests {
 
     fn payload(event: serde_json::Value) -> serde_json::Value {
         serde_json::json!({ "event": event })
+    }
+
+    /// The bug. A `bot_message` carries `bot_id` and `username` and no `user` field, and the
+    /// fallback used to put the bot id into `Ask.user`. That value is then used two ways, as a
+    /// lookup key for `users.info` and as a mention target, and a `B` prefixed id works as
+    /// neither. So the name lookup answered `user_not_found` and Claude was told "you are
+    /// talking to B0ALEX", and the reply went out as literal `<@B0ALEX>` text notifying nobody,
+    /// which means the agent was never told about the answer addressed to it.
+    #[test]
+    fn a_bot_sender_is_not_put_in_the_user_field() {
+        let ask = ask_from(
+            &payload(serde_json::json!({
+                "type": "message",
+                "subtype": "bot_message",
+                "bot_id": "B0ALEX",
+                "username": "alex",
+                "channel_type": "im",
+                "channel": "D01",
+                "ts": "1700000000.000100",
+                "text": "<@U0CARL> [a2a/1 ask ttl=4]\nwhat is your plan"
+            })),
+            ME,
+            MY_BOT,
+            &nothing(),
+        )
+        .expect("another agent's message is still a question");
+
+        assert_eq!(ask.bot.as_deref(), Some("B0ALEX"));
+        assert!(
+            ask.user.is_empty(),
+            "a bot id must not sit in the user field, got {:?}",
+            ask.user
+        );
+        assert!(ask.from_agent);
+    }
+
+    /// And the point of the fallback that was removed still has to hold: a message from
+    /// another agent is heard rather than dropped. Losing that would be worse than the bug.
+    #[test]
+    fn a_bot_message_is_still_a_question() {
+        assert!(
+            ask_from(
+                &payload(serde_json::json!({
+                    "type": "message", "subtype": "bot_message", "bot_id": "B0ALEX",
+                    "channel": "D01", "channel_type": "im", "ts": "1700000000.000100",
+                    "text": "hello carl"
+                })),
+                ME,
+                MY_BOT,
+                &nothing(),
+            )
+            .is_some(),
+            "talking to another agent is the whole point"
+        );
+    }
+
+    /// A person still arrives with a user id and no bot id, which is the ordinary case.
+    #[test]
+    fn a_person_still_has_a_user_id_and_no_bot() {
+        let ask = ask_from(
+            &payload(serde_json::json!({
+                "type": "app_mention", "user": "U0JJ", "channel": "C01",
+                "ts": "1700000000.000100", "text": "<@U0CARL> hello"
+            })),
+            ME,
+            MY_BOT,
+            &nothing(),
+        )
+        .expect("a question");
+        assert_eq!(ask.user, "U0JJ");
+        assert_eq!(ask.bot, None);
+        assert!(!ask.from_agent);
     }
 
     #[test]
