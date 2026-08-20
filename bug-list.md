@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 27 | Service uptime subtracted systemd's `CLOCK_MONOTONIC` start stamp from `/proc/uptime`, which is `CLOCK_BOOTTIME`. Those are different clocks and boottime counts suspend, so every unit's uptime was inflated by the total time the laptop had ever been asleep. | Never fired, found by reading, then measured: `carl-aec` reported 959085 seconds up against a monotonic clock of 318912, so 11 days for a service at most 3.7 days old. | `a_real_units_uptime_never_exceeds_the_clock_it_is_measured_against`, `the_monotonic_clock_never_runs_ahead_of_boottime` |
 
 ## bug 11, in full
 
@@ -157,3 +158,39 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 27, in full
+
+Two clocks that look like one number.
+
+`Unit::uptime_secs` subtracted systemd's `ExecMainStartTimestampMonotonic`, which is on
+`CLOCK_MONOTONIC`, from the first field of `/proc/uptime`, which is `CLOCK_BOOTTIME`. Boottime
+counts time the machine spent suspended and monotonic does not, so the difference between them
+is every second this laptop has ever been asleep, and that was being added to every service's
+uptime.
+
+Measured here while fixing it: `carl-aec` reported 959085 seconds up, eleven days, against a
+monotonic clock that has only been running for 318912 seconds. A service cannot have been up
+longer than the clock it is measured against has existed.
+
+The `(up >= 0.0)` guard was dead as well. It is meant to reject a start stamp in the future, and
+boottime is always ahead of monotonic, so it could never fire. That guard now works.
+
+Fix. `monotonic_secs` reads `CLOCK_MONOTONIC` directly through `clock_gettime`, and
+`diagnostics` uses it. `/proc/uptime` is not consulted on this path at all, because it answers a
+different question.
+
+The existing test could not have caught this, and that is worth recording rather than just
+replacing it. `uptime_is_machine_uptime_less_the_start_stamp` supplied both numbers itself, so
+it picked the same scale for both by construction. The arithmetic it checks was always right.
+What was wrong was which clock the caller read, and no test that invents both values can see
+that.
+
+So the guard compares the two real clocks. `the_monotonic_clock_never_runs_ahead_of_boottime`
+pins the relationship. `a_real_units_uptime_never_exceeds_the_clock_it_is_measured_against`
+takes the actual units on this machine and asserts each reported uptime is within the monotonic
+clock, which is an invariant rather than a number, so it does not go stale.
+
+Verified by putting `/proc/uptime` back as the source. It failed with
+"army.service.carl-aec reports 959085 seconds up against a monotonic clock of 318911", which is
+the bug stated in one line.

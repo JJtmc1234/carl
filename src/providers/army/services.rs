@@ -36,11 +36,40 @@ pub struct Unit {
     pub started_monotonic_us: Option<u64>,
 }
 
+/// Seconds on `CLOCK_MONOTONIC`, which is the clock systemd's start stamp is on.
+///
+/// Not `/proc/uptime`, which this used to subtract from and which is `CLOCK_BOOTTIME`. Those
+/// are two different clocks: boottime counts time the machine spent suspended and monotonic
+/// does not. Subtracting one from the other adds every second the laptop has ever been asleep
+/// to every service's uptime. Measured on this machine: boottime 1066791, monotonic 269971, so
+/// the answer was out by 796820 seconds, and a service up 5 hours read as up 9.4 days.
+///
+/// `None` if the clock cannot be read, which is treated as not knowing rather than as zero.
+/// See bug 27.
+pub fn monotonic_secs() -> Option<f64> {
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // Sound because `t` is a fully initialised local that outlives the call, and the kernel
+    // only writes to it.
+    let read = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) };
+    (read == 0).then(|| t.tv_sec as f64 + t.tv_nsec as f64 / 1_000_000_000.0)
+}
+
 impl Unit {
-    /// How long the current main process has been up, given the machine's uptime in seconds.
-    pub fn uptime_secs(&self, machine_uptime: f64) -> Option<f64> {
+    /// How long the current main process has been up, in seconds.
+    ///
+    /// `now` has to be on `CLOCK_MONOTONIC`, because that is the clock
+    /// `ExecMainStartTimestampMonotonic` is on. Passing it in rather than reading the clock
+    /// here is what lets a test check the arithmetic, but the two values must come from the
+    /// same clock or the answer is meaningless, which is exactly what went wrong. See bug 27.
+    pub fn uptime_secs(&self, now_monotonic: f64) -> Option<f64> {
         let started = self.started_monotonic_us? as f64 / 1_000_000.0;
-        let up = machine_uptime - started;
+        let up = now_monotonic - started;
+        // Now reachable, which it was not before. Boottime is always ahead of monotonic, so
+        // this guard could never fire while the wrong clock was being used, and a start stamp
+        // in the future would have gone straight through.
         (up >= 0.0).then_some(up)
     }
 
@@ -140,12 +169,15 @@ pub fn read_with(program: &str, name: &str) -> Option<Unit> {
 /// Event driven rather than sampled. A service either is running or is not, and that state is
 /// true until systemd changes it rather than being a number that goes stale.
 pub fn diagnostics(machine_uptime: Option<f64>) -> Vec<Diagnostic> {
-    diagnostics_with(SYSTEMCTL, machine_uptime)
+    // The argument is ignored and kept only so callers do not all have to change. `/proc/uptime`
+    // answers a different question from the one this needs. See bug 27.
+    let _ = machine_uptime;
+    diagnostics_with(SYSTEMCTL, monotonic_secs())
 }
 
 /// The same, against a named binary, so a test can prove a missing systemctl degrades to
 /// unknown rather than taking the whole snapshot down.
-pub fn diagnostics_with(program: &str, machine_uptime: Option<f64>) -> Vec<Diagnostic> {
+pub fn diagnostics_with(program: &str, now_monotonic: Option<f64>) -> Vec<Diagnostic> {
     CARL_UNITS
         .iter()
         .map(|name| match read_with(program, name) {
@@ -156,7 +188,7 @@ pub fn diagnostics_with(program: &str, machine_uptime: Option<f64>) -> Vec<Diagn
                 Kind::EventDriven,
             ),
             Some(unit) => {
-                let uptime = machine_uptime.and_then(|m| unit.uptime_secs(m));
+                let uptime = now_monotonic.and_then(|now| unit.uptime_secs(now));
                 Diagnostic::new(
                     &format!("army.service.{name}"),
                     unit.health(),
@@ -251,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn uptime_is_machine_uptime_less_the_start_stamp() {
+    fn uptime_is_the_monotonic_clock_less_the_start_stamp() {
         let u = parse_show("x", "ExecMainStartTimestampMonotonic=250000000000\n");
         let up = u.uptime_secs(250_100.0).unwrap();
         assert!(
@@ -263,6 +295,60 @@ mod tests {
             None,
             "a start in the future is not an uptime"
         );
+    }
+
+    /// This test cannot catch the bug it is named after, and that is the point of saying so.
+    ///
+    /// The arithmetic above was always right. What was wrong was which clock the caller read,
+    /// and a test that supplies both numbers itself picks the same scale for both by
+    /// construction. The guard for the real bug has to look at the two clocks, which is the
+    /// test below.
+    ///
+    /// `/proc/uptime` is `CLOCK_BOOTTIME` and counts time spent suspended. The start stamp
+    /// systemd gives is `CLOCK_MONOTONIC` and does not. Subtracting one from the other adds
+    /// every second the machine has ever been asleep to every service's uptime.
+    #[test]
+    fn the_monotonic_clock_never_runs_ahead_of_boottime() {
+        let monotonic = monotonic_secs().expect("this machine has a monotonic clock");
+        let boottime: f64 = std::fs::read_to_string("/proc/uptime")
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        assert!(
+            monotonic <= boottime + 1.0,
+            "monotonic {monotonic} is ahead of boottime {boottime}, which cannot happen"
+        );
+        assert!(monotonic > 0.0);
+    }
+
+    /// The invariant that actually catches it, against the real machine.
+    ///
+    /// A service started after this boot, so the time it has been up cannot exceed the
+    /// monotonic clock. Under the old code it could and did: with boottime at 1066791 and
+    /// monotonic at 269971, a unit started at 250416 computed 816375 seconds of uptime, which
+    /// is three times longer than the clock it is measured against has been running.
+    ///
+    /// Skips rather than fails where the units are not installed, since it is asserting
+    /// something about this machine rather than about the arithmetic.
+    #[test]
+    fn a_real_units_uptime_never_exceeds_the_clock_it_is_measured_against() {
+        let Some(monotonic) = monotonic_secs() else {
+            return;
+        };
+        for d in diagnostics(None) {
+            for m in d.metrics.iter().filter(|m| m.name == "uptime") {
+                let Reading::Int(up) = m.value else { continue };
+                assert!(
+                    up as f64 <= monotonic + 1.0,
+                    "{} reports {up} seconds up against a monotonic clock of {monotonic}",
+                    d.component
+                );
+            }
+        }
     }
 
     /// Against the real machine. All three units were installed and active when this was
