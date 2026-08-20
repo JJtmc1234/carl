@@ -83,9 +83,29 @@ impl Projects {
             if !entry.path().is_dir() {
                 continue;
             }
-            let id = ProjectId::new(entry.file_name().to_string_lossy().into_owned())?;
-            if let Some(p) = self.get(&id)? {
-                out.push(p);
+
+            // Per entry from here down. This used to use `?` on both of the calls below, so
+            // the first bad folder aborted the whole walk, and the panel then turned that one
+            // error into an empty list. One stray directory removed every project from the
+            // screen, which is the exact vanishing the doc above warns about. See bug 12.
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let id = match ProjectId::new(name.clone()) {
+                Ok(id) => id,
+                // Nothing can be shown for this one, because there is no valid id to hang a row
+                // on. Said out loud rather than skipped in silence, since a folder somebody
+                // created and cannot see is worth knowing about.
+                Err(e) => {
+                    eprintln!("  ignoring {name:?} under {}: {e}", self.root.display());
+                    continue;
+                }
+            };
+
+            match self.get(&id) {
+                Ok(Some(p)) => out.push(p),
+                Ok(None) => {}
+                // Shown broken rather than dropped, which is what the doc asks for and what
+                // the old code could not do because it had already given up on the walk.
+                Err(e) => out.push(Project::unreadable(id, &e.to_string())),
             }
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -201,8 +221,19 @@ impl Projects {
 
     /// A project with its recent history, ready to render.
     pub fn view(&self, id: &ProjectId) -> Result<Option<ProjectView>> {
-        let Some(project) = self.get(id)? else {
-            return Ok(None);
+        let project = match self.get(id) {
+            Ok(Some(project)) => project,
+            Ok(None) => return Ok(None),
+            // Same rule as `list`, and needed here or the rule would not survive the trip to
+            // the screen: `view` reads the same `project.json`, so a placeholder that `list`
+            // built would be dropped again by every caller that asks for the view. A project
+            // that will not parse gets a broken row, never no row. See bug 12.
+            Err(e) => {
+                return Ok(Some(ProjectView::broken(Project::unreadable(
+                    id.clone(),
+                    &e.to_string(),
+                ))));
+            }
         };
         Ok(Some(ProjectView {
             milestones: self.recent_milestones(id, RECENT)?,
@@ -227,6 +258,21 @@ pub struct ProjectView {
 }
 
 impl ProjectView {
+    /// A view for a project that could not be read, so the panel has a row to draw.
+    ///
+    /// The milestones are empty and the gap count is zero because the file that would say
+    /// otherwise is the one that could not be read. That is not a claim of a clean history.
+    /// The project's own name and blockers carry the problem, which is where a reader looks.
+    pub fn broken(project: Project) -> Self {
+        Self {
+            project,
+            milestones: Vec::new(),
+            milestone_gaps: 0,
+            active_tasks: Vec::new(),
+            active_agents: Vec::new(),
+        }
+    }
+
     /// Attaches the work currently going on for this project.
     ///
     /// Supplied by the caller rather than derived here, and that is a gap rather than a design

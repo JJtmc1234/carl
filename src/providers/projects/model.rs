@@ -153,6 +153,31 @@ pub struct Project {
 }
 
 impl Project {
+    /// A row for a project whose `project.json` will not parse.
+    ///
+    /// Exists so a broken project shows up broken rather than disappearing, which is the rule
+    /// the store's doc states: a project that vanishes from a panel is worse than one that
+    /// shows up broken. A vanished project looks like one that was never created.
+    ///
+    /// The fields are chosen to be honest rather than tidy. The name carries the problem
+    /// because it is the most prominent thing on the row. `Paused` rather than `Active`,
+    /// because claiming work is under way would be a second wrong statement on top of the
+    /// first, and rather than `Abandoned`, because nobody decided to abandon it. The parse
+    /// error goes in `blockers`, which is already the field for what is in the way. See bug 12.
+    pub fn unreadable(id: ProjectId, why: &str) -> Self {
+        Self {
+            name: format!("{id} (unreadable)"),
+            id,
+            goal: "this project could not be read".to_string(),
+            status: Status::Paused,
+            phase: "broken".to_string(),
+            department: None,
+            path: None,
+            next_objective: None,
+            blockers: vec![why.to_string()],
+        }
+    }
+
     pub fn new(id: ProjectId, name: &str, goal: &str) -> Self {
         Self {
             id,

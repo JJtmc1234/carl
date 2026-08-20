@@ -78,6 +78,36 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 12 | `Projects::list` used `?` on the per entry work, so the first folder that would not load ended the whole walk, and `facts.rs` turned that one error into an empty vector. | One folder made by hand with a capital in its name, and every project on the panel disappeared | `one_unreadable_project_does_not_empty_the_listing`, `one_broken_project_does_not_empty_the_panel`, `a_stray_folder_does_not_empty_the_panel` |
+
+## bug 12, in full
+
+The store's own doc already had the rule written at the top of it. A project that vanishes
+from a panel is worse than one that shows up broken, because a vanished project looks like one
+that was never created. The code underneath that sentence did the opposite.
+
+`list` walked the projects directory and used `?` on both the id and the load. Either one
+failing ended the walk and returned an error for the whole listing, so one bad entry spoke for
+every good one. Then `facts.rs` called `unwrap_or_default` on the result, which turned that
+error into an empty vector. Nothing was logged and nothing was drawn. The panel showed a
+machine with no projects on it.
+
+The realistic way in is not a corrupt file. It is somebody making a folder called `Notes`
+under `projects`, because a capital letter is not a legal project id. That is a normal thing
+to do and the punishment for it was the entire screen.
+
+Two of the tests that existed asserted `list().is_err()`, so the bug had guards holding it in
+place. They were rewritten rather than deleted, because the claim each was really making is
+still true and still worth holding: a folder that is not a legal id is not accepted as a
+project, and a malformed project never becomes an empty healthy looking one. A listing that
+fails outright was just a weaker way of saying it than a row that says so out loud.
+
+The fix collects per entry. An unusable folder name is skipped and named on stderr, since
+there is no valid id to hang a row on. A `project.json` that will not parse becomes a
+placeholder row whose name carries the word unreadable and whose `blockers` carries the parse
+error. `view` does the same, and it has to, because `view` reads the same file and would
+otherwise drop the placeholder on the way to the screen.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.

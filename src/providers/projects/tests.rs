@@ -204,11 +204,20 @@ fn a_project_file_that_will_not_parse_is_an_error_naming_the_file() {
     assert!(err.contains("project.json"), "{err}");
 }
 
+/// A folder nobody can turn into a project id must cost only itself.
+///
+/// This used to assert `list().is_err()`, which was the bug in bug 12 rather than a guard
+/// against it. One stray folder made the whole listing fail, and the panel turned that into
+/// an empty screen. The part worth keeping is that the bad folder is not accepted as a
+/// project, and that is still asserted below. See bug 12.
 #[test]
-fn a_folder_that_is_not_a_legal_project_id_is_refused() {
+fn a_folder_that_is_not_a_legal_project_id_costs_only_itself() {
     let (s, d) = saved();
     std::fs::create_dir_all(d.path().join("projects").join("Not A Project")).unwrap();
-    assert!(s.list().is_err());
+
+    let listed = s.list().unwrap();
+    assert_eq!(listed.len(), 1, "the real project went missing: {listed:?}");
+    assert_eq!(listed[0].id, id());
 }
 
 #[test]
@@ -348,8 +357,69 @@ fn a_malformed_project_never_becomes_an_empty_healthy_one() {
         std::fs::write(d.path().join("projects/jjtorio/project.json"), rubbish).unwrap();
         let got = s.get(&id());
         assert!(got.is_err(), "{rubbish:?} loaded as {got:?}");
-        assert!(s.list().is_err(), "{rubbish:?} survived a listing");
+
+        // This used to assert `list().is_err()`. The claim worth keeping is the one in the
+        // name, that a malformed project never looks like a healthy one, and a listing that
+        // fails outright is a weaker way of saying it than a row that says so. See bug 12.
+        let listed = s.list().unwrap();
+        assert_eq!(listed.len(), 1, "{rubbish:?} vanished instead of showing");
+        assert!(
+            listed[0].name.contains("unreadable"),
+            "{rubbish:?} listed as healthy: {:?}",
+            listed[0]
+        );
+        assert!(
+            !listed[0].blockers.is_empty(),
+            "{rubbish:?} named no reason"
+        );
     }
+}
+
+/// One project that will not load must not take the others down with it.
+///
+/// The whole of bug 12. `list` used `?` on the per entry work, so the first bad folder ended
+/// the walk, and `facts.rs` turned that error into an empty vector. Two good projects and one
+/// broken one showed as zero projects on the panel, with nothing said about why.
+#[test]
+fn one_unreadable_project_does_not_empty_the_listing() {
+    let (s, d) = saved();
+    for other in ["aos", "zebra"] {
+        s.save(&Project::new(
+            ProjectId::new(other).unwrap(),
+            other,
+            "a real project",
+        ))
+        .unwrap();
+    }
+    std::fs::write(d.path().join("projects/jjtorio/project.json"), "{ not json").unwrap();
+
+    let listed = s.list().unwrap();
+    let ids: Vec<_> = listed.iter().map(|p| p.id.to_string()).collect();
+    assert_eq!(ids, ["aos", "jjtorio", "zebra"], "listing lost a project");
+
+    // And the broken one is visibly broken rather than quietly blank.
+    let broken = listed.iter().find(|p| p.id == id()).unwrap();
+    assert!(broken.name.contains("unreadable"), "{broken:?}");
+    assert_eq!(broken.blockers.len(), 1, "{broken:?}");
+    assert!(broken.blockers[0].contains("project.json"), "{broken:?}");
+}
+
+/// The view is what the panel actually draws, so the broken row has to survive that far.
+#[test]
+fn the_view_of_an_unreadable_project_is_broken_rather_than_absent() {
+    let (s, d) = saved();
+    std::fs::write(d.path().join("projects/jjtorio/project.json"), "{ not json").unwrap();
+
+    let view = s.view(&id()).unwrap().expect("the view went missing");
+    assert!(view.project.name.contains("unreadable"), "{view:?}");
+    assert!(view.milestones.is_empty());
+    // Still absent, not broken, when there is genuinely nothing there. The two cases must not
+    // collapse into one or a typo in a project name would invent a project.
+    assert!(
+        s.view(&ProjectId::new("nothing-here").unwrap())
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// A folder with no project.json is not a project, and is not a blank one either.

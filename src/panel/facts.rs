@@ -69,10 +69,16 @@ impl Facts {
             // `view` reads the real milestones, which are only ever written explicitly. Nothing
             // derives one from a commit: a project with a busy repository and no recorded
             // milestones has no milestones, and saying otherwise would be inventing history.
-            let Ok(Some(view)) = projects.view(&project.id) else {
-                continue;
+            let id = project.id.clone();
+            let view = match projects.view(&id) {
+                Ok(Some(view)) => view,
+                // The listing already handed us a `Project` for this id, so there is always a
+                // row to draw and this arm never needs to drop one. `continue` used to live
+                // here, which meant a project whose milestone file would not open disappeared
+                // from the panel with nothing said. See bug 12.
+                _ => ProjectView::broken(project),
             };
-            let (linked, agents) = working_on(tasks, &project.id);
+            let (linked, agents) = working_on(tasks, &id);
             views.push(view.with_work(linked, agents));
         }
 
