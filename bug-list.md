@@ -78,6 +78,39 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 14 | `read_verdict` searched every line of a review for a leading accept or reject word, though its own doc said only the first few and the prompt asked for the very first word on the first line. | A review whose first line said the belt count was still wrong and whose second began "Accepted criteria were not met" was read as an acceptance, and the chain advanced the task to Accepted and told JJ it had passed | `a_review_that_does_not_decide_is_not_an_acceptance`, `a_reason_line_is_not_chopped_up_looking_for_a_verdict` |
+
+## bug 14, in full
+
+Numbered 14 because 12 and 13 are on branches `issue-22-one-bad-project-is-not-all` and
+`issue-23-bound-the-terminal-queue`, neither of which has landed.
+
+A review exists to stop work nobody approved from passing, and this made a review say the
+opposite of what it said.
+
+The prompt asks Mason for ACCEPT or REJECT as the very first word on the first line. The doc
+comment on `read_verdict` said only the first few lines are searched. The loop had no bound at
+all, so the first line anywhere in the answer whose leading alphabetic word was accept or
+reject decided it.
+
+Reviewers write prose, and prose is full of sentences that start with the word accept.
+"Accepted criteria were not met, so this needs another pass" is a rejection that begins with
+the word accepted. A bulleted "- accept once the counter is fixed" is a condition, not a
+verdict, and the dash did not save it either.
+
+The reason string was mangled by the same loop. `push_tail` cuts the verdict word out of
+whichever line it was found on, so the reviewer's own sentence came back as "criteria were not
+met", which reads as a fragment of something rather than what anybody wrote.
+
+The fix searches the first line that says anything and treats everything after it as reason
+text. Leading blank lines do not count, because a reviewer who starts with an empty line has
+still put the verdict on the first line they wrote. The reject default for a first line that
+decides nothing is unchanged, and it is the part that makes the fix safe: narrowing where the
+word is looked for can only ever turn an accept into a reject, never the other way.
+
+Every case in `a_review_that_does_not_decide_is_not_an_acceptance` was a single line, which is
+why nothing caught this. A one line case cannot fail a bug about the second line.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.

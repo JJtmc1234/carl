@@ -275,11 +275,56 @@ fn a_review_that_does_not_decide_is_not_an_acceptance() {
         "I had a look and it seems broadly fine to me",
         "This is interesting work",
         "",
+        // Every case above is one line, and one line cannot catch bug 14. The verdict word
+        // used to be looked for on every line, so an ordinary sentence further down that
+        // happened to start with accept was read as the decision.
+        "I reran the verification and the belt count is still wrong.\n\
+         Accepted criteria were not met, so this needs another pass.",
+        "The belt count is still wrong.\n- accept once the counter is fixed",
+        "Nothing here is confirmable.\n\nAccept is not what I would say about this.",
+        "I could not rerun the verification.\n\
+         Rejected work is not what this is either, it just is not finished.",
     ] {
         let (v, why) = read_verdict(said);
         assert_eq!(v, Verdict::Reject, "{said:?}");
         assert!(why.contains("no clear accept or reject"), "{why}");
     }
+}
+
+/// The reason must survive the read intact, or the reject is right and unreadable.
+///
+/// The other half of bug 14. The verdict word was cut out of the middle of whichever line it
+/// was found on, so "Accepted criteria were not met" arrived as "criteria were not met", which
+/// reads as a fragment of something rather than the sentence the reviewer wrote.
+#[test]
+fn a_reason_line_is_not_chopped_up_looking_for_a_verdict() {
+    let said = "I reran the verification and the belt count is still wrong.\n\
+                Accepted criteria were not met, so this needs another pass.";
+    let (v, why) = read_verdict(said);
+
+    assert_eq!(v, Verdict::Reject);
+    assert!(why.contains("the belt count is still wrong"), "{why}");
+    assert!(
+        why.contains("Accepted criteria were not met"),
+        "the reviewer's sentence was cut up: {why}"
+    );
+}
+
+/// A blank opening line does not move the verdict to line two.
+///
+/// A reviewer who starts with an empty line has still put the verdict on the first line they
+/// wrote, and the first line they wrote is what the prompt asked them about.
+///
+/// This one passes against the old code as well, since the old code searched every line and so
+/// found the word wherever it sat. It guards the bound this fix introduced rather than bug 14.
+/// The two that do fail against the old code are
+/// `a_review_that_does_not_decide_is_not_an_acceptance` and
+/// `a_reason_line_is_not_chopped_up_looking_for_a_verdict`.
+#[test]
+fn leading_blank_lines_do_not_count_as_the_first_line() {
+    let (v, why) = read_verdict("\n\n  ACCEPT\nthe belt count matches now");
+    assert_eq!(v, Verdict::Accept);
+    assert!(why.contains("the belt count matches now"), "{why}");
 }
 
 /// A later paragraph mentioning the other word must not flip a decision already made.

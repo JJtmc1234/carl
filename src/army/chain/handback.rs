@@ -159,15 +159,26 @@ impl Verdict {
 
 /// Reads a reviewer's decision and the reason for it.
 ///
-/// Only the first few lines are searched for the word. A reviewer who accepts on line one and
-/// then writes a paragraph containing "reject the idea that" meant the first one.
+/// Only the first line that says anything is searched for the word, which is what
+/// [`words::mason_reviews`](super::words::mason_reviews) actually asks for: the verdict as the
+/// very first word on the first line. Everything after it is reason text and nothing more.
+///
+/// The bound matters more than it looks. This used to search every line, so a review whose
+/// first line said the belt count was still wrong and whose second line began "Accepted
+/// criteria were not met" came back as an acceptance, and the chain advanced Nora's task to
+/// Accepted and told JJ it had passed. A reviewer writing prose is the normal case, not a
+/// strange one, and prose is full of sentences that start with the word accept. See bug 14.
 pub fn read_verdict(said: &str) -> (Verdict, String) {
     let mut verdict = None;
     let mut why = Vec::new();
+    let mut decided = false;
 
     for line in said.lines() {
         let bare = line.trim().trim_matches(['*', '#', '`', ' ']).trim();
-        if verdict.is_none() {
+        // Leading blank lines do not count as the first line. A reviewer who starts with an
+        // empty line has still put the verdict on the first line they wrote.
+        if !decided && !bare.is_empty() {
+            decided = true;
             let first = bare
                 .split(|c: char| !c.is_ascii_alphabetic())
                 .find(|w| !w.is_empty())
