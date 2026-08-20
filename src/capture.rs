@@ -171,9 +171,11 @@ mod tests {
             std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        let err = Camera::at(&stub)
-            .capture(Area::Screen, &dir.path().join("shot.png"))
-            .unwrap_err();
+        let outcome = Camera::at(&stub).capture(Area::Screen, &dir.path().join("shot.png"));
+        let err = match outcome {
+            Err(e) => e,
+            Ok(v) => panic!("a stub that writes nothing reported success: {v:?}"),
+        };
         assert!(err.to_string().contains("wrote no image"), "{err}");
     }
 

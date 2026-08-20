@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 16 | The panel's liveness probe treated `ECONNRESET` as "cannot tell", but a reset is positive evidence the peer is gone. So starting after a crash refused about one time in ten, telling the operator to delete the socket by hand. | A flaky test, `debris_from_a_crash_is_cleared_rather_than_fatal`, failing roughly one run in eight with an assertion that hid the reason. | `debris_from_a_crash_is_cleared_rather_than_fatal`, now with the error in its message |
 
 ## bug 11, in full
 
@@ -157,3 +158,40 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 16, in full
+
+The third mistake in `behind`, found the same way as the first two: a flaky test rather than
+reasoning. The doc comment on that function had already worked out most of it.
+
+It says a successful connect is not proof of life, because the kernel can complete a connection
+into a listener's backlog and that listener can then close. It says reading settles it, because
+"a peer that has gone gives end of file at once". That last part is where it was wrong. A peer
+that has gone often gives end of file. But when the listener closes with this connection still
+queued in its backlog, the kernel **resets** it, and the read returns `ECONNRESET` rather than
+`Ok(0)`.
+
+`ECONNRESET` fell into the catch all arm and became `Behind::CannotTell`, which makes `bind`
+refuse. So `carl panel` starting after a crash would, about one time in ten, print that it
+could not find out whether anything was behind the socket and tell the operator to remove the
+file by hand if they were sure. That manual cleanup after every crash is precisely what the
+liveness probe was written to avoid, and the probe was defeating itself.
+
+Fix. `ECONNRESET` and `EPIPE` join `Ok(0)` as `Behind::Nothing`. They are the same answer
+arriving by a different route. A live backend cannot produce either: it holds the connection
+open and says nothing, which is the timeout case and still means `Backend`.
+
+This was invisible for a long time because the test asserted `bind(&at).is_ok()` and put the
+reason nowhere. A bare `is_ok` on a `Result` that carries a good error message throws away the
+only thing that would have explained the failure, and this one had a very good error message.
+The assertion now panics with the error in it, and that change is worth more than the fix: the
+fix closes one cause, and the assertion is what will name the next one.
+
+Measured rather than assumed. Before, the whole library suite failed roughly one run in three
+across three different tests, and this one accounted for about one run in eight. After, fifteen
+consecutive runs with no failure of this test.
+
+What this does not fix. `capture::tests::success_with_no_image_is_still_a_failure` still fails
+occasionally, at roughly one run in twenty seven now, and its cause is not known. Its assertion
+has been given the same treatment so the next occurrence says something useful. The two Slack
+tests seen failing once early on have not been seen since and are also unexplained.

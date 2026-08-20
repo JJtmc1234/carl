@@ -141,6 +141,22 @@ fn behind(path: &Path) -> Behind {
         match (&stream).read(&mut [0u8; 1]) {
             Ok(0) => return Behind::Nothing,
             Ok(_) => return Behind::Backend,
+            // The same answer as end of file, arriving differently. The comment above expected
+            // a gone peer to give EOF, and it often does, but when the listener closes with
+            // this connection still queued in its backlog the kernel resets it instead. Either
+            // way the peer is gone, and a live backend never does this: it holds the
+            // connection open and says nothing. Treating a reset as "cannot tell" made a
+            // restart after a crash refuse to start, roughly one time in ten, telling the
+            // operator to delete the file by hand, which is the exact manual cleanup this code
+            // exists to avoid. See bug 16.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                return Behind::Nothing;
+            }
             Err(e) => match e.kind() {
                 // Waited the full time with the connection still open, which is exactly what a
                 // live backend looks like: it speaks only when spoken to.
@@ -378,6 +394,11 @@ mod tests {
             let _dead = bind(&at).unwrap();
         }
         assert!(at.exists(), "the file outlives the listener");
-        assert!(bind(&at).is_ok(), "and is recognised as debris");
+        // The error is in the message rather than a bare `is_ok`. The original assertion hid
+        // it, which is why this failed intermittently for a long time without anybody knowing
+        // that "connection reset" was the reason.
+        if let Err(e) = bind(&at) {
+            panic!("debris was not recognised: {e}");
+        }
     }
 }
