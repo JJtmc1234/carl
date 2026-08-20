@@ -84,6 +84,51 @@ impl Server {
     }
 }
 
+/// The two fields every frame carries, read before the body is decoded.
+///
+/// Its own permissive struct because a body the parser dislikes must not cost the id. Unknown
+/// fields are ignored here on purpose: the point is to salvage the envelope from a frame whose
+/// body will not parse. See bug 24.
+#[derive(Debug, Default, serde::Deserialize)]
+struct Envelope {
+    #[serde(default)]
+    v: Option<u32>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
+/// One incoming line, or the refusal to send back instead.
+///
+/// Two steps rather than one, and the order matters both times.
+///
+/// The envelope comes first so a refusal can carry the id. `docs/panel-v1.md` tells panels that
+/// a frame with no id was not asked for and must not be treated as an answer, so a refusal
+/// without one is discarded by a panel following the documentation, which then waits for a
+/// reply that never arrives. That is worse than an unhelpful error: it is a hang.
+///
+/// The version comes before the body, because a version this backend does not speak is the
+/// reason the body will not parse, and reporting the symptom instead of the cause sends
+/// somebody looking in the wrong place. A newer panel is told which protocol this speaks,
+/// which is exactly what `docs/panel-v1.md` advertises as how a hopeful caller finds out.
+fn decode(line: &str) -> std::result::Result<Request, Frame> {
+    // A line that is not JSON at all has no envelope to salvage, and `None` for the id is then
+    // the truth rather than a loss.
+    let envelope: Envelope = serde_json::from_str(line).unwrap_or_default();
+    let id = envelope.id.clone();
+
+    if let Some(v) = envelope.v
+        && v != VERSION
+    {
+        return Err(Frame::refused(
+            id,
+            format!("this backend speaks panel protocol {VERSION} and that frame said {v}"),
+        ));
+    }
+
+    serde_json::from_str::<Request>(line)
+        .map_err(|e| Frame::refused(id, format!("unreadable request: {e}")))
+}
+
 /// One connected panel, until it goes away.
 pub fn talk(home: &Path, machine: &Mutex<Diagnostics>, stream: UnixStream) -> Result<()> {
     let mut out = stream.try_clone()?;
@@ -97,30 +142,13 @@ pub fn talk(home: &Path, machine: &Mutex<Diagnostics>, stream: UnixStream) -> Re
 
         // A line that will not parse is answered rather than dropped. A panel that sent
         // something malformed and got silence cannot tell that from a backend that died.
-        let request: Request = match serde_json::from_str(&line) {
+        let request = match decode(&line) {
             Ok(r) => r,
-            Err(e) => {
-                send(
-                    &mut out,
-                    &Frame::refused(None, format!("unreadable request: {e}")),
-                )?;
+            Err(refusal) => {
+                send(&mut out, &refusal)?;
                 continue;
             }
         };
-
-        if request.v != VERSION {
-            send(
-                &mut out,
-                &Frame::refused(
-                    Some(request.id),
-                    format!(
-                        "this backend speaks panel protocol {VERSION} and that frame said {}",
-                        request.v
-                    ),
-                ),
-            )?;
-            continue;
-        }
 
         let id = Some(request.id.clone());
         match request.body {
@@ -417,4 +445,79 @@ fn speak(home: &Path, said: &str, out: &mut UnixStream, id: Option<String>) -> R
         seq: None,
         what: answer.text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refusal(line: &str) -> Frame {
+        match decode(line) {
+            Err(f) => f,
+            Ok(r) => panic!("expected a refusal, got {r:?}"),
+        }
+    }
+
+    fn why(frame: &Frame) -> &str {
+        match &frame.body {
+            Reply::Refused { why } => why,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// The bug. The whole `Request` was parsed before the version was looked at, so a body the
+    /// parser disliked was refused with no id at all.
+    ///
+    /// `docs/panel-v1.md` tells panels a frame with no id was not asked for and must not be
+    /// treated as an answer. So a panel following the documentation discards the refusal and
+    /// waits for a reply that never comes. That is worse than an unhelpful error message, it is
+    /// a hang.
+    #[test]
+    fn a_refusal_carries_the_id_the_frame_arrived_with() {
+        for line in [
+            r#"{"v":1,"id":"a","ask":"pause"}"#,
+            r#"{"v":1,"id":"a","ask":"command","command":{"kind":"say","text":"hi","actor":"m"}}"#,
+            r#"{"v":2,"id":"a","ask":"ping"}"#,
+        ] {
+            let frame = refusal(line);
+            assert_eq!(
+                frame.id.as_deref(),
+                Some("a"),
+                "the id was on the frame and has to come back: {line}"
+            );
+        }
+    }
+
+    /// A version this backend does not speak is the reason the body will not parse, so it is
+    /// reported instead of the symptom. `docs/panel-v1.md` advertises this as how a newer panel
+    /// finds out what is spoken here.
+    #[test]
+    fn a_version_mismatch_is_named_rather_than_reported_as_unreadable() {
+        let frame = refusal(r#"{"v":2,"id":"a","ask":"pause"}"#);
+        let text = why(&frame);
+        assert!(text.contains("protocol 1"), "{text}");
+        assert!(text.contains("said 2"), "{text}");
+        assert!(
+            !text.contains("unreadable"),
+            "the version is the cause, not the symptom: {text}"
+        );
+    }
+
+    /// A line that is not JSON at all has no envelope to salvage, so no id is the truth rather
+    /// than a loss.
+    #[test]
+    fn a_line_that_is_not_json_refuses_without_an_id() {
+        let frame = refusal("this is not json");
+        assert_eq!(frame.id, None);
+        assert!(why(&frame).contains("unreadable"));
+    }
+
+    /// An ordinary frame still decodes, which is the case that must not be broken by any of
+    /// the above.
+    #[test]
+    fn a_good_frame_still_decodes() {
+        let r = decode(r#"{"v":1,"id":"a","ask":"ping"}"#).expect("a ping is fine");
+        assert_eq!(r.id, "a");
+        assert_eq!(r.body, Ask::Ping);
+    }
 }

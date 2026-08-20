@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 24 | The whole `Request` was parsed before the version was checked, so any frame the parser disliked was refused with no id and the reason "unreadable request", even when the frame carried an id and the real problem was the version. | Reproduced against the running backend. The docs tell panels an id-less frame was not asked for, so a panel following them discards the refusal and waits for a reply that never comes. | `a_refusal_carries_the_id_the_frame_arrived_with`, `a_version_mismatch_is_named_rather_than_reported_as_unreadable` |
 
 ## bug 11, in full
 
@@ -157,3 +158,38 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 24, in full
+
+An error message that costs the caller more than the error did.
+
+`serve` parsed the whole `Request` in one step. `Ask` is flattened into it, so an unknown ask,
+or the `deny_unknown_fields` on a command, kills the entire parse. The refusal was then built
+with `Frame::refused(None, ...)`, because at that point nothing had been decoded, including the
+id that was sitting in the text.
+
+`docs/panel-v1.md` tells panels that a frame with no id was not asked for and must not be
+treated as an answer. So a panel that follows its own documentation reads that refusal,
+correctly discards it, and waits for a reply that is never coming. The bad error message is not
+the bug. The hang is.
+
+The version check made it worse by being second. A frame from a newer panel fails to parse
+because it is a newer protocol, and the answer named the symptom, "unreadable request", rather
+than the cause. The documentation advertises the version refusal as exactly how a hopeful
+caller discovers what this backend speaks, and it could not be reached.
+
+Fix. Two steps. A permissive `Envelope` picks `v` and `id` out first, ignoring unknown fields
+on purpose, since the whole point is to salvage the envelope from a frame whose body will not
+parse. Then the version is checked. Then the body is decoded, and any refusal from either step
+carries the id.
+
+A line that is not JSON at all still refuses without an id, and that is correct rather than a
+remaining gap: there was no id, so `None` is the truth.
+
+The parse moved into `decode`, which returns the request or the frame to send back, because the
+old version lived inside a loop that needs a live socket and so could not be tested at all.
+
+Guard. Four tests, two of which fail against the single step parse: one for the id on all three
+shapes that used to lose it, an unknown ask, a rejected command field, and a version mismatch,
+and one for the version being named as the cause. The other two pin what was already right, a
+non JSON line refusing without an id and an ordinary frame still decoding.
