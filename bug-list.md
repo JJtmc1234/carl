@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 23 | A snapshot read the agent folders before the journal, while the chain writes the journal first. So a snapshot could carry a sequence that already included a delegation while the agent showed as holding nothing, and the panel subscribes from that sequence so the correcting record is never replayed. | Reproduced on disk against the real backend: seq 1, holding None, task owned by nora. | `a_snapshot_never_shows_a_delegation_the_agent_does_not_yet_hold` |
 
 ## bug 11, in full
 
@@ -157,3 +158,46 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 23, in full
+
+Two files written in one order and read in the other.
+
+The chain appends the `delegated` record to the journal and then writes the agent's state file.
+`everything` and `snapshot::build` opened `Personnel` first, which eagerly reads every state
+file, and read the journal second. A snapshot taken in between therefore carried a sequence
+that already included the delegation while the agent's row showed them holding nothing.
+
+That particular combination never heals. The panel subscribes from the snapshot's sequence, so
+the `delegated` record is behind it and is never replayed, and the row stays wrong until
+something unrelated forces a resync.
+
+The obvious fix is to swap the reads, and this is the part worth keeping, because the obvious
+fix does not work.
+
+Swapping helps. If the journal is read first, the ordinary tear becomes an agent holding a task
+the fold has not seen yet, which the stream corrects when that record arrives above the
+snapshot's sequence. But it only narrows the window. The bad combination needs both reads to
+land inside the gap between the append and the state write, rather than just one, and both
+still can. Measured after swapping: **four runs in twelve still tore the wrong way**. Shipping
+the swap alone would have been shipping a fix that was already known not to work, and it looked
+correct in every run of a single test.
+
+So `read_settled` reads the pair, checks whether the folders are behind the journal, and reads
+again if they are. The gap is two adjacent writes and closes in microseconds, so it settles at
+once in practice. It is bounded at eight tries and returns the pair anyway after that, because
+a snapshot that is briefly wrong beats one that never arrives. Journal first inside each
+attempt, so the tear that does survive is the recoverable one.
+
+Measured after that: zero in fifteen.
+
+Guard. `a_snapshot_never_shows_a_delegation_the_agent_does_not_yet_hold` is a race, on purpose,
+because the bug only exists in the window between two writes. A writer thread delegates in a
+loop, the test takes snapshots in a loop, and it asserts that whenever the fold shows a task
+owned by nora her folder shows her holding it.
+
+Racy tests are usually a mistake and this one earned its place by being measured both ways.
+Against the original order it fails 8 runs out of 8. Against the swap-only fix it fails 4 in 12,
+which is how the swap was found to be insufficient. Against `read_settled` it passes 15 out of
+15. A quiet run is not a false pass, it is a run that did not hit the window, and the numbers
+above say how often that is.

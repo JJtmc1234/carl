@@ -42,7 +42,7 @@ pub use config::{Config, DEFAULT_DEADLINE, Model};
 pub use enlist::{announcement, enlist, found, may_enlist};
 pub use profile::Profile;
 pub use state::{NOTE_LIMIT, RECENT_KEPT, State};
-pub use store::{Folder, Personnel};
+pub use store::{Folder, Personnel, journal_path_in};
 
 use crate::army::org;
 

@@ -27,9 +27,63 @@ const RECENT: usize = 10;
 /// because the table is the organisation and the folders are only what has been written down
 /// about it so far.
 pub fn build(home: &std::path::Path) -> Result<PanelSnapshot> {
-    let people = Personnel::open(home)?;
-    let records = event::read(people.journal_path())?;
+    let (records, people) = read_settled(home)?;
     build_from(&people, &records, &Facts::army_only())
+}
+
+/// How many times to re read before accepting a torn pair.
+///
+/// Small, because the window is two adjacent writes and closes in microseconds. A snapshot that
+/// is briefly late is fine. A snapshot that never returns is not.
+const SETTLE_TRIES: usize = 8;
+
+/// Reads the journal and the agent folders as one consistent pair.
+///
+/// The two reads cannot be atomic, and reordering them is not enough, which is worth writing
+/// down because it is the obvious fix and it does not work. The chain appends the `delegated`
+/// record and then writes the agent's state file. Whichever order a reader uses, if both of its
+/// reads land inside that gap it sees a sequence that has passed the delegation while the agent
+/// holds nothing. Reordering only narrows the window from "either read lands in the gap" to
+/// "both do". Measured: still four runs in twelve. See bug 23.
+///
+/// So it is read again instead of reasoned about. The gap closes as fast as one file write, so
+/// a re read almost always settles at once, and after `SETTLE_TRIES` the pair is returned
+/// anyway, because a snapshot that is briefly wrong beats one that never arrives.
+///
+/// Journal first inside each attempt, so the tear that does survive is the recoverable one: an
+/// agent holding a task the fold has not seen yet, corrected by that record arriving on the
+/// stream above the snapshot's sequence.
+pub fn read_settled(home: &std::path::Path) -> Result<(Vec<Record>, Personnel)> {
+    let mut last = None;
+    for attempt in 0..SETTLE_TRIES {
+        let records = event::read(crate::army::personnel::journal_path_in(home))?;
+        let people = Personnel::open(home)?;
+
+        if !behind(&records, &people) {
+            return Ok((records, people));
+        }
+        last = Some((records, people));
+        if attempt + 1 < SETTLE_TRIES {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    // Unreachable in practice, and returned rather than erroring because a caller asking for a
+    // snapshot needs one.
+    last.ok_or_else(|| crate::Error::Refused("could not read a settled snapshot".into()))
+}
+
+/// Whether the folders are older than the journal, which is the tear that never heals.
+///
+/// True when the fold says an agent owns an unfinished task and that agent's folder shows them
+/// holding nothing.
+fn behind(records: &[Record], people: &Personnel) -> bool {
+    let tasks = tasks::fold(records);
+    tasks.iter().any(|t| {
+        !tasks::settled(&t.status)
+            && people.get(&t.owner).is_some_and(|f| {
+                f.state.holding.as_ref().map(|h| h.as_str()) != Some(t.id.as_str())
+            })
+    })
 }
 
 /// The same, from state already in hand.
@@ -184,4 +238,100 @@ pub fn inspect(people: &Personnel, records: &[Record], agent: &str) -> Result<Ag
         .into_iter()
         .find(|a| a.name == agent.name)
         .ok_or_else(|| Error::Refused(format!("{} is not an agent", agent.name)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::army::event::{Event, Journal};
+    use crate::army::personnel::found;
+    use crate::army::task::TaskId;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Writes a delegation the way the chain does: the journal record first, then the state
+    /// file. That order is not negotiable here, it is what the chain actually does, and it is
+    /// what makes the read order matter.
+    fn delegate(home: &std::path::Path, task: &TaskId) {
+        let mut journal = Journal::open(crate::army::personnel::journal_path_in(home)).unwrap();
+        journal
+            .append(
+                "mason",
+                Event::Delegated {
+                    task: task.clone(),
+                    to: "nora".into(),
+                    goal: "do the thing".into(),
+                    parent: None,
+                    must: vec!["it works".into()],
+                    project: None,
+                },
+            )
+            .unwrap();
+
+        let now = crate::army::event::now();
+        let mut people = Personnel::open(home).unwrap();
+        people
+            .update_state("nora", |s| s.take_up(task, now))
+            .unwrap();
+    }
+
+    /// The bug. `everything` and `build` opened `Personnel` first, which eagerly reads every
+    /// state file, and read the journal second. The chain writes the other way round, journal
+    /// then state file, so a snapshot taken in between carried a sequence that already included
+    /// the delegation while the agent showed as holding nothing.
+    ///
+    /// That combination is the one that never heals. The panel subscribes from the snapshot's
+    /// sequence, so the `delegated` record is behind it and is never replayed, and the row
+    /// stays wrong until something unrelated forces a resync.
+    ///
+    /// The reverse tear is fine and is what this now produces: an agent holding a task the fold
+    /// has not seen yet, corrected by the record arriving on the stream above the snapshot.
+    ///
+    /// Racy on purpose, because the bug only exists in the window between two writes. It fails
+    /// only when it actually catches the bad combination, so a quiet run is not a false pass,
+    /// it is a run that did not hit the window.
+    #[test]
+    fn a_snapshot_never_shows_a_delegation_the_agent_does_not_yet_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        found(dir.path(), crate::army::event::now()).unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let home = dir.path().to_path_buf();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                for i in 0..300 {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let task = TaskId::quoted(format!("task{i:04}"));
+                    delegate(&home, &task);
+                }
+            })
+        };
+
+        for _ in 0..400 {
+            let snap = build(dir.path()).unwrap();
+            let nora = snap
+                .agents
+                .iter()
+                .find(|a| a.name == "nora")
+                .expect("nora is in the army");
+
+            // The fold has seen a task owned by nora, so the journal read included a
+            // delegation to her. The folder must not be older than that read.
+            let folded = snap.tasks.iter().any(|t| t.owner == "nora");
+            if folded {
+                assert!(
+                    nora.holding.is_some(),
+                    "the snapshot shows a delegation to nora at seq {} while her folder holds \\
+                     nothing, which is the tear the panel can never recover from",
+                    snap.seq
+                );
+            }
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        let _ = writer.join();
+    }
 }

@@ -51,6 +51,15 @@ pub struct Personnel {
     records: BTreeMap<&'static str, Folder>,
 }
 
+/// Where the journal lives under a home, without reading anything.
+///
+/// Free of `self` because a snapshot has to read the journal *before* the agent folders, and
+/// `Personnel::open` is what reads the folders. Needing an opened `Personnel` in order to find
+/// the journal forced the wrong order. See bug 23.
+pub fn journal_path_in(home: &Path) -> PathBuf {
+    home.join("run").join("events.jsonl")
+}
+
 impl Personnel {
     /// Reads every agent folder under `<home>/army/`.
     ///
@@ -127,7 +136,7 @@ impl Personnel {
     /// Outside `army/` on purpose, so every directory under `army/` is an agent and anything
     /// else in there is a mistake worth refusing.
     pub fn journal_path(&self) -> PathBuf {
-        self.home.join("run").join("events.jsonl")
+        journal_path_in(&self.home)
     }
 
     pub fn folder(&self, name: &str) -> PathBuf {

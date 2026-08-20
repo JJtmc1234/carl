@@ -159,8 +159,13 @@ pub fn talk(home: &Path, machine: &Mutex<Diagnostics>, stream: UnixStream) -> Re
 /// needs it and the snapshot needs it, and folding twice would be the same work for the same
 /// answer.
 fn everything(home: &Path, machine: &Mutex<Diagnostics>) -> Result<PanelSnapshot> {
-    let people = Personnel::open(home)?;
-    let records = event::read(people.journal_path())?;
+    // One settled pair, not two independent reads. Reordering them alone is not enough and
+    // that is worth knowing, because it is the obvious fix: the chain appends the `delegated`
+    // record and then writes the agent's state file, and if both reads land inside that gap the
+    // snapshot carries a sequence past the delegation while the agent holds nothing. The panel
+    // subscribes from that sequence, so the correcting record is behind it and never arrives.
+    // See bug 23 and the note on `snapshot::read_settled`.
+    let (records, people) = snapshot::read_settled(home)?;
     let tasks = super::tasks::fold(&records);
 
     let facts = {
