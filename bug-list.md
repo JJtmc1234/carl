@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 20 | The Slack worker posted a placeholder and ran a whole model turn before checking whether the incoming A2A message was an ending. An ending is never answered, so the thread was left holding a stranded thinking line or a half streamed reply to a message that must not be replied to. | Never fired in the wild, found by reading the order of the loop body. | `an_ending_is_answered_with_nothing`, `a_spent_ttl_is_answered_with_done_rather_than_silence` |
 
 ## bug 11, in full
 
@@ -157,3 +158,44 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 20, in full
+
+Right decision, wrong place in the loop.
+
+The worker posted "_thinking..._" straight away, which is correct and deliberate: twenty five
+seconds of silence reads as being ignored. Then it ran a full model turn, streaming into that
+message as the answer arrived. Only then did it parse the A2A header and discover the incoming
+message was a `done` or a `decline`, which the protocol says is never answered. It hit
+`continue`, so the update that would have replaced the placeholder never ran.
+
+What is left in the channel is the bad part. Either a bare "_thinking..._" that never becomes
+anything, or worse, a half written reply that was streamed into the placeholder before the
+skip. The second is a visible answer to a message the protocol forbids answering, which is the
+runaway exchange this whole ttl scheme exists to prevent, arrived at from the other direction.
+And a model call was paid for whose answer could never be sent.
+
+Fix. The decision moves to the top of the loop body, before anything is posted or asked.
+
+It became its own type and function rather than an inlined match, because the shape of the bug
+was ordering. `Answering` has three cases and one of them is `Nothing`, so the question "what
+should be sent back, including possibly nothing" now has a name and an answer that exists
+before any side effect happens. Reading the loop, decide then act is visible.
+
+It also removes a second `slack::parse` of the same text further down, which could in principle
+have disagreed with the first.
+
+Guard. `an_ending_is_answered_with_nothing` covers both endings. `a_person_gets_plain_text`
+covers the ordinary case. `an_agent_expecting_an_answer_gets_one_with_a_lower_ttl` checks the
+countdown, which is what stops two polite agents talking forever.
+
+The fourth one is there because of a mistake made while writing it. The first version asserted
+that a spent ttl means say nothing, which is the obvious guess and is wrong. `reply_kind`
+answers a spent ttl with `done`, on purpose, because going silent looks like a crash and
+invites a retry. The test now pins the real behaviour and says why, so a future tidy up towards
+the obvious guess breaks a test instead of the protocol.
+
+Not verified by reverting, and worth being clear about why. The bug is the order of statements
+in a loop that needs a live Slack connection, so no test can observe the placeholder being
+stranded. What the tests guard is the decision, which is now separable and named. The ordering
+itself is guarded by the shape of the code rather than by a test.

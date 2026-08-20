@@ -108,6 +108,19 @@ fn spawn_worker(home: PathBuf, api: Api, bot: String) -> Sender<Ask> {
                 continue;
             }
 
+            // Decided before anything is posted or asked, which is the whole point of the
+            // change. One of the answers is "nothing at all", and finding that out after a
+            // placeholder has been posted and a model turn has run leaves a stranded
+            // "_thinking..._" in the thread, or worse a half streamed reply to a message the
+            // protocol says must never be answered. See bug 20.
+            let answering = match answering(&ask.text) {
+                Answering::Nothing => {
+                    eprintln!("     that was an ending, so nothing to send back");
+                    continue;
+                }
+                other => other,
+            };
+
             let speaker = directory.name_of(&api, &ask.user);
 
             // Posted before Claude is even asked. Twenty five seconds of nothing reads as
@@ -140,18 +153,13 @@ fn spawn_worker(home: PathBuf, api: Api, bot: String) -> Sender<Ask> {
             };
 
             // An agent gets a protocol header back. A person gets plain text, because a
-            // person reading a channel does not want to see the wiring.
-            let out = match slack::parse(&ask.text) {
-                Some(incoming) => match incoming.reply_kind() {
-                    Some(kind) => slack::compose(&ask.user, kind, incoming.reply_ttl(), &reply),
-                    // done and decline are endings. Answering them is how good manners
-                    // become an infinite exchange.
-                    None => {
-                        eprintln!("     that was an ending, so nothing to send back");
-                        continue;
-                    }
-                },
-                None => reply,
+            // person reading a channel does not want to see the wiring. Decided above, so
+            // there is no second parse that could disagree with the first.
+            let out = match answering {
+                Answering::Protocol(kind, ttl) => slack::compose(&ask.user, kind, ttl, &reply),
+                Answering::Plain => reply,
+                // Returned above, before anything was posted.
+                Answering::Nothing => unreachable!("an ending never reaches here"),
             };
 
             // The placeholder becomes the answer. A separate message would leave the
@@ -329,4 +337,89 @@ pub fn greet(home: &Path, channel: &str, agent_user_id: &str, message: &str) -> 
     let ts = api.announce(channel, &text)?;
     println!("opened an exchange with {agent_user_id} in {channel} at {ts}");
     Ok(())
+}
+
+/// What the worker should send back, worked out from the incoming message alone.
+///
+/// Its own type and its own function because the answer has to be known before a placeholder
+/// is posted or a model is called, and because one of the three answers is "nothing", which is
+/// the one that used to be discovered too late.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Answering {
+    /// Not an A2A message, so a person. Plain text, because somebody reading a channel does
+    /// not want to see the wiring.
+    Plain,
+    /// An agent that expects an answer, and the header it should carry.
+    Protocol(slack::Kind, u32),
+    /// An ending. `done` and `decline` are never answered, because answering them is how good
+    /// manners become an infinite exchange.
+    Nothing,
+}
+
+fn answering(text: &str) -> Answering {
+    match slack::parse(text) {
+        None => Answering::Plain,
+        Some(incoming) => match incoming.reply_kind() {
+            Some(kind) => Answering::Protocol(kind, incoming.reply_ttl()),
+            None => Answering::Nothing,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a2a(kind: &str, ttl: u32) -> String {
+        format!("<@U0CARL> [a2a/1 {kind} ttl={ttl}]\nbody text")
+    }
+
+    /// The bug. An ending has to be recognised before anything is posted or asked, because the
+    /// answer for one is to do nothing at all. It used to be checked after the placeholder had
+    /// gone up and a full model turn had run, so the thread was left holding a stranded
+    /// "_thinking..._" or a half streamed reply to a message that must never be answered, and
+    /// a model call was paid for whose answer could never be sent.
+    #[test]
+    fn an_ending_is_answered_with_nothing() {
+        for kind in ["done", "decline"] {
+            assert_eq!(
+                answering(&a2a(kind, 3)),
+                Answering::Nothing,
+                "{kind} is an ending and must not be answered"
+            );
+        }
+    }
+
+    /// A message from a person is not A2A at all, and gets plain text, because somebody
+    /// reading a channel does not want to see the wiring.
+    #[test]
+    fn a_person_gets_plain_text() {
+        assert_eq!(answering("what should I research next"), Answering::Plain);
+        assert_eq!(answering(""), Answering::Plain);
+    }
+
+    /// An agent that expects an answer gets one, with the ttl one lower than it arrived with.
+    /// That countdown is what stops two polite agents talking forever.
+    #[test]
+    fn an_agent_expecting_an_answer_gets_one_with_a_lower_ttl() {
+        match answering(&a2a("ask", 3)) {
+            Answering::Protocol(_, ttl) => assert_eq!(ttl, 2, "the ttl has to count down"),
+            other => panic!("an ask expects an answer, got {other:?}"),
+        }
+    }
+
+    /// A spent ttl is answered with `done` rather than with silence, and that is deliberate
+    /// rather than an oversight: going quiet looks like a crash and invites a retry, which is
+    /// the runaway exchange the counter exists to stop. So it still costs a model call, and it
+    /// still gets a placeholder, both of which are correct.
+    ///
+    /// Written down because the obvious guess is that a spent ttl means say nothing, and a
+    /// future tidy up along those lines would break the protocol quietly.
+    #[test]
+    fn a_spent_ttl_is_answered_with_done_rather_than_silence() {
+        assert_eq!(
+            answering(&a2a("ask", 0)),
+            Answering::Protocol(slack::Kind::Done, 0)
+        );
+    }
 }
