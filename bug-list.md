@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 12 | `ask_streaming` piped the claude child's stderr and never read it until after the child had exited. A pipe holds about 64 KiB, and a child blocked writing stderr stops writing stdout too, so the answer never arrived and neither side ever moved. | Never fired in the wild. Found by reading, then reproduced with a stub `claude`: 1000 bytes of stderr answers fine, 65537 and 200000 both hang past a watchdog. | `a_chatty_stderr_does_not_deadlock_the_answer`, `a_quiet_stderr_still_answers` |
 
 ## bug 11, in full
 
@@ -157,3 +158,51 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 12, in full
+
+Bug 1 again, in a different file, four months later.
+
+Bug 1 was an agent's output going to a pipe nobody drained: the pipe filled at about 64 KiB,
+the writer blocked, and the supervisor waited forever. The lesson was written down. Then
+`ask_streaming` piped the claude child's **stderr** and read it only at the very end, after
+`reader.join()` and `child.wait()`.
+
+The deadlock is the same shape with one extra step. The child fills its stderr pipe and blocks.
+A process blocked writing stderr is not writing stdout either. So the reader thread never sees
+another line and never sees EOF, `child.wait()` is never reached because the loop above it
+never ends, and the read of stderr that would have unblocked everything sits three lines below
+code that can no longer run. Every part waits for a different part.
+
+Nothing exotic is needed to fill it. `claude --verbose` produces node warnings and MCP server
+chatter, and 64 KiB of that is a normal session.
+
+Reproduced with a stub `claude` that writes N bytes to stderr and then a valid stream. 1000
+bytes answers normally. 65537 and 200000 both hang. The break is exactly at the pipe capacity,
+which is what confirms the mechanism rather than a coincidence.
+
+Fix. The stderr pipe is taken before the read loop and drained on its own thread, the same way
+stdout already was, and joined after `child.wait()` where EOF is guaranteed.
+
+Not `Stdio::null()`, which was the other option and is one line shorter. The stderr text is the
+only evidence of what happened when the child dies with no final envelope, and that error path
+already existed and already used it. Fixing a deadlock by deleting the diagnostics would have
+paid for it with every future failure being unexplainable.
+
+`drain` reads to the end and keeps only the first 8 KiB. Reading to the end is the part that
+matters, because stopping early refills the pipe and reintroduces the bug. Keeping only the
+start is so a child that writes megabytes of warnings cannot trade the deadlock for unbounded
+memory instead, and the first lines are the useful ones anyway.
+
+Guard. `a_chatty_stderr_does_not_deadlock_the_answer` runs a real stub process with 200000
+bytes of stderr and a 20 second deadline. It runs the turn on a thread and waits on a channel,
+so a hang fails the test rather than hanging the whole suite. That matters here specifically:
+bug 2 in this list was a test that hung a run with no output, and a guard against a deadlock
+must not be able to become one.
+
+`a_quiet_stderr_still_answers` is the control. Against the broken code it passes, which is the
+point of it: it proves the chatty test is failing because of the volume rather than because the
+stub is wrong.
+
+Verified by writing both before the fix. The chatty one failed at its 20 second deadline and
+the quiet one passed. After the fix both pass, and the chatty one takes 0.02 seconds.
