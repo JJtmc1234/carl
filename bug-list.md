@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 19 | Two capture tests wrote a shell script and then executed it. `fork` copies a write file descriptor into the child whatever `CLOEXEC` says, so another thread spawning during the write window made the exec fail with `ETXTBSY`. | A flaky test, `success_with_no_image_is_still_a_failure`, failing roughly one run in twenty with an assertion that threw the reason away. | Both tests now use `/bin/true` instead of writing a stub, so there is no window to race |
 
 ## bug 11, in full
 
@@ -157,3 +158,42 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 19, in full
+
+Writing a program and then running it is not safe in a process that also spawns other things.
+
+Both tests built a `#!/bin/sh` stub with `std::fs::write`, chmodded it, and executed it.
+`std::fs::write` opens, writes and closes, so the file descriptor is open for a moment. If
+another thread calls `fork` during that moment, and this suite spawns processes in a dozen
+tests, the child gets a copy of that descriptor. `CLOEXEC` does not help, because it only
+closes the descriptor at `exec`, and between the fork and the exec the child is holding the
+file open for writing. Executing a file that any process holds open for writing fails with
+`ETXTBSY`, "Text file busy".
+
+Fix. Neither stub needed to exist. Both were `exit 0`, a program that succeeds and writes
+nothing, and `/bin/true` is that program. It was written by somebody else long ago and nothing
+here has it open, so there is no window to race.
+
+The general shape is worth remembering, because other tests in this repo do still write and
+then execute a stub where the stub genuinely has to do something. Those are rarer and shorter
+lived, but they are the same race, and the answer there would be a retry on `ETXTBSY` rather
+than a different program.
+
+The part worth keeping is how long this took to find, and why. The assertion was
+`.unwrap_err()` followed by a `contains` check, so when it failed the message said only that
+the text did not match. It took changing the assertion to print the error before "Text file
+busy" appeared at all, and that one line named the entire cause. Same lesson as bug 16, two
+bugs apart: an assertion that discards the error discards the only thing that explains the
+failure.
+
+Worth recording an error made while chasing this. `ETXTBSY` was the first hypothesis. It was
+tested with a script that did the same write and exec from several threads while others
+spawned, and it produced no failures in 1200 attempts, so the hypothesis was dropped as
+disproven. It was not disproven, it was tested badly: that script used Python's `subprocess`,
+which prefers `posix_spawn`, and the race needs a real `fork`. A negative result from a test
+that does not reproduce the conditions is not evidence.
+
+Measured. Before, the library suite failed about one run in three across three tests, this one
+about one in twenty. With this fix alone, no failure of it in 25 runs. With this and bug 16
+together, **30 consecutive runs with no failures at all**.

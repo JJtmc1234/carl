@@ -159,21 +159,27 @@ mod tests {
         assert!(err.to_string().contains("apt install"), "{err}");
     }
 
+    /// A program that exits zero and writes nothing, which is exactly what is needed here.
+    ///
+    /// Deliberately not a script written by the test. Writing a file and then executing it in
+    /// the same process races every other thread that spawns: `fork` copies the write file
+    /// descriptor into the child, `CLOEXEC` only closes it at `exec`, and an `exec` of a file
+    /// somebody still holds open for writing fails with `ETXTBSY`. That is bug 19, and this
+    /// suite spawns processes in a dozen tests. `/bin/true` was written by somebody else long
+    /// ago and nothing here has it open.
+    const WRITES_NOTHING: &str = "/bin/true";
+
     /// Exiting zero is not proof. The compositor can refuse and leave nothing behind.
     #[test]
     fn success_with_no_image_is_still_a_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let stub = dir.path().join("liar");
-        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
 
-        let err = Camera::at(&stub)
-            .capture(Area::Screen, &dir.path().join("shot.png"))
-            .unwrap_err();
+        let outcome =
+            Camera::at(WRITES_NOTHING).capture(Area::Screen, &dir.path().join("shot.png"));
+        let err = match outcome {
+            Err(e) => e,
+            Ok(v) => panic!("a program that writes no image reported success: {v:?}"),
+        };
         assert!(err.to_string().contains("wrote no image"), "{err}");
     }
 
@@ -184,15 +190,11 @@ mod tests {
         let target = dir.path().join("shot.png");
         std::fs::write(&target, "an old screenshot").unwrap();
 
-        let stub = dir.path().join("noop");
-        std::fs::write(&stub, "#!/bin/sh\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        assert!(Camera::at(&stub).capture(Area::Screen, &target).is_err());
+        assert!(
+            Camera::at(WRITES_NOTHING)
+                .capture(Area::Screen, &target)
+                .is_err()
+        );
         assert!(!target.exists(), "the stale image must be gone, not reused");
     }
 
