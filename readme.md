@@ -1,6 +1,8 @@
 # carl
 
-Docs: [brainstorm.md](brainstorm.md) for how this was arrived at, [planning.md](planning.md) for the chunks and what is next, [infrastructure.md](infrastructure.md) for how it fits together, [progress-report.md](progress-report.md) for where it stands, [docs/a2a.md](docs/a2a.md) for the agent to agent protocol.
+Docs: [brainstorm.md](brainstorm.md) for how this was arrived at, [planning.md](planning.md) for the chunks and what is next, [infrastructure.md](infrastructure.md) for how it fits together, [progress-report.md](progress-report.md) for where it stands.
+
+The army, which is most of the code: [docs/army-v1.md](docs/army-v1.md) for the shared types every part of it uses, [docs/chain-v1.md](docs/chain-v1.md) for the delegation chain, [docs/panel-v1.md](docs/panel-v1.md) for the Command Panel backend protocol, and [docs/a2a.md](docs/a2a.md) for the agent to agent protocol.
 
 A helper that remembers. Rust, driving the `claude` command line as a child process.
 
@@ -150,6 +152,91 @@ to 0.001.
 
 It is a separate process, so it can be stopped at any time and nothing else on the machine
 notices. Carl checks for it at startup and says which mode he is in.
+
+## the chain of command
+
+```sh
+./target/debug/carl chain "add a health endpoint" --workdir ~/code/thing
+```
+
+One request goes down a chain of four agents and comes back up. JJ to Carl to Adrian to Mason
+to Nora. Each one is a real `claude` process held open for the whole run, so the conversation
+is the state: Mason reviews against the task he wrote rather than a description of it, and Nora
+fixes her own first attempt rather than being briefed from cold.
+
+```
+JJ
+ -> carl      objective + DONE WHEN
+     -> adrian    objective + DONE WHEN
+         -> mason     one task + DONE WHEN
+             -> nora      works, verifies, submits
+             <- mason     reruns the verification, ACCEPT or REJECT
+         <- mason     reports up
+     <- adrian    decides and reports up
+ <- carl      tells JJ what happened
+```
+
+The interesting part is that the shape is enforced rather than requested. Carl cannot skip
+Adrian because `Task::assign` refuses it, not because the driver remembers not to. Nothing is
+marked done by whoever did it, because going up is `Submitted` followed by the creator
+accepting or abandoning.
+
+Three rules hold whatever an agent decides to type.
+
+**Rank picks the tool list the process starts with.** A chief gets an empty list, a lead gets
+read tools and `Bash`, a worker gets an editor too. A chief who asks to implement is refused,
+and a chief who never asks still cannot write a file because it was never given the tool. Two
+guards, because either alone is one forgotten call away from nothing.
+
+**A task cannot exist without something checkable on it.** An agent handing work down is asked
+for a `DONE WHEN` section, and asked once more if it forgets. Nothing invents a fallback
+condition, because a generic "it works" satisfies the check while defeating the reason it is
+there.
+
+**A review that does not clearly say ACCEPT is not an acceptance.** The verdict reader defaults
+to reject, because the other default lets a rambling answer with no decision in it pass work
+nobody approved, which is the exact failure a review exists to prevent.
+
+`--workdir` is where Nora works and the only place she can change files. `--journal` says where
+to write what happened, and defaults to `events.jsonl` inside the workdir. That journal is the
+point: twenty agents producing work with no record is twenty opinions and a story about where
+they came from.
+
+Mason having `Bash` and no editor is deliberate and imperfect, and worth knowing before you
+rely on it. A reviewer has to rerun a verification rather than believe a summary, and a shell
+can write a file. It is the smallest grant that still lets a reviewer check rather than trust.
+
+## the command panel
+
+```sh
+./target/debug/carl panel
+```
+
+The backend for watching the army while it runs. It binds a unix socket at
+`~/.carl/panel/panel.sock` and serves line delimited JSON in both directions, so `nc -U` is a
+working client on the day the thing that is broken is the backend.
+
+**The socket file is the authentication.** It sits in a `0700` directory and is itself `0600`,
+so only your own processes can reach it, and that is enforced by the kernel rather than by a
+check in the code. Nothing listens on the network. A port on loopback would be reachable by
+every process and every user on the machine.
+
+Four calls: `ping`, `snapshot` for the whole world at once, `subscribe` to be sent events as
+they happen, and `command` to intervene. Every frame carries a version, and a backend speaking
+a different one refuses the frame rather than guessing at it.
+
+Subscribing takes over the connection, because a subscribed panel is streaming and interleaving
+replies on the same socket would need framing this protocol does not have. A panel that wants
+both opens two connections.
+
+Liveness is a tail of the journal rather than a rebuild on a timer. Rebuilding would be simpler
+and wrong twice over: it would miss anything that happened and was undone between two ticks,
+and it would give the panel no way to tell a change from a redraw.
+
+The protocol is written down in full in [docs/panel-v1.md](docs/panel-v1.md), and every example
+in it was copied from a real run rather than written by hand. It is frozen: see
+[docs/command-panel-v1.md](docs/command-panel-v1.md) for what that means and what v1 does not
+do.
 
 ## the exact privacy promise
 

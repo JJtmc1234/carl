@@ -1,10 +1,19 @@
 //! `carl`, the command line front end.
 //!
-//! One command does the real work: `ask`. It records what you said, resumes the right
-//! conversation, records what Carl said, and never deletes either.
+//! Every surface that talks to Carl ends in the same place. `ask`, `chat`, `listen` and
+//! `slack` all go through `turn`, whichever of its entry points they use, and every one of
+//! those builds an `Exchange`. That is what records what was said, resumes the right
+//! conversation, records what Carl said, and never deletes either. A surface is a transport
+//! and a thread id and nothing else, which is why adding one has never needed a second copy of
+//! the rules.
 //!
-//! Slack is not wired up yet. When it is, it calls the same `respond` path with a thread id
-//! built from the channel and thread timestamp, so the transport is the only new part.
+//! Slack is wired up and has been for a while. It dispatches into that same path with a thread
+//! id built from the channel and the thread timestamp. This comment used to say the opposite,
+//! and named a `respond` function that no longer exists.
+//!
+//! Two subcommands are not conversations at all. `chain` sends one request down the delegation
+//! chain and waits for it to come back, and `panel` serves the Command Panel backend on a local
+//! socket. Both are the army rather than the assistant, and both are in the readme.
 
 mod chat;
 mod ear;
