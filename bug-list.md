@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 17 | The Slack dedupe keyed on `event_id`, which identifies the envelope rather than the message. The manifest subscribes to `app_mention` and `message.*`, so one message mentioning Carl arrives twice with two different ids and both got through. | Never fired in the wild, found by reading the manifest against the dedupe. Reproduced by building both envelopes for one message and getting identical `Ask` values from each. | `one_message_arriving_twice_is_answered_once`, `two_messages_in_one_thread_are_both_answered` |
 
 ## bug 11, in full
 
@@ -157,3 +158,47 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 17, in full
+
+The dedupe was written to stop Slack resending one envelope twice, and it does that correctly.
+It was then relied on for a different question it never answered: has this *message* already
+been dealt with.
+
+The manifest subscribes to `app_mention` and to `message.channels`, `message.groups` and
+`message.im`. A message that mentions Carl in a direct message matches two of those
+subscriptions, so Slack delivers it twice, as two events with two different `event_id` values.
+The check compared event ids, so both copies passed, and Carl asked Claude twice and posted two
+replies.
+
+Two shapes qualify on both copies. A direct message, because `channel_type == "im"` always
+qualifies. And a mention inside a thread Carl has already answered in, because the engaged
+check is true. That second one is worse than it looks: answering the first copy is what marks
+the thread engaged, so the first copy creates the condition that lets the second one through.
+
+A top level mention in a fresh channel thread escapes, because that event carries no
+`thread_ts`, which is why this was never obvious in use.
+
+Fix. A second bounded set, keyed on channel plus the message `ts`, checked after `ask_from`
+says this is a question.
+
+Two details in that sentence are the whole fix. **`ts` and not `thread_ts`**, because every
+message in a thread shares the latter, so keying on it would answer the first question anybody
+asked in a thread and silently ignore every one after it, which is worse than the bug. And
+**after `ask_from` rather than beside the event id check**, so a copy that is not a question for
+Carl cannot consume the entry and silence the copy that is.
+
+The push then trim dance existed once and now needed to exist twice, so it became a `Recent`
+type. Two copies of a bounded set is how one of them ends up unbounded.
+
+Guard. `one_message_arriving_twice_is_answered_once` asserts all three parts in one place:
+that both copies genuinely qualify as questions, which is what makes this a bug rather than a
+theory, that their event ids differ, which is why the old check missed it, and that their
+message keys match, which is why the new one catches it.
+
+`two_messages_in_one_thread_are_both_answered` guards the mistake the fix could have been,
+which is keying on the thread instead of the message.
+
+Worth being straight about the limit of these. They exercise the pieces, `message_key` and
+`Recent`, and not `serve`, which needs a live websocket. The test does contain the proof that
+the old code let both copies through, in the assertion that the two event ids are not equal.
