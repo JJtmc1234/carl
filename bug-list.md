@@ -78,6 +78,7 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 | 27 | Service uptime subtracted systemd's `CLOCK_MONOTONIC` start stamp from `/proc/uptime`, which is `CLOCK_BOOTTIME`. Those are different clocks and boottime counts suspend, so every unit's uptime was inflated by the total time the laptop had ever been asleep. | Never fired, found by reading, then measured: `carl-aec` reported 959085 seconds up against a monotonic clock of 318912, so 11 days for a service at most 3.7 days old. | `a_real_units_uptime_never_exceeds_the_clock_it_is_measured_against`, `the_monotonic_clock_never_runs_ahead_of_boottime` |
+| 28 | The property list never asked for `LoadState`, and `systemctl show` answers for a unit that does not exist with `ActiveState=inactive` and exits 0. So a unit systemd had never heard of was reported with the same health and the same word as one somebody deliberately stopped. | Never fired here, since all three units are installed. Verified by running the exact command against a made up unit name. | `a_unit_systemd_has_never_heard_of_is_unknown_rather_than_stopped`, `a_loaded_unit_that_is_stopped_still_reads_as_stopped`, `a_masked_unit_is_a_decision_rather_than_an_absence` |
 
 ## bug 11, in full
 
@@ -194,3 +195,37 @@ clock, which is an invariant rather than a number, so it does not go stale.
 Verified by putting `/proc/uptime` back as the source. It failed with
 "army.service.carl-aec reports 959085 seconds up against a monotonic clock of 318911", which is
 the bug stated in one line.
+
+## bug 28, in full
+
+A missing unit and a stopped unit are different problems with different remedies, and the panel
+had one word for both.
+
+`systemctl --user show` exits 0 for a unit that does not exist and prints
+`ActiveState=inactive`, `SubState=dead`. `read_with` only rejects a non zero status, so that
+came back as a perfectly ordinary answer, `health()` returned `Blocked`, and `summary()` said
+"stopped".
+
+`Blocked` means somebody stopped a service on purpose, which the comment on that arm says in as
+many words. So the panel told you a service was deliberately stopped, and the remedy that
+implies, start it, cannot work for something that was never installed.
+
+The cause is narrow. The `-p` list never asked for `LoadState`, which is the one field that
+distinguishes the two, so the provider had no way to tell them apart even in principle.
+
+Fix. `LoadState` joins the list, and `not-found`, `bad-setting` or `error` make the unit
+`Unknown` with a summary naming it as not installed and pointing at `etc/systemd/install.sh`.
+
+`masked` is deliberately not in that set. A masked unit does exist and somebody masked it, which
+is a decision rather than an absence, so it keeps reading as stopped, which is what it is. There
+is a test saying so, because the obvious list of "bad" load states includes it.
+
+Worth recording that this never fired on this machine and could not have. All three units are
+installed here, so the bug only appears on a machine where `etc/systemd/install.sh` has not run,
+which is exactly a fresh checkout: the case where somebody most needs the panel to say what is
+wrong. The issue was careful about this too, narrowing its own claim rather than asserting the
+module doc was broken.
+
+Guard. Three unit tests, one for each of the three load states that matter, plus one against
+this machine asserting the installed units do not start reading as missing. Verified by removing
+the `missing()` check, where the first fails and the neighbouring cases all still pass.

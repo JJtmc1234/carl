@@ -30,6 +30,13 @@ pub struct Unit {
     pub active_state: Option<String>,
     /// `running`, `dead`, `exited`, `auto-restart`.
     pub sub_state: Option<String>,
+    /// `loaded`, `not-found`, `bad-setting`, `error`, `masked`.
+    ///
+    /// Asked for because it is the only field that distinguishes a unit systemd has never
+    /// heard of from one that is installed and stopped. Without it `systemctl show` answers
+    /// for a unit that does not exist with `ActiveState=inactive` and exits 0, which reads as
+    /// deliberately stopped. See bug 28.
+    pub load_state: Option<String>,
     pub restarts: Option<u64>,
     pub main_pid: Option<u32>,
     /// Microseconds since boot when the main process started.
@@ -79,6 +86,13 @@ impl Unit {
     /// blocked rather than failed, because somebody stopping a service on purpose is not a
     /// crash and should not read like one.
     pub fn health(&self) -> Health {
+        // Before anything else, because `ActiveState` is meaningless for a unit systemd does
+        // not have. It answers `inactive` for one that was never installed and exits 0, which
+        // used to read as `Blocked`, and `Blocked` means somebody stopped it on purpose. The
+        // remedy that implies, start the service, cannot work. See bug 28.
+        if self.missing() {
+            return Health::Unknown;
+        }
         match (self.active_state.as_deref(), self.sub_state.as_deref()) {
             (Some("active"), Some("running")) => {
                 if self.restarts.unwrap_or(0) > 0 {
@@ -95,7 +109,26 @@ impl Unit {
         }
     }
 
+    /// Whether systemd has no such unit, rather than having one that is not running.
+    ///
+    /// `masked` is deliberately not here. A masked unit does exist and was masked by somebody,
+    /// which is a decision rather than an absence, so it keeps reading as stopped.
+    pub fn missing(&self) -> bool {
+        matches!(
+            self.load_state.as_deref(),
+            Some("not-found") | Some("bad-setting") | Some("error")
+        )
+    }
+
     pub fn summary(&self) -> String {
+        if self.missing() {
+            // Names the remedy, because "not installed" and "stopped" call for different
+            // actions and the panel used to show the same words for both.
+            return format!(
+                "not installed, systemd has no {}. Run etc/systemd/install.sh",
+                self.name
+            );
+        }
         match (self.active_state.as_deref(), self.restarts.unwrap_or(0)) {
             (Some("active"), 0) => "running".to_string(),
             (Some("active"), n) => format!("running, restarted {n} times"),
@@ -120,6 +153,7 @@ pub fn parse_show(name: &str, text: &str) -> Unit {
         };
         let value = value.trim();
         match key {
+            "LoadState" => unit.load_state = Some(value.to_string()),
             "ActiveState" => unit.active_state = Some(value.to_string()),
             "SubState" => unit.sub_state = Some(value.to_string()),
             "NRestarts" => unit.restarts = value.parse().ok(),
@@ -154,7 +188,7 @@ pub fn read_with(program: &str, name: &str) -> Option<Unit> {
             "show",
             name,
             "-p",
-            "ActiveState,SubState,NRestarts,ExecMainPID,ExecMainStartTimestampMonotonic",
+            "LoadState,ActiveState,SubState,NRestarts,ExecMainPID,ExecMainStartTimestampMonotonic",
         ])
         .output()
         .ok()?;
@@ -247,6 +281,67 @@ mod tests {
     }
 
     /// Somebody stopping a service deliberately is not a crash.
+    /// The bug. `systemctl show` answers for a unit that does not exist with
+    /// `ActiveState=inactive` and exits 0, so a unit systemd has never heard of was reported
+    /// with the same health and the same word as one somebody deliberately stopped.
+    ///
+    /// `Blocked` means a person stopped it on purpose, and the remedy that implies, start the
+    /// service, cannot work for a unit that is not installed.
+    #[test]
+    fn a_unit_systemd_has_never_heard_of_is_unknown_rather_than_stopped() {
+        // Exactly what this machine prints for a name that does not exist, checked by running
+        // the command the provider runs.
+        let u = parse_show(
+            "ghost.service",
+            "LoadState=not-found\nActiveState=inactive\nSubState=dead\nNRestarts=0\nExecMainPID=0\n",
+        );
+
+        assert_eq!(u.health(), Health::Unknown, "not installed is not stopped");
+        assert!(u.summary().contains("not installed"), "{}", u.summary());
+        assert!(
+            u.summary().contains("install.sh"),
+            "and names the remedy: {}",
+            u.summary()
+        );
+    }
+
+    /// A unit that really is installed and really is stopped still reads as stopped, which is
+    /// the case the fix must not swallow.
+    #[test]
+    fn a_loaded_unit_that_is_stopped_still_reads_as_stopped() {
+        let u = parse_show(
+            "real.service",
+            "LoadState=loaded\nActiveState=inactive\nSubState=dead\n",
+        );
+        assert_eq!(u.health(), Health::Blocked);
+        assert_eq!(u.summary(), "stopped");
+    }
+
+    /// A masked unit is deliberately not treated as missing. It exists and somebody masked it,
+    /// which is a decision rather than an absence, so it keeps reading as stopped.
+    #[test]
+    fn a_masked_unit_is_a_decision_rather_than_an_absence() {
+        let u = parse_show(
+            "masked.service",
+            "LoadState=masked\nActiveState=inactive\nSubState=dead\n",
+        );
+        assert!(!u.missing());
+        assert_eq!(u.health(), Health::Blocked);
+    }
+
+    /// And this machine, where the units are installed, must not start reading as missing.
+    #[test]
+    fn the_installed_units_on_this_machine_are_not_reported_missing() {
+        for name in CARL_UNITS {
+            let Some(u) = read(name) else { continue };
+            assert!(
+                !u.missing(),
+                "{name} is installed here and reads as missing: {:?}",
+                u.load_state
+            );
+        }
+    }
+
     #[test]
     fn a_stopped_unit_is_blocked_and_a_failed_one_is_failed() {
         let stopped = parse_show("x", "ActiveState=inactive\nSubState=dead\n");
