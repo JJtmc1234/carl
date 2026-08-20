@@ -78,6 +78,38 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 17 | The session id is minted and saved before `claude` is contacted, and the resume decision was made from whether the registry had an entry. A thread whose first turn failed kept an entry naming an id nothing on the far side had ever seen. | Every later message in that thread was sent with `--resume` for a session that was never created, claude answered "No conversation found with session ID" and exited 1, and only a hand edit of `threads.json` cleared it | `a_thread_with_no_completed_turn_is_never_resumed`, `a_registry_entry_alone_is_not_a_conversation` |
+
+## bug 17, in full
+
+Numbered 17 because 12 through 16 are on the branches for issues 22 to 26, none landed.
+
+Two different questions that looked like one.
+
+"Does this thread have a session id" and "has claude ever seen it" are not the same question,
+and `session_for` is exactly the reason why. It mints the id and writes it to disk before
+claude is contacted, on purpose, so a crash between minting and using does not start a second
+conversation for a thread that already has one. That is right, and it means an entry exists
+from the moment the thread is first seen rather than from the moment it first works.
+
+So the first turn in a thread fails, for any ordinary reason, claude mid upgrade and not on
+`PATH` or an error envelope back from the API, and the entry survives with `turns` still at 0.
+Every later turn is then asked with `--resume` for an id claude has never created, which fails
+for a completely different reason than the original one did, forever.
+
+The field to ask was already there. `record_turn` runs only on the success path, so `turns`
+counts exactly the thing the decision needs, and nothing read it.
+
+The pool made it worse and is fixed with it. Its reopen and retry passed a hardcoded `true`,
+so the built in recovery reached for the same dead id. It now passes the caller's answer
+through, because a failed attempt has not created anything to resume that was not there a
+moment ago.
+
+The guard is written against the argument vector `claude` is launched with rather than against
+the flag Carl computes, since asserting on the flag would be asserting that a function agrees
+with itself. Against the old code it prints the real thing: launch 2 carrying
+`--resume 80124d36-...` for a session that was never created.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.

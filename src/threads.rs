@@ -130,6 +130,21 @@ impl Registry {
         Ok((session, true))
     }
 
+    /// Whether claude has ever finished a turn in this thread, so there is something to resume.
+    ///
+    /// Not the same question as whether the registry has an entry, which is what the resume
+    /// decision used to be made on. `session_for` mints and saves the id before claude is ever
+    /// contacted, so a thread whose very first turn failed keeps an entry naming an id that
+    /// nothing on the far side has ever seen. Every later turn then asked with `--resume` for
+    /// that id, claude answered "No conversation found with session ID", and the thread was
+    /// wedged permanently.
+    ///
+    /// `turns` is the right field because `record_turn` runs only on the success path, so it
+    /// already counts exactly the thing this needs to know. See bug 17.
+    pub fn has_transcript(&self, thread: &ThreadId) -> bool {
+        self.threads.get(thread).is_some_and(|t| t.turns > 0)
+    }
+
     pub fn record_turn(&mut self, thread: &ThreadId) -> Result<()> {
         if let Some(entry) = self.threads.get_mut(thread) {
             entry.turns += 1;

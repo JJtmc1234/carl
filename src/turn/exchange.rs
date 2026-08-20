@@ -134,7 +134,9 @@ impl Exchange<'_> {
         )?;
 
         let mut registry = Registry::open(self.home.join("threads.json"))?;
-        let (session, is_new) = registry.session_for(self.thread, now())?;
+        let (session, _minted) = registry.session_for(self.thread, now())?;
+        // Asked before the turn runs, since `record_turn` below is what makes it true.
+        let resume = registry.has_transcript(self.thread);
 
         let memory = Memory::open(self.home.join("memory"))?;
 
@@ -205,9 +207,12 @@ impl Exchange<'_> {
 
         let prepared = Prepared {
             session: session.clone(),
-            // A brand new thread has nothing to resume. Getting this wrong is the difference
-            // between continuing a conversation and starting a second one silently.
-            resume: !is_new,
+            // Whether a turn ever completed, not whether the registry has an entry. The id is
+            // minted and saved before claude is contacted, so an entry on its own says nothing
+            // about whether there is a conversation on the far side to pick up. Getting this
+            // wrong in one direction starts a second conversation silently, and in the other
+            // wedges the thread forever. See bug 17.
+            resume,
             prompt: self.sent.unwrap_or(self.said),
             identity,
             context: (!extra_system.trim().is_empty()).then(|| extra_system.trim().to_string()),

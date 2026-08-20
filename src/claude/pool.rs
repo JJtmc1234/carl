@@ -96,7 +96,12 @@ impl Pool {
                 // starting over, so the conversation survives.
                 eprintln!("  the session for {thread} failed, reopening: {e}");
                 self.close(thread);
-                self.ensure(thread, session, true)?;
+                // The caller's answer, not a hardcoded true. This used to retry with resume on
+                // whatever the caller said, so a first turn that failed was retried against a
+                // session claude had never created and the built in recovery reached for the
+                // same dead id. If there was nothing to resume a moment ago, a failed attempt
+                // has not created anything to resume now. See bug 17.
+                self.ensure(thread, session, resume)?;
                 let live = self.session_for(thread).expect("just reopened");
                 live.ask(prompt, on_text, while_waiting)
             }
