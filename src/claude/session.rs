@@ -16,6 +16,7 @@
 //! in the system prompt.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
@@ -99,6 +100,13 @@ impl Runner {
         let mut child = Command::new(self.program())
             .args(self.session_args(session, system, resume))
             .current_dir(workdir)
+            // Its own process group, so giving up on a session can end everything it started
+            // and not just the process this handle points at. Claude spawns its own children,
+            // MCP servers and shell tools, and they inherit this stdout pipe. Killing only
+            // the direct child leaves them holding the write end, so the pipe never reaches
+            // EOF and the reader thread below blocks for as long as a grandchild survives.
+            // Found by testing the kill rather than assuming it. See bug 13.
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -254,21 +262,159 @@ impl Session {
     }
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        // Closing stdin first asks it to finish. Killing without that leaves the transcript
-        // half written, and the transcript is what a later `--resume` reads.
+/// How long a session gets to finish on its own after being asked to.
+///
+/// Closing stdin is the polite ask and it is worth making, because the transcript is what a
+/// later `--resume` reads and killing mid write leaves it half done. But asking is not the
+/// same as waiting, and the wait used to be unbounded. The session being given up on is
+/// usually the one that has already blown a deadline, which is precisely the one that will
+/// not answer, so the ask gets a bound and then the child is killed.
+const GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+impl Session {
+    /// Ends the session now rather than whenever the child decides.
+    ///
+    /// Safe to call more than once, which matters because `Drop` calls it too.
+    pub fn stop(&mut self) {
         self.stdin.take();
-        let _ = self.child.wait();
+        if !self.finished_within(GRACE) {
+            self.kill_the_group();
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
         if let Some(r) = self.reader.take() {
             let _ = r.join();
         }
+    }
+
+    /// Ends the child and everything it started.
+    ///
+    /// The group id is the child's pid, because it was spawned as its own group leader.
+    /// Signalling the group rather than the pid is what makes the stdout pipe actually close,
+    /// since a surviving grandchild holds the write end otherwise.
+    fn kill_the_group(&mut self) {
+        let pid = self.child.id() as libc::pid_t;
+        // Sound because the group was created by this process for this child, and it is only
+        // signalled after the grace has expired and before the child is reaped, so the id
+        // cannot yet have been reused.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+
+    /// Whether the child ended on its own inside `grace`.
+    fn finished_within(&mut self, grace: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + grace;
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                // Either out of time, or the wait itself failed and waiting again will not
+                // help. Both mean stop asking and start insisting.
+                _ => return false,
+            }
+        }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Bounded. This used to be a bare `child.wait()`, so dropping a session whose child
+        // kept working blocked the dropping thread for as long as the child felt like, which
+        // meant a deadline bought nothing and one stuck session stalled the voice loop. See
+        // bug 13.
+        self.stop();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stub `claude` that reads the prompt, then keeps working and ignores EOF on stdin.
+    ///
+    /// That is the shape that matters. A child which exits when its stdin closes would hide
+    /// the bug entirely, because the polite ask alone would be enough.
+    fn stubborn_stub(dir: &Path, seconds: u64) -> std::path::PathBuf {
+        let path = dir.join("claude-stubborn");
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\ntrap '' HUP PIPE\ncat > /dev/null\nsleep {seconds}\n"),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// The bug. `Drop` closed stdin and then called `child.wait()` with no kill and no bound,
+    /// and every path that gives up on an agent only drops the `Session`. So a deadline
+    /// declared blown bought nothing: the caller blocked for as long as the child felt like
+    /// carrying on, and in the pool one stuck session stalled the voice loop behind it.
+    #[test]
+    fn dropping_a_session_does_not_wait_for_a_child_that_will_not_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = Runner::at(stubborn_stub(dir.path(), 30));
+        let id = SessionId::fresh().unwrap();
+        let session = runner
+            .open_session(&id, &dir.path().join("work"), "", false)
+            .expect("the stub should start");
+
+        let started = std::time::Instant::now();
+        drop(session);
+        let took = started.elapsed();
+
+        // GRACE plus room for a slow machine, and far under the 30 seconds the child wanted.
+        assert!(
+            took < std::time::Duration::from_secs(10),
+            "dropping took {took:?}, so it is still waiting for the child to decide"
+        );
+    }
+
+    /// And the polite ask still has to happen, or the transcript a later resume reads is left
+    /// half written. A child that does exit when its stdin closes must not be killed.
+    #[test]
+    fn a_session_that_finishes_on_its_own_is_not_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claude-polite");
+        std::fs::write(&path, "#!/bin/sh\ncat > /dev/null\nexit 0\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let runner = Runner::at(&path);
+        let id = SessionId::fresh().unwrap();
+        let mut session = runner
+            .open_session(&id, &dir.path().join("work"), "", false)
+            .expect("the stub should start");
+
+        // Closing stdin is what lets it finish, so the ask has to come first. It then ends on
+        // its own well inside the grace and nothing has to insist.
+        let started = std::time::Instant::now();
+        session.stop();
+        let took = started.elapsed();
+        assert!(
+            took < GRACE,
+            "a child that exits when its stdin closes waited the full grace, took {took:?}"
+        );
+    }
+
+    /// `Drop` calls `stop` too, so calling it explicitly first must not make the drop misbehave.
+    #[test]
+    fn stopping_twice_is_harmless() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = Runner::at(stubborn_stub(dir.path(), 30));
+        let id = SessionId::fresh().unwrap();
+        let mut session = runner
+            .open_session(&id, &dir.path().join("work"), "", false)
+            .expect("the stub should start");
+
+        session.stop();
+        let started = std::time::Instant::now();
+        drop(session);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
 
     /// A session that cannot start is an error, not a handle to nothing. Everything
     /// downstream would otherwise believe it is talking to something.

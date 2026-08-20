@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 13 | `Session::drop` closed stdin and then called `child.wait()` with no kill and no bound, and every give up path only drops the session, so a blown deadline bought nothing and one stuck session stalled everything behind it. | Never fired. Reproduced with a stub that ignores EOF on stdin: the deadline fired at 2.0s and the drop was still blocked 30 seconds later. | `dropping_a_session_does_not_wait_for_a_child_that_will_not_stop`, `a_session_that_finishes_on_its_own_is_not_killed`, `stopping_twice_is_harmless` |
 
 ## bug 11, in full
 
@@ -157,3 +158,52 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 13, in full
+
+`Session::drop` closed stdin and then called `child.wait()`. No kill, no bound.
+
+Closing stdin is the right first move and the comment explaining it was correct: the transcript
+is what a later `--resume` reads, and killing mid write leaves it half done. The mistake was
+treating the polite ask as the whole plan. Every path that gives up on an agent gives up by
+dropping the `Session`, and the session being given up on is usually the one that has already
+blown a deadline, which is exactly the one that will not answer.
+
+So the deadline bought nothing. `run_with_deadline` declared 900 seconds blown and then blocked
+for as long as the child felt like continuing. In the pool, eviction runs on the request path,
+so one stuck session stalled the voice loop behind it. Reproduced with a stub that ignores EOF
+on stdin: the deadline fired at 2.0 seconds and the drop was still blocked 30 seconds later.
+
+Fix. `Session::stop`, which closes stdin, waits a bounded `GRACE` of two seconds, and then
+kills. `Drop` calls it, and it is safe to call twice, which there is a test for because `Drop`
+runs after any explicit call.
+
+**The kill was not enough, and finding that out is the part worth keeping.** The first version
+did exactly what the issue asked for: close stdin, bounded wait, `child.kill()`. The test still
+took the full thirty seconds.
+
+The reason is that `stop` also joins the reader thread, and the reader thread is blocked reading
+the child's stdout pipe. Killing the direct child does not close that pipe, because the stub's
+`sleep` was a grandchild and it inherited the write end. A pipe stays open while any process
+holds it. That is not an artefact of the stub either: claude spawns MCP servers and shell tools,
+and they inherit the same pipe, so a claude killed mid tool call leaves exactly this.
+
+So the child is now spawned with `process_group(0)`, making it its own group leader, and the
+kill goes to the whole group with `kill(-pid, SIGKILL)`. Everything it started dies, the pipe
+closes, and the reader thread ends.
+
+Worth knowing about that change: a child in its own process group no longer receives a terminal
+`Ctrl+C` along with the parent. For children driven programmatically, which is all of these,
+that is fine and arguably better, but it is a real difference and not a free one.
+
+Guard. `dropping_a_session_does_not_wait_for_a_child_that_will_not_stop` uses a stub that traps
+`HUP` and `PIPE` and keeps working after EOF, because a child that exits when its stdin closes
+would hide the bug completely: the polite ask alone would be enough and the test would pass
+against the broken code.
+
+`a_session_that_finishes_on_its_own_is_not_killed` is the other direction, asserting a
+well behaved child is gone well inside `GRACE` rather than waiting the full two seconds, so the
+fix cannot degrade into killing everything immediately and losing the transcript.
+
+Verified by putting the bare `child.wait()` back. The first test failed at 30.01 seconds and the
+other two passed.
