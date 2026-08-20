@@ -320,13 +320,13 @@ fn carry_out(
             let mut journal = open_journal(home)?;
             let recorded =
                 command::record(&mut journal, Intervention::Objective { what: text.clone() })?;
-            let _ = speak(home, &format!("New objective from JJ: {text}"), out, id);
+            // Kept rather than discarded. This used to be `let _ = speak(...)` followed by an
+            // unconditional "Carl told", so a turn that failed still reported success and
+            // nothing on screen or in the journal contradicted it. See bug 25.
+            let told = speak(home, &format!("New objective from JJ: {text}"), out, id);
             return Ok(Reply::Done {
                 seq: Some(recorded.seq),
-                what: format!(
-                    "objective recorded and Carl told, {} notified",
-                    recorded.told.len()
-                ),
+                what: objective_outcome(recorded.seq, recorded.told.len(), told.err()),
             });
         }
         PanelCommand::Inspect { agent } => {
@@ -396,6 +396,26 @@ fn holding(home: &Path, agent: &str) -> Result<TaskId> {
         })
 }
 
+/// What to tell JJ about an objective, given whether Carl could be reached.
+///
+/// `Done` either way, and that is the decision worth writing down. The `say` command turns the
+/// same failure into a refusal, which is right there, because nothing happened. Here the
+/// intervention really was appended and the notifications really were written, so refusing
+/// would say nothing happened when something did. What has to change is only the claim about
+/// Carl, not the claim about the record.
+///
+/// The sequence is named in the failure case on purpose. If Carl was not reached, the record is
+/// the only thing that survived the command, so it is the thing JJ needs in hand.
+fn objective_outcome(seq: u64, notified: usize, failed: Option<crate::Error>) -> String {
+    match failed {
+        None => format!("objective recorded and Carl told, {notified} notified"),
+        Some(e) => format!(
+            "objective recorded at seq {seq}, {notified} notified, but Carl could not be \
+             reached: {e}"
+        ),
+    }
+}
+
 /// Asks Carl, through the same machinery every other surface uses.
 ///
 /// Text is forwarded as it arrives rather than at the end, because `turn::stream` already hands
@@ -417,4 +437,44 @@ fn speak(home: &Path, said: &str, out: &mut UnixStream, id: Option<String>) -> R
         seq: None,
         what: answer.text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug. `speak`'s result was discarded and the reply said "Carl told" whatever
+    /// happened. With the claude binary missing, rate limited, or the turn failing for any
+    /// reason, JJ was told the objective reached Carl when it reached nobody, and nothing on
+    /// screen or in the journal contradicted it.
+    #[test]
+    fn a_failed_turn_does_not_claim_carl_was_told() {
+        let what = objective_outcome(7, 2, Some(crate::Error::Claude("cannot run claude".into())));
+
+        assert!(
+            !what.contains("Carl told"),
+            "a failed turn must not report success: {what}"
+        );
+        assert!(what.contains("could not be reached"), "{what}");
+        assert!(what.contains("cannot run claude"), "and says why: {what}");
+    }
+
+    /// The record survived even when the turn did not, so the sequence is named. If Carl was
+    /// not reached, that record is the only thing the command left behind and it is what JJ
+    /// needs in hand.
+    #[test]
+    fn a_failed_turn_still_names_the_record_it_made() {
+        let what = objective_outcome(7, 2, Some(crate::Error::Claude("boom".into())));
+        assert!(what.contains("seq 7"), "{what}");
+        assert!(what.contains("2 notified"), "{what}");
+    }
+
+    /// And a turn that worked still says so, which is the ordinary case and the one that must
+    /// not be made vague by any of the above.
+    #[test]
+    fn a_turn_that_worked_still_says_carl_was_told() {
+        let what = objective_outcome(7, 2, None);
+        assert!(what.contains("Carl told"), "{what}");
+        assert!(!what.contains("could not be reached"), "{what}");
+    }
 }

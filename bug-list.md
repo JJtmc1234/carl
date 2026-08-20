@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 25 | The objective command discarded the result of `speak` and replied "objective recorded and Carl told" unconditionally, so a failed turn reported that Carl had been reached when he had not. | Never fired in the wild, found by reading. `let _ = speak(...)` is the whole bug, and nothing on screen or in the journal contradicted the claim. | `a_failed_turn_does_not_claim_carl_was_told`, `a_failed_turn_still_names_the_record_it_made` |
 
 ## bug 11, in full
 
@@ -157,3 +158,35 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 25, in full
+
+`let _ = speak(...)` followed by a reply saying Carl had been told.
+
+Whatever the turn did, JJ was told the objective reached Carl. With the claude binary missing,
+rate limited, or the turn failing for any other reason, the intervention was appended, the
+notifications were written, the error was dropped on the floor, and the panel printed success.
+Nothing on screen or in the journal disagreed with it.
+
+This is the failure this project cares about most and has a rule against: never say something
+worked when it was not checked. Here it was worse than not checking, because the answer was
+there in a `Result` and was explicitly thrown away.
+
+Fix. The result is kept and the wording comes from it.
+
+The decision worth recording is that it stays a `Done` rather than becoming a refusal. The
+`say` command turns the same failure into a refusal, and that is right there, because nothing
+happened. Here the intervention really was appended and the notifications really were written.
+Refusing would say nothing happened when something did, which is the same class of lie pointing
+the other way. Only the claim about Carl was wrong, so only the claim about Carl changes.
+
+The failure message names the sequence number. If Carl was not reached, that record is the only
+thing the command left behind, so it is the thing JJ needs in hand to do anything about it.
+
+The wording moved into `objective_outcome` because the arm it lived in is inside `carry_out`,
+which needs a live socket, so none of this could be tested where it was. A claim about what
+happened is exactly the kind of thing that should be checkable without a socket.
+
+Guard. Two tests fail against the old behaviour: one that a failed turn does not say "Carl
+told" and does say why, and one that it still names the record it made. The third pins the
+ordinary case, because a fix that made every reply vague would satisfy the first two.
