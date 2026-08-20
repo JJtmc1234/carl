@@ -270,10 +270,17 @@ fn event_frame(r: Record) -> Frame {
 
 /// Whether the record can honour a request to continue from `since`.
 ///
-/// Two ways it cannot. The panel asks for a sequence past the end, which means it is holding a
+/// Three ways it cannot. The panel asks for a sequence past the end, which means it is holding a
 /// position from a different record than this one, most likely because the journal was replaced.
-/// Or the record no longer starts early enough to reach `since + 1`. Both are answered honestly
-/// rather than served as a stream with a hole in it that would look continuous.
+/// Or the record no longer starts early enough to reach `since + 1`. Or the record has a hole in
+/// the middle of it. All three are answered honestly rather than served as a stream with a hole
+/// in it that would look continuous.
+///
+/// The third used to be missed, and it is the one that cannot be recovered from. `event::read`
+/// drops a line it cannot parse, so an interior hole simply is not in `records` and the ends
+/// still line up. The stream then looked continuous, the client noticed the jump and refused
+/// it, and resubscribed from the same place, which produced the same jump. A fresh connection
+/// every 250ms, forever, and the panel never shows anything past the hole. See bug 22.
 fn gap(records: &[Record], since: u64) -> Option<Reply> {
     let first = records.first().map_or(0, |r| r.seq);
     let last = records.last().map_or(0, |r| r.seq);
@@ -296,7 +303,40 @@ fn gap(records: &[Record], since: u64) -> Option<Reply> {
             why: "the record no longer goes back that far. Take a fresh snapshot.".into(),
         });
     }
+
+    // Only across what would actually be sent. A hole before `since` is behind the panel and
+    // has already been lived with, so reporting it would refuse a request that can be served.
+    if let Some((before, after)) = first_hole(records, since) {
+        return Some(Reply::Gap {
+            asked_for: since,
+            have_from: first,
+            have_to: last,
+            why: format!(
+                "the record jumps from {before} to {after}, so part of it cannot be read and \
+                 streaming it would look continuous when it is not. Take a fresh snapshot."
+            ),
+        });
+    }
     None
+}
+
+/// The first discontinuity in the records that would be streamed, if there is one.
+///
+/// Returns the pair either side of it, so the reason given names the actual hole rather than
+/// saying something is missing somewhere.
+fn first_hole(records: &[Record], since: u64) -> Option<(u64, u64)> {
+    records
+        .iter()
+        .map(|r| r.seq)
+        .filter(|seq| *seq > since)
+        .zip(
+            records
+                .iter()
+                .map(|r| r.seq)
+                .filter(|seq| *seq > since)
+                .skip(1),
+        )
+        .find(|(a, b)| *b != a + 1)
 }
 
 /// Does what the panel asked, and writes down anything that reached past the chain.
@@ -417,4 +457,82 @@ fn speak(home: &Path, said: &str, out: &mut UnixStream, id: Option<String>) -> R
         seq: None,
         what: answer.text,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::army::event::Event;
+
+    fn record(seq: u64) -> Record {
+        Record {
+            seq,
+            at: seq,
+            actor: "carl".into(),
+            event: Event::Decided {
+                task: None,
+                what: format!("thing {seq}"),
+            },
+        }
+    }
+
+    fn records(seqs: &[u64]) -> Vec<Record> {
+        seqs.iter().map(|s| record(*s)).collect()
+    }
+
+    fn why(reply: Option<Reply>) -> String {
+        match reply {
+            Some(Reply::Gap { why, .. }) => why,
+            other => panic!("expected a gap, got {other:?}"),
+        }
+    }
+
+    /// The bug. `event::read` drops a line it cannot parse, so a hole in the middle is simply
+    /// not in the records and the two ends still line up. The stream looked continuous, the
+    /// client saw the jump and refused it, then resubscribed from the same place and got the
+    /// same jump, opening a fresh connection every 250ms forever while the panel never showed
+    /// anything past the hole.
+    ///
+    /// The shape is ordinary: a writer interrupted between a record's JSON and its newline
+    /// makes the next append concatenate onto it, and both lines become unparseable.
+    #[test]
+    fn a_hole_in_the_middle_is_reported_rather_than_streamed() {
+        let reason = why(gap(&records(&[3, 5, 6]), 2));
+        assert!(reason.contains("jumps from 3 to 5"), "{reason}");
+    }
+
+    /// A record with nothing missing streams, which is the ordinary case and the one that
+    /// must not be turned into a reconnect.
+    #[test]
+    fn a_continuous_record_is_served() {
+        assert!(gap(&records(&[3, 4, 5, 6]), 2).is_none());
+        assert!(gap(&records(&[1, 2, 3]), 0).is_none());
+        assert!(gap(&records(&[]), 0).is_none());
+    }
+
+    /// A hole behind the panel's position has already been lived with. Reporting it would
+    /// refuse a request that can be served perfectly well, which would be the fix causing the
+    /// symptom it was written to remove.
+    #[test]
+    fn a_hole_before_the_asked_for_point_is_not_a_gap() {
+        assert!(gap(&records(&[1, 5, 6, 7]), 5).is_none());
+    }
+
+    /// The two ends were already checked and still have to be.
+    #[test]
+    fn the_ends_are_still_checked() {
+        let past = why(gap(&records(&[1, 2, 3]), 9));
+        assert!(past.contains("past the end"), "{past}");
+
+        let behind = why(gap(&records(&[8, 9, 10]), 2));
+        assert!(behind.contains("no longer goes back"), "{behind}");
+    }
+
+    /// The reason names the actual hole. "Something is missing" sends somebody reading the
+    /// whole journal, and the panel protocol is meant to be debuggable with `nc -U`.
+    #[test]
+    fn the_reason_names_where_the_hole_is() {
+        let reason = why(gap(&records(&[1, 2, 7, 8]), 0));
+        assert!(reason.contains("jumps from 2 to 7"), "{reason}");
+    }
 }

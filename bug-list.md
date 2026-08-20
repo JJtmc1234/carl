@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 22 | `gap()` compared `since` only against the first and last sequence, and `event::read` drops a line it cannot parse, so a hole in the middle was streamed as if continuous. The client refused the jump and resubscribed from the same place, forever. | Reproduced: a writer interrupted between a record's JSON and its newline made two records unparseable, and `panel_watch` alternated Reconnecting and Connected until its cap, stuck at `last accepted sequence: 3`. | `a_hole_in_the_middle_is_reported_rather_than_streamed`, `a_hole_already_in_the_record_is_answered_with_a_gap`, `a_sequence_that_jumps_mid_stream_is_an_error_not_a_value` |
 
 ## bug 11, in full
 
@@ -157,3 +158,48 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 22, in full
+
+`gap()` checked the two ends of the record and not the middle.
+
+That is enough when the record is what it claims to be, and it is not, because `event::read`
+drops any line it cannot parse. A hole in the middle therefore is not in `records` at all: the
+first and last sequences still line up, `gap` says the request can be honoured, and the stream
+goes out looking continuous.
+
+The client then does its job and refuses the jump, and that is where it becomes unrecoverable.
+It resubscribes from the same last accepted sequence, gets the same records, sees the same jump,
+and refuses again. A fresh connection every 250ms, forever, with the panel never showing
+anything past the hole. Reproduced with `examples/panel_watch`, which alternated Reconnecting
+and Connected until its 40 update cap with `last accepted sequence: 3`.
+
+Making the hole needs no crash and no concurrency. One writer interrupted between a record's
+JSON and its newline is enough: the next append lands on the same line and both records become
+unparseable.
+
+Fix. `gap` also looks for a discontinuity across the records it is about to send, and answers
+`Reply::Gap` when it finds one. That routes the panel into resync, which was already written
+and already correct.
+
+Only across what would be sent, which matters. A hole behind `since` is already behind the
+panel and has been lived with, so reporting it would refuse a request that can be served
+perfectly well. That would be the fix causing the symptom it was written to remove.
+
+The reason names the pair either side of the hole, because "something is missing" sends
+somebody reading the whole journal, and this protocol is meant to be answerable with `nc -U`.
+
+An existing test had to change, and how is the part worth recording.
+`a_stream_that_skips_a_sequence_is_an_error_not_a_value` asserted the *client* catches a hole.
+It did, and after this fix that path is unreachable, because the backend catches it first. The
+temptation is to update the test to the new behaviour and move on. That would have left the
+client's own check as the only untested guard in the file, which is how a guard gets deleted
+later as dead code.
+
+So it became two. The old one now asserts the backend answers with a gap and streams nothing.
+A new one, `a_sequence_that_jumps_mid_stream_is_an_error_not_a_value`, drains to the live point
+first and then appends a jumped record, which is a hole the backend's check cannot see because
+it runs once at subscribe. That still reaches the client, and the client still refuses it.
+
+Verified by removing the interior check. Both new unit tests failed with "expected a gap, got
+None", and the three covering the existing behaviour kept passing.

@@ -318,9 +318,16 @@ fn a_gap_becomes_a_fresh_snapshot_rather_than_a_guess() {
     assert_eq!(live.health(), Health::Connected);
 }
 
-/// A hole must stop the client rather than be smoothed over.
+/// A hole already in the record when the panel subscribes is caught by the backend, before a
+/// single event is streamed, and answered with a gap.
+///
+/// This test used to assert that the *client* caught it. It still would, and there is a test
+/// below proving that, but the client catching it was never a good outcome: it refuses the
+/// jump and resubscribes from the same place, which produces the same jump, so the panel
+/// reconnects every 250ms forever and never shows anything past the hole. Answering with a gap
+/// is what routes it into resync instead. See bug 22.
 #[test]
-fn a_stream_that_skips_a_sequence_is_an_error_not_a_value() {
+fn a_hole_already_in_the_record_is_answered_with_a_gap() {
     let dir = tempfile::tempdir().unwrap();
     let people = army(dir.path());
     let backend = Backend::start(dir.path());
@@ -341,6 +348,59 @@ fn a_stream_that_skips_a_sequence_is_an_error_not_a_value() {
         .unwrap()
         .subscribe(0)
         .unwrap();
+
+    let why = loop {
+        match events.recv() {
+            Ok(Incoming::Gap { why, .. }) => break why,
+            Ok(Incoming::Event(e)) => {
+                panic!("nothing may be streamed past a hole, got seq {}", e.seq)
+            }
+            Ok(_) => continue,
+            Err(e) => panic!("the backend should answer with a gap, not fail: {e}"),
+        }
+    };
+    assert!(
+        why.contains("jumps from"),
+        "and names where the hole is: {why}"
+    );
+}
+
+/// And the client's own check is still the second line of defence, for a hole that appears
+/// after the subscribe, which the backend's check cannot see because it runs once at the start.
+///
+/// Kept because the test above no longer reaches this path, and an untested guard is one
+/// somebody deletes as dead code.
+#[test]
+fn a_sequence_that_jumps_mid_stream_is_an_error_not_a_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let people = army(dir.path());
+    let backend = Backend::start(dir.path());
+
+    let mut journal = Journal::open(people.journal_path()).unwrap();
+    a_real_delegation(&mut journal);
+
+    let mut events = PanelClient::connect(&backend.socket())
+        .unwrap()
+        .subscribe(0)
+        .unwrap();
+
+    // Drained to the live point first, so what follows is genuinely mid stream.
+    loop {
+        match events.recv() {
+            Ok(Incoming::CaughtUp { .. }) => break,
+            Ok(_) => continue,
+            Err(e) => panic!("the replay should have been clean: {e}"),
+        }
+    }
+
+    // Appended after the backend has already decided the record was continuous.
+    let path = people.journal_path();
+    let mut text = std::fs::read_to_string(&path).unwrap();
+    text.push_str(
+        r#"{"seq":900,"at":1,"actor":"mason","event":"decided","task":null,"what":"leapt"}"#,
+    );
+    text.push('\n');
+    std::fs::write(&path, text).unwrap();
 
     let e = loop {
         match events.recv() {
