@@ -78,6 +78,35 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 18 | The `carl ask` and `carl chat` streaming loops tracked what had been printed as a byte offset into the visible text, and stripping a `[remember]` line makes that text shorter. The offset was never corrected, so every later slice cut into the middle of the answer. | A partial marker left on screen, the words after it never printed at all, and the tail mangled. The recorded answer was right the whole time, so nothing else noticed | `a_note_in_the_middle_does_not_mangle_what_follows`, `a_marker_split_across_deltas_never_reaches_the_screen`, `forget_and_seen_lines_are_held_back_too` |
+
+## bug 18, in full
+
+Numbered 18 because 12 through 17 are on the branches for issues 22 to 27, none landed.
+
+A terminal is the one surface that cannot take anything back. Slack rewrites the whole message
+and the panel redraws, so both can print something and change their mind. Bytes written to a
+tty are gone.
+
+`remember::split` removes memory lines from the answer, so the visible text gets shorter as
+more arrives. Both streaming loops held their position as a byte offset into that text and
+updated it only inside the branch that printed something, so the one case where it needed
+correcting was the one case where it was skipped. After a single note line the offset pointed
+past the end, and once more text arrived it pointed into the middle of it.
+
+Clamping the offset would have stopped it slicing into the wrong place and would not have
+fixed the visible damage, because the partial marker had already been printed and a terminal
+cannot unprint it. The real rule is that an unfinished line is the only text that can ever be
+retracted, so it is the only text worth holding back.
+
+Held narrowly on purpose. Waiting for a newline on every line would mean a paragraph appears
+all at once when it ends, which is most of what streaming is for. Ordinary prose does not
+begin with a bracket, so what is actually held back is a few characters and only while there
+is real doubt.
+
+Once, not twice. The same loop was written out in `repl.rs` and in `main.rs` and the same bug
+was in both, which is the more useful lesson than the offset itself.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.

@@ -193,26 +193,26 @@ fn main() -> Result<()> {
             // part of the answer, and printing them and then not having them in the final
             // text is the worst of both. Slack already did this and the terminal did not.
             let mut seen = String::new();
-            let mut printed = 0usize;
+            let mut printed = carl::showing::Shown::default();
 
             // No voice brief here. This is being read, not heard, and one or two sentences is
             // the wrong shape for a terminal.
             let answer = turn::stream(&home, &thread, &said, None, None, &mut |t| {
                 seen.push_str(t);
-                let visible = carl::remember::split(&seen).text;
-                // Only ever appends, and only on a character boundary. Stripping a note can
-                // shorten the visible text and nothing already printed can be taken back, and
-                // `printed` is a byte offset into an older version of the string, so slicing
-                // at it blindly could cut a character in half and panic.
-                if let Some(fresh) = visible.get(printed..)
-                    && !fresh.is_empty()
-                {
+                // `Shown` decides what can be printed. See bug 18, and the twin of this loop
+                // in `repl.rs` which had the same bug because it was the same code written
+                // out twice.
+                let fresh = printed.next(&seen);
+                if !fresh.is_empty() {
                     let _ = out.write_all(fresh.as_bytes());
                     let _ = out.flush();
-                    printed = visible.len();
                 }
                 carl::Flow::Continue
             })?;
+            let rest = printed.rest(&seen);
+            if !rest.is_empty() {
+                let _ = out.write_all(rest.as_bytes());
+            }
             println!();
             if answer.text.trim().is_empty() {
                 anyhow::bail!("claude returned an empty answer");

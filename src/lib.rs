@@ -33,6 +33,7 @@ pub mod panel;
 pub mod providers;
 pub mod pushback;
 pub mod remember;
+pub mod showing;
 pub mod slack;
 pub mod speech;
 pub mod threads;

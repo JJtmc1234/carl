@@ -79,7 +79,7 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
         // Printed as it arrives, and only the part anybody should see. A [remember] line is
         // Carl writing something down, not talking, so it is stripped before the terminal ever
         // gets it rather than after.
-        let mut shown = 0usize;
+        let mut shown = carl::showing::Shown::default();
         let mut whole = String::new();
 
         let asking = turn::Asking {
@@ -93,17 +93,13 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
 
         let mut on_text = |chunk: &str| {
             whole.push_str(chunk);
-            let visible = carl::remember::split(&whole).text;
-
-            // Only ever appends, and only on a character boundary. Stripping a note can
-            // shorten the visible text, nothing already printed can be taken back, and
-            // `shown` is a byte offset into an older version of the string.
-            if let Some(fresh) = visible.get(shown..)
-                && !fresh.is_empty()
-            {
+            // `Shown` decides what can be printed. Nothing written to a terminal can be taken
+            // back, and stripping a note shortens the visible text, so the two have to be kept
+            // in step somewhere that knows about both. See bug 18.
+            let fresh = shown.next(&whole);
+            if !fresh.is_empty() {
                 let _ = out.write_all(fresh.as_bytes());
                 let _ = out.flush();
-                shown = visible.len();
             }
             Flow::Continue
         };
@@ -118,6 +114,13 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
             turn::stream_in(asking, &mut on_text, &mut waiting)
         };
 
+        // Whatever was held back waiting for a newline that never came. A last line that
+        // turned out not to be a note would otherwise sit in the recorded answer and never
+        // reach the screen.
+        let rest = shown.rest(&whole);
+        if !rest.is_empty() {
+            let _ = out.write_all(rest.as_bytes());
+        }
         writeln!(out)?;
         match answer {
             Ok(a) if a.text.trim().is_empty() => {
