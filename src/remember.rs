@@ -62,18 +62,71 @@ pub struct Kept {
 /// Shared with forgetting on purpose. If naming and forgetting disagreed by one character,
 /// `[forget]` would silently do nothing and the wrong note would stay.
 pub fn note_name(note: &str) -> String {
-    let slug = note
-        .chars()
+    let flattened = flatten(note);
+    let words: Vec<&str> = flattened.split('-').filter(|s| !s.is_empty()).collect();
+    if words.is_empty() {
+        return String::new();
+    }
+
+    // The readable part, which is what a person reads in a directory listing and what a
+    // `[forget]` naming a filename types out.
+    let mut slug = words.iter().take(6).copied().collect::<Vec<_>>().join("-");
+    slug.truncate(cut_at(&slug, SLUG_BYTES));
+    let slug = slug.trim_end_matches('-');
+
+    // The whole note decides the name, not its opening. Six words is not enough to tell two
+    // facts apart, and anything phrased "The X at the Y ..." collides easily. Two notes that
+    // shared a name overwrote each other with no error and no message, and a `[forget]`
+    // worded with those six words removed whichever one currently held it. See bug 19.
+    // The words joined singly, not the flattened string, so runs of punctuation and the
+    // spaces around a note collapse away. Otherwise the same fact typed with a trailing full
+    // stop would be a second note sitting next to the first.
+    format!("{slug}-{:016x}", fingerprint(&words.join("-")))
+}
+
+/// Everything but letters and digits becomes a dash, and case stops mattering.
+///
+/// The words that come out of it feed both the readable part of the name and the fingerprint,
+/// so the same fact worded with different spacing or trailing punctuation is the same note
+/// rather than a second copy of it.
+fn flatten(note: &str) -> String {
+    note.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect::<String>()
         .to_lowercase()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .take(6)
-        .collect::<Vec<_>>()
-        .join("-");
+}
 
-    if slug.is_empty() { String::new() } else { slug }
+/// How many bytes of the readable part a name may use.
+///
+/// Well under the 64 `Memory::path_for` allows, so the dash and the fingerprint always fit.
+/// This used to cap the number of words and never the number of bytes, so six long words
+/// produced a name that was refused outright, and the note was lost while Carl had already
+/// said he had kept it. See bug 20.
+const SLUG_BYTES: usize = 40;
+
+/// The largest cut at or below `want` that does not land inside a character.
+fn cut_at(s: &str, want: usize) -> usize {
+    if s.len() <= want {
+        return s.len();
+    }
+    (0..=want)
+        .rev()
+        .find(|i| s.is_char_boundary(*i))
+        .unwrap_or(0)
+}
+
+/// A short, stable fingerprint of a note.
+///
+/// FNV-1a, written out rather than reached for in `std`. These end up as filenames that have
+/// to keep meaning the same thing next year, and `DefaultHasher` is explicitly not stable
+/// across Rust releases, so a toolchain upgrade would quietly rename every note on disk.
+fn fingerprint(text: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
 }
 
 /// Splits an answer into what to say and what to keep.
@@ -255,7 +308,55 @@ mod tests {
     fn a_note_and_a_forget_of_the_same_words_agree_on_the_name() {
         let fact = "JJ prefers two sentence answers";
         assert_eq!(note_name(fact), note_name(&format!("  {fact}!  ")));
-        assert_eq!(note_name(fact), "jj-prefers-two-sentence-answers");
+        // The readable part is still the opening words, so a directory listing is readable and
+        // a `[forget]` naming a filename is typable. What follows it is bug 19's fingerprint.
+        assert!(
+            note_name(fact).starts_with("jj-prefers-two-sentence-answers-"),
+            "{}",
+            note_name(fact)
+        );
+    }
+
+    /// Two facts opening with the same six words are two notes, not one. The whole of bug 19.
+    ///
+    /// Six words is not enough to tell facts apart, and anything phrased "The X at the Y ..."
+    /// collides easily. The second note used to overwrite the first with no error and no
+    /// message, taking its attribution with it.
+    #[test]
+    fn two_facts_that_start_the_same_get_two_names() {
+        let north = note_name("The red belt line at the north outpost is jammed");
+        let south = note_name("The red belt line at the south outpost is fine");
+
+        assert_ne!(north, south);
+        // And both are still readable, which is what the six word opening was for.
+        assert!(north.starts_with("the-red-belt-line-at-the-"), "{north}");
+        assert!(south.starts_with("the-red-belt-line-at-the-"), "{south}");
+    }
+
+    /// A name that a memory directory will not accept is a note that is silently lost, which
+    /// is the whole of bug 20.
+    ///
+    /// `Memory::path_for` refuses anything over 64 bytes. `note_name` capped the number of
+    /// words and never the number of bytes, so six long words were rejected outright while
+    /// Carl had already said in the same breath that he had kept it.
+    #[test]
+    fn a_name_is_always_short_enough_to_be_written() {
+        let long = "Hunter recommended reconfiguring authentication credentials                     programmatically throughout deployment";
+        for note in [
+            long,
+            "JJ likes short answers",
+            &"supercalifragilistic ".repeat(6),
+            &"x".repeat(500),
+        ] {
+            let name = note_name(note);
+            assert!(name.len() <= 64, "{} bytes: {name}", name.len());
+            assert!(!name.starts_with('-'), "{name}");
+            assert!(
+                name.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+                "{name}"
+            );
+        }
     }
 
     /// A filename becomes a path, so nothing path shaped may survive naming.

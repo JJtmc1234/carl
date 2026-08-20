@@ -23,6 +23,13 @@ pub struct Memory {
 /// Roughly four thousand words. Large enough to be useful, small enough to notice.
 pub const DEFAULT_BUDGET: usize = 24_000;
 
+/// The longest a note's filename may be, before `.md`.
+///
+/// `remember::note_name` keeps well under this deliberately, so a name it produces is always
+/// writable. It used to cap the number of words and never the number of bytes, so six long
+/// words made a name this refused and the note was lost. See bug 20.
+pub const NAME_BYTES: usize = 64;
+
 impl Memory {
     pub fn open(dir: impl Into<PathBuf>) -> Result<Self> {
         let dir = dir.into();
@@ -132,8 +139,17 @@ impl Memory {
 
     /// Note names are filenames, so they get the same treatment as thread ids.
     fn path_for(&self, name: &str) -> Result<PathBuf> {
+        // Length said separately from shape. A slug made of letters and dashes that was simply
+        // too long used to be refused with a message blaming the character set, which sends
+        // whoever reads it looking in the wrong place entirely. See bug 20.
+        if name.len() > NAME_BYTES {
+            return Err(Error::Refused(format!(
+                "a memory name may be {NAME_BYTES} bytes and this one is {}: {name:?}",
+                name.len()
+            )));
+        }
+
         let ok = !name.is_empty()
-            && name.len() <= 64
             && name
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -276,5 +292,89 @@ mod tests {
         let text = m.assemble().unwrap().unwrap();
         assert!(text.contains("a real note"));
         assert!(!text.contains("not markdown"), "{text}");
+    }
+    /// Two facts opening with the same six words both survive. The whole of bug 19.
+    ///
+    /// Against the real store rather than against the naming function, because the damage was
+    /// a file being overwritten and its attribution going with it, which a name comparison on
+    /// its own does not show.
+    #[test]
+    fn two_facts_that_start_the_same_do_not_overwrite_each_other() {
+        let d = tempfile::tempdir().unwrap();
+        let m = Memory::open(d.path()).unwrap();
+
+        let north = "The red belt line at the north outpost is jammed";
+        let south = "The red belt line at the south outpost is fine";
+        m.write_from(&crate::remember::note_name(north), north, "JJ")
+            .unwrap();
+        m.write_from(&crate::remember::note_name(south), south, "Hunter")
+            .unwrap();
+
+        let all = m.assemble().unwrap().expect("both notes should be there");
+        assert!(all.contains("north outpost is jammed"), "{all}");
+        assert!(all.contains("south outpost is fine"), "{all}");
+        assert!(
+            all.contains("said by JJ"),
+            "attribution went with it: {all}"
+        );
+        assert!(all.contains("said by Hunter"), "{all}");
+    }
+
+    /// And forgetting one of them leaves the other, since both go through the same name.
+    #[test]
+    fn forgetting_one_of_two_similar_facts_leaves_the_other() {
+        let d = tempfile::tempdir().unwrap();
+        let m = Memory::open(d.path()).unwrap();
+
+        let north = "The red belt line at the north outpost is jammed";
+        let south = "The red belt line at the south outpost is fine";
+        for (note, who) in [(north, "JJ"), (south, "Hunter")] {
+            m.write_from(&crate::remember::note_name(note), note, who)
+                .unwrap();
+        }
+
+        assert!(m.forget(&crate::remember::note_name(north)).unwrap());
+        let left = m.assemble().unwrap().expect("one note should be left");
+        assert!(!left.contains("north outpost"), "{left}");
+        assert!(left.contains("south outpost is fine"), "{left}");
+    }
+
+    /// A note with six long words has to reach the disk. The whole of bug 20.
+    ///
+    /// `note_name` capped the number of words and never the number of bytes, so this returned
+    /// a 76 byte slug, `path_for` refused it, and the note was lost while Carl had already
+    /// said in the same breath that he had kept it.
+    #[test]
+    fn a_note_with_long_words_is_still_written() {
+        let d = tempfile::tempdir().unwrap();
+        let m = Memory::open(d.path()).unwrap();
+
+        let note = "Hunter recommended reconfiguring authentication credentials \
+                    programmatically throughout deployment";
+        let name = crate::remember::note_name(note);
+        m.write_from(&name, note, "Hunter")
+            .expect("a note Carl said he kept must actually be kept");
+
+        let all = m.assemble().unwrap().expect("the note should be there");
+        assert!(all.contains("reconfiguring authentication"), "{all}");
+    }
+
+    /// A refusal has to name the reason it actually refused for.
+    ///
+    /// The old message blamed the character set for a name made of letters and dashes that was
+    /// simply too long, which sends whoever reads it looking in the wrong place.
+    #[test]
+    fn a_name_that_is_too_long_says_so_rather_than_blaming_the_letters() {
+        let d = tempfile::tempdir().unwrap();
+        let m = Memory::open(d.path()).unwrap();
+
+        let name = "a".repeat(NAME_BYTES + 1);
+        let why = m.write(&name, "anything").unwrap_err().to_string();
+
+        assert!(why.contains(&format!("{NAME_BYTES} bytes")), "{why}");
+        assert!(
+            !why.contains("letters, digits"),
+            "it blamed the character set: {why}"
+        );
     }
 }

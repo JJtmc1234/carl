@@ -243,6 +243,7 @@ impl Exchange<'_> {
                     eprintln!("  could not keep what was seen: {e}");
                 }
 
+                let mut lost = Vec::new();
                 for note in &kept.keep {
                     let name = crate::remember::note_name(note);
                     if name.is_empty() {
@@ -253,8 +254,22 @@ impl Exchange<'_> {
                         Ok(path) => eprintln!("  remembered: {}", path.display()),
                         // Never fatal. Failing to keep a note must not lose the answer that
                         // came with it, which somebody is waiting for.
-                        Err(e) => eprintln!("  could not keep a note: {e}"),
+                        Err(e) => {
+                            eprintln!("  could not keep a note: {e}");
+                            lost.push(note.as_str());
+                        }
                     }
+                }
+
+                // Said out loud rather than only to stderr. Carl has already told them he
+                // wrote it down, because writing the `[remember]` line is what saving is, and
+                // on the Slack path stderr goes to a service journal nobody is reading. Two
+                // people then believe a fact is kept and it is not. See bug 20.
+                if !lost.is_empty() {
+                    answer.text.push_str(&format!(
+                        "\n\n(I could not actually save that, so it is not remembered: {})",
+                        lost.join("; ")
+                    ));
                 }
 
                 // A session id we did not ask for means the next turn would resume the wrong

@@ -78,6 +78,51 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 19 | `note_name` kept only the first six words of a note, so two unrelated facts opening the same way got the same filename, and `Memory::write` is a plain overwrite. | The second note destroyed the first with no error and no message, taking its `(said by ...)` attribution with it, and a `[forget]` worded with those six words then removed whichever fact currently held the name | `two_facts_that_start_the_same_do_not_overwrite_each_other`, `forgetting_one_of_two_similar_facts_leaves_the_other`, `two_facts_that_start_the_same_get_two_names` |
+
+| 20 | `note_name` capped the number of words and never the number of bytes, and `Memory::path_for` refuses a name over 64. Six long words produced a name that was refused outright. | Carl said he had remembered it, because writing the `[remember]` line is what saving is, and nothing was written. On Slack the one line of stderr goes to a service journal nobody reads, so both sides believed the fact was kept | `a_note_with_long_words_is_still_written`, `a_name_is_always_short_enough_to_be_written`, `a_name_that_is_too_long_says_so_rather_than_blaming_the_letters` |
+
+## bugs 19 and 20, in full
+
+Numbered 19 and 20 because 12 through 18 are on the branches for issues 22 to 28, none landed.
+Two reports, one function, and the fixes had to be designed together: truncating a slug makes
+collisions more likely, so the thing that tells two notes apart has to survive the truncation.
+
+Six words is not enough to tell two facts apart. Anything phrased "The X at the Y ..." collides,
+and the north outpost and the south outpost were one file. The one that arrived second won,
+silently, and took the first one's attribution with it. The brief tells Carl that an identical
+note replaces itself, which implies a different note does not, so nobody in the conversation
+had any reason to expect a loss.
+
+The name is now a function of the whole note. The readable opening stays, because a directory
+listing should be readable and a `[forget]` naming a filename should be typable, and a short
+fingerprint of the normalised note follows it.
+
+Normalised, not raw, and that is the part worth remembering. The first version fingerprinted
+the flattened text, and a trailing full stop or the spaces around a note changed the answer, so
+the same fact typed twice would have become two notes. The existing test that a note and a
+forget of the same words agree on the name caught it immediately, which is exactly the job it
+was written for.
+
+FNV-1a written out rather than `DefaultHasher`, because these are filenames that have to keep
+meaning the same thing next year and the standard hasher is explicitly not stable across Rust
+releases. A toolchain upgrade would otherwise quietly rename every note on disk.
+
+Bug 20 is the same function failing in the other direction. A name over 64 bytes is refused by
+`Memory::path_for`, and the message blamed the character set for a name made entirely of
+letters and dashes, which sends whoever reads it looking in the wrong place. The readable part
+is now capped at 40 bytes so a legal name always comes back, and the refusal says which rule
+it broke.
+
+What made bug 20 costly rather than annoying is that Carl had already said he had kept it.
+Writing the `[remember]` line is what saving is, so the sentence goes out before the write is
+attempted. A failed write now goes into the answer itself rather than only to stderr, which on
+the Slack path is a service journal nobody is reading.
+
+One thing this does not do. Notes already on disk keep their old names, so they still load and
+can still be forgotten by filename, but a `[forget]` worded as the fact will no longer find
+one. That is a rename of JJ's own data and it is his call, not something to do quietly.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.
