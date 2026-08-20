@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 18 | The Slack websocket had no read timeout, no ping of its own and no idle watchdog, so a connection that died without a FIN left `ws.read()` blocked forever. Carl went deaf in Slack while looking perfectly healthy. | Never fired in the wild, found by reading. Reproduced against a real socket with a peer that accepts and then says nothing: the read blocks for as long as the peer holds it. | `a_peer_that_says_nothing_times_out_rather_than_blocking_forever`, `a_real_failure_is_not_a_timeout` |
 
 ## bug 11, in full
 
@@ -157,3 +158,56 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 18, in full
+
+The worst kind of failure this project can have: everything looks fine and nothing works.
+
+The Socket Mode connection was a plain blocking tungstenite stream with no read timeout.
+tungstenite answers pings it receives and never sends any of its own, so nothing on either
+side was checking whether the link still existed. A TCP connection that dies without a FIN,
+which is what a laptop suspending or a router handing out a new NAT mapping leaves, never
+delivers anything again and never errors either. `ws.read()` simply does not return.
+
+Everything downstream is then unreachable. The outer reconnect loop is below the read, so it
+is never entered. `Restart=always` in the unit file cannot help, because the process has not
+exited and is not going to. The OS TCP keepalive default is two hours. So Carl sits there
+having printed "connected to slack." and nothing since, and stays deaf until a person notices
+and restarts him.
+
+Fix, in three parts, because a timeout on its own is not a detector.
+
+A read timeout, so `read` returns to the loop instead of blocking. `TICK` is ten seconds and
+almost every tick is empty, which is normal rather than a signal, since Slack speaks only when
+it has something to say.
+
+Silence is counted rather than acted on. `heard_at` moves on any incoming frame, including
+pings and pongs, and only sustained silence means anything.
+
+After `PING_AFTER` the connection is prodded. This is the part that makes it a detector rather
+than a guess. Sending on a half open socket usually succeeds, so a send proves nothing. What
+proves something is the pong coming back, because that is incoming traffic and moves
+`heard_at`. A live connection therefore clears itself well before `DEAD_AFTER`, and a dead one
+cannot.
+
+The three durations only work in one order and there is a test pinning it. `PING_AFTER` after
+`DEAD_AFTER` would tear the connection down before ever prodding it, so the prod could never
+save a live one.
+
+The asymmetry is worth stating, since it is what justifies the numbers. Rebuilding a healthy
+connection costs one reconnect. Failing to rebuild a dead one costs every message anybody sends
+until a human notices. Those two mistakes are not the same size, so the thresholds lean towards
+reconnecting.
+
+Guard. `a_peer_that_says_nothing_times_out_rather_than_blocking_forever` runs against a real
+socket with a real peer that accepts and then says nothing, which is what a half open
+connection looks like from this end. It proves both halves in one test: that the timeout
+actually reaches the stream tungstenite owns, which is not obvious because tungstenite owns it
+and the TLS case is wrapped twice, and that the resulting error is told apart from a real
+failure.
+
+`a_real_failure_is_not_a_timeout` guards the opposite mistake. Treating a reset as a quiet tick
+would spin until `DEAD_AFTER` instead of reconnecting at once.
+
+Verified by removing the `set_read_timeout` call. The read took 5.000205098 seconds, which is
+exactly how long the test peer held the socket open, rather than the 200 milliseconds asked for.
