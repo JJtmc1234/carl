@@ -343,3 +343,72 @@ fn scrubbing_keeps_what_it_is_supposed_to_set() {
         "an unrelated variable was removed, so the scrub is too broad"
     );
 }
+
+/// The cap has to hold while nobody is draining, which is the whole of bug 13.
+///
+/// `scrollback_is_bounded` above drains in a loop, and a caller that drains continuously was
+/// exactly the only caller the old bound was true for. The reader thread pushed every chunk
+/// into an unbounded channel, and the trim only ran once `drain` had moved bytes out of it, so
+/// the real cost was whatever the shell printed between two drains.
+///
+/// Twenty megabytes rather than `yes` on its own, so the command ends by itself and cannot
+/// leave a spinning process behind if this test fails.
+#[test]
+fn output_is_bounded_even_when_nobody_drains() {
+    let d = tempfile::tempdir().unwrap();
+    let mut t = open_in(d.path());
+
+    t.send_line("yes hello | head -c 20000000").unwrap();
+    // Deliberately not draining. This is the panel drawing some other pane.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    let held = t.scrollback().len();
+    let fresh = t.drain();
+    let produced = fresh.len() as u64 + t.dropped();
+
+    // Otherwise the shell was too slow to have proved anything and the assertions below would
+    // pass on the old code as well.
+    assert!(
+        produced > 4 * SCROLLBACK_BYTES as u64,
+        "only {produced} bytes came through, which is too few to test a {SCROLLBACK_BYTES} cap"
+    );
+    assert!(held <= SCROLLBACK_BYTES, "scrollback held {held} bytes");
+    assert!(
+        fresh.len() <= SCROLLBACK_BYTES,
+        "one drain returned {} bytes against a {SCROLLBACK_BYTES} cap",
+        fresh.len()
+    );
+    assert!(t.dropped() > 0, "bytes were dropped and it did not say so");
+}
+
+/// Trimming the front moves the undrained mark with it, or the next drain reads the wrong
+/// window. Cheap to get wrong and silent when it is.
+///
+/// Worth being clear about what this is: a guard on the arithmetic the fix introduced, not a
+/// regression guard for bug 13. It passes against the old code, because there was no mark to
+/// keep in step back when the trim only ran at drain time. The three that do fail against the
+/// old code are `output_is_bounded_even_when_nobody_drains`,
+/// `a_pane_that_never_stops_printing_stays_bounded` and
+/// `trimming_lands_on_a_character_boundary`.
+#[test]
+fn trimming_the_front_does_not_confuse_the_next_drain() {
+    let d = tempfile::tempdir().unwrap();
+    let mut t = open_in(d.path());
+
+    t.send_line("yes hello | head -c 2000000").unwrap();
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // The scrollback is the last SCROLLBACK_BYTES, and an undrained reader is owed exactly
+    // that same window rather than more of it or a slice of the wrong part.
+    let held = t.scrollback();
+    let fresh = t.drain();
+    assert_eq!(fresh, held, "the drain did not match what was held");
+
+    // And a second drain is empty, because everything has now been handed over once.
+    t.send_line("echo done-here").unwrap();
+    let after = wait_for(&mut t, "done-here");
+    assert!(
+        !after.contains("hello"),
+        "output came back a second time after being drained"
+    );
+}

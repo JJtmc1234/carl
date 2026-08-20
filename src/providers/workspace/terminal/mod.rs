@@ -17,7 +17,8 @@
 //! **Nothing is captured.** Output is held in a bounded ring in memory so the panel can draw
 //! it, and it is never written to disk, never parsed for content, and never logged. A terminal
 //! that scraped its own output would be a terminal that recorded whatever JJ typed into a
-//! password prompt.
+//! password prompt. The ring is bounded by the thread that fills it rather than by the caller
+//! that empties it, so the sentence above holds for a caller that never drains at all.
 //!
 //! A real pseudoterminal rather than a command runner. `portable-pty` was checked on this
 //! machine before it was chosen: shell state persists across writes, `tty` reports a real
@@ -26,7 +27,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -35,7 +36,43 @@ use crate::{Error, Result};
 /// How much output is kept for redrawing. Beyond this the oldest is dropped.
 ///
 /// Bounded because a runaway `yes` should cost a fixed amount of memory rather than all of it.
+///
+/// This is the whole budget, not the budget after somebody drains. The reader thread used to
+/// push every chunk into an unbounded channel and this cap only applied once `drain` had moved
+/// the bytes out of it, so the real cost was whatever the shell printed between two drains. A
+/// `yes` in a pane the panel was not drawing grew at about 40 MiB a second. See bug 13.
 pub const SCROLLBACK_BYTES: usize = 256 * 1024;
+
+/// The single buffer the reader thread writes into and `drain` reads out of.
+///
+/// One buffer rather than a queue in front of a buffer, because two places to put bytes means
+/// only one of them can be the one that is bounded.
+#[derive(Default)]
+struct Ring {
+    /// Never longer than [`SCROLLBACK_BYTES`].
+    bytes: Vec<u8>,
+    /// Where the output nobody has drained yet starts. Moves down when the front is trimmed.
+    fresh_from: usize,
+    /// How much was thrown away for being over the cap, so the loss can be seen rather than
+    /// guessed at. A terminal that quietly eats output looks like a shell that said nothing.
+    dropped: u64,
+}
+
+impl Ring {
+    /// Appends, then trims the front so the cap holds at all times rather than at drain time.
+    fn push(&mut self, chunk: &[u8]) {
+        self.bytes.extend_from_slice(chunk);
+        if self.bytes.len() > SCROLLBACK_BYTES {
+            let over = self.bytes.len() - SCROLLBACK_BYTES;
+            self.bytes.drain(..over);
+            // Trimming the front moves the undrained mark with it. Without this the mark would
+            // point past bytes that no longer exist, and the next drain would panic or return
+            // the wrong window.
+            self.fresh_from = self.fresh_from.saturating_sub(over);
+            self.dropped += over as u64;
+        }
+    }
+}
 
 /// Environment that must not be inherited into the shell.
 ///
@@ -97,8 +134,7 @@ pub struct Terminal {
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     writer: Box<dyn Write + Send>,
-    output: Receiver<Vec<u8>>,
-    scrollback: Vec<u8>,
+    ring: Arc<Mutex<Ring>>,
     started_in: PathBuf,
     pid: Option<u32>,
 }
@@ -143,17 +179,24 @@ impl Terminal {
             .take_writer()
             .map_err(|e| Error::Refused(format!("could not write to the terminal: {e}")))?;
 
-        let (tx, output) = channel();
+        let ring = Arc::new(Mutex::new(Ring::default()));
+        let writing = Arc::clone(&ring);
         std::thread::spawn(move || {
             let mut chunk = [0u8; 4096];
             loop {
                 match reader.read(&mut chunk) {
                     Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if tx.send(chunk[..n].to_vec()).is_err() {
-                            break;
-                        }
-                    }
+                    // Trimmed here, in the thread that produces the bytes, so the cap does not
+                    // depend on anybody calling `drain`. The reader is never blocked: it drops
+                    // the oldest output instead, because stalling the pty read would push the
+                    // backlog into the kernel and hang the shell rather than bound anything.
+                    Ok(n) => match writing.lock() {
+                        Ok(mut ring) => ring.push(&chunk[..n]),
+                        // The only way to get here is a panic while the lock was held. There is
+                        // nowhere left to put the bytes, so the thread stops rather than
+                        // spinning on a lock that will never be good again.
+                        Err(_) => break,
+                    },
                 }
             }
         });
@@ -163,8 +206,7 @@ impl Terminal {
             master: pair.master,
             child,
             writer,
-            output,
-            scrollback: Vec::new(),
+            ring,
             started_in: cwd.to_path_buf(),
             pid,
         })
@@ -185,25 +227,40 @@ impl Terminal {
     }
 
     /// Everything printed since the last call, and nothing that was read before it.
+    ///
+    /// Capped by [`SCROLLBACK_BYTES`] like the scrollback is, because it is now a window onto
+    /// the same buffer rather than a queue that had been filling up in front of it. A caller
+    /// that stops draining for a minute gets the last 256 KiB, not the whole minute.
     pub fn drain(&mut self) -> Vec<u8> {
-        let mut fresh = Vec::new();
-        // Both an empty channel and a hung up one mean there is nothing more to take right
-        // now. A shell that has exited still leaves whatever it printed in the scrollback.
-        while let Ok(chunk) = self.output.try_recv() {
-            fresh.extend_from_slice(&chunk);
-        }
-
-        self.scrollback.extend_from_slice(&fresh);
-        if self.scrollback.len() > SCROLLBACK_BYTES {
-            let over = self.scrollback.len() - SCROLLBACK_BYTES;
-            self.scrollback.drain(..over);
-        }
+        let mut ring = self.locked();
+        let fresh = ring.bytes[ring.fresh_from..].to_vec();
+        ring.fresh_from = ring.bytes.len();
         fresh
     }
 
     /// Everything still held for redrawing.
-    pub fn scrollback(&self) -> &[u8] {
-        &self.scrollback
+    ///
+    /// A copy rather than a borrow, since the reader thread is appending to the same buffer and
+    /// a reference out of the lock would be a reference to something being written.
+    pub fn scrollback(&self) -> Vec<u8> {
+        self.locked().bytes.clone()
+    }
+
+    /// How much output has been thrown away for being over the cap.
+    ///
+    /// Exposed so a caller can say output was lost rather than let it disappear. Nothing in
+    /// this module decides what to do about it.
+    pub fn dropped(&self) -> u64 {
+        self.locked().dropped
+    }
+
+    /// The ring, taking the poison as an empty read rather than a panic.
+    ///
+    /// A poisoned lock means the reader thread died mid append. The terminal is still usable
+    /// for input and the shell is still alive, so bringing the panel down over it would be a
+    /// worse outcome than a redraw that is missing some output.
+    fn locked(&self) -> std::sync::MutexGuard<'_, Ring> {
+        self.ring.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Where the terminal was started.

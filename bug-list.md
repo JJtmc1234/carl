@@ -78,6 +78,38 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 13 | The pty reader pushed every chunk into an unbounded channel and the scrollback cap only ran inside `drain`, so the bound held for a caller that drained continuously and for nobody else. The pane's own `String` on the panel side had no bound at all. | A shell printing into a pane the panel was not drawing grew at about 40 MiB a second, and one `drain` came back with 23 MB against a documented 256 KiB cap | `output_is_bounded_even_when_nobody_drains`, `a_pane_that_never_stops_printing_stays_bounded`, `trimming_lands_on_a_character_boundary` |
+
+## bug 13, in full
+
+Numbered 13 rather than 12 because bug 12 is the project listing fix on branch
+`issue-22-one-bad-project-is-not-all`, which was written first and has not landed yet.
+
+Two places to put bytes, and only one of them was bounded.
+
+The module doc said output is held in a bounded ring, and the `SCROLLBACK_BYTES` comment said
+a runaway `yes` should cost a fixed amount of memory. Both were true once the bytes reached
+the ring. In front of the ring was an unbounded channel, and the trim only ran inside `drain`,
+so what it really cost was whatever the shell printed between two drains.
+
+The panel drains about eight times a second, which is why nobody saw it. The exposure is a
+pane the panel is not currently drawing, or a frame loop that stalls, and there the growth has
+no limit at all.
+
+The fix moves the ring into a `Mutex<Vec<u8>>` that the reader thread appends to and trims
+itself, with a mark for where the undrained output starts. The reader is never blocked. It
+drops the oldest output instead, because stalling the pty read would push the backlog into the
+kernel and hang the shell rather than bound anything. A `dropped` counter says how much went,
+so output that is lost can be reported rather than just disappearing.
+
+The second half was on the panel side, and it is the part that would have been missed by
+fixing only what the report pointed at. `app.rs` appended every drained byte into a `String`
+that nothing ever trimmed. Bounding the ring bounds what one drain returns and says nothing
+about a shell that prints steadily for an hour in small pieces. That string is now trimmed to
+the same cap, on a character boundary, since the bytes arrive through `from_utf8_lossy` and
+cutting a multi byte character in half would put a replacement glyph on the screen for output
+that arrived perfectly intact.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.

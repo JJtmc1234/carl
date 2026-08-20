@@ -29,6 +29,34 @@ pub struct Workspace {
     pub pane: Pane,
 }
 
+/// How much terminal text a pane keeps, matching the ring the facade holds it in.
+///
+/// The same number on purpose. Keeping more here than the terminal itself keeps would mean
+/// paying for scrollback the shell has already forgotten, and this side has no way to refill
+/// it. See bug 13.
+pub const PANE_OUTPUT_BYTES: usize = carl::providers::workspace::terminal::SCROLLBACK_BYTES;
+
+/// Appends drained output, dropping the oldest text once the pane is over its budget.
+///
+/// The second half of bug 13. Bounding the terminal's ring bounds what one `drain` can return,
+/// and this string was still growing forever on the other side of it, so a shell that printed
+/// steadily for an hour cost an hour of text either way.
+///
+/// Trimmed on a character boundary rather than at the byte, because the drained bytes are
+/// `from_utf8_lossy` output and cutting a multi byte character in half would put a replacement
+/// character on JJ's screen every time the cap was hit.
+pub fn append_bounded(output: &mut String, text: &str) {
+    output.push_str(text);
+    if output.len() <= PANE_OUTPUT_BYTES {
+        return;
+    }
+    let over = output.len() - PANE_OUTPUT_BYTES;
+    let cut = (over..=output.len())
+        .find(|i| output.is_char_boundary(*i))
+        .unwrap_or(output.len());
+    output.drain(..cut);
+}
+
 /// The four things the pane can be.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pane {
@@ -216,4 +244,47 @@ pub fn safe(text: &str) -> String {
         &cleaned[..cut],
         cleaned.len() - cut
     )
+}
+
+#[cfg(test)]
+mod bounded_output {
+    use super::*;
+
+    /// The pane's own string must not grow forever, which was the second half of bug 13.
+    ///
+    /// Bounding the terminal ring bounds what one drain returns. It says nothing about what
+    /// happens when a shell prints steadily for an hour and every drain is small.
+    #[test]
+    fn a_pane_that_never_stops_printing_stays_bounded() {
+        let mut output = String::new();
+        let chunk = "hello\n".repeat(1000);
+        for _ in 0..200 {
+            append_bounded(&mut output, &chunk);
+        }
+
+        assert!(
+            output.len() <= PANE_OUTPUT_BYTES,
+            "the pane held {} bytes against a {PANE_OUTPUT_BYTES} cap",
+            output.len()
+        );
+        // The newest text is the part worth keeping, since that is what JJ is reading.
+        assert!(output.ends_with("hello\n"), "the tail was not kept");
+    }
+
+    /// Trimming must cut between characters, or a cap that is hit mid character puts a
+    /// replacement glyph on the screen for output that arrived perfectly intact.
+    #[test]
+    fn trimming_lands_on_a_character_boundary() {
+        let mut output = "e".repeat(PANE_OUTPUT_BYTES);
+        // Three byte characters, so almost every byte offset is inside one.
+        append_bounded(&mut output, &"日".repeat(200));
+
+        assert!(output.len() <= PANE_OUTPUT_BYTES);
+        assert!(
+            !output.contains('\u{fffd}'),
+            "a character was cut in half: {:?}",
+            &output[..40]
+        );
+        assert!(output.ends_with('日'));
+    }
 }

@@ -24,7 +24,7 @@ use crate::command::{Command, InterventionKind, WorkspaceRequest};
 use crate::model::{Link, Snapshot, Speaker, Turn};
 use crate::source::PanelDataSource;
 
-pub use workspace::{Comparison, Pane, Workspace};
+pub use workspace::{Comparison, Pane, Workspace, append_bounded};
 
 mod apply;
 mod intervene;
@@ -363,7 +363,7 @@ impl App {
             if let Ok(bytes) = self.service.drain(id)
                 && !bytes.is_empty()
             {
-                output.push_str(&String::from_utf8_lossy(&bytes));
+                append_bounded(output, &String::from_utf8_lossy(&bytes));
             }
 
             *alive = self.service.is_alive(id);
@@ -371,7 +371,7 @@ impl App {
                 *exited = true;
                 // Deliberately not closed here. The scrollback is the evidence and it stays
                 // readable until the pane is dismissed, which is what releases the session.
-                output.push_str("\n[the shell exited]\n");
+                append_bounded(output, "\n[the shell exited]\n");
             }
         }
     }
