@@ -77,6 +77,7 @@ kind of thing that produces a confident answer about something that is not there
 | 10 | Any sentence containing "that", "this" or "here" was treated as pointing at the screen, so an ordinary conjunction took a screenshot. | "Remember that my mentor is called Hunter Zhang" flashed the screen, captured a black image, and spent vision tokens describing it | `a_conjunction_is_not_somebody_pointing_at_the_screen` |
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
+| 15 | `Mic::wait` spun until the byte counter advanced, with no deadline and no check that `arecord` was alive. Once the reader thread broke out the counter never moved again, so it waited forever. | Never fired. Reproduced by shadowing `arecord` with a script that exits 1: `Mic::open` returns Ok, then `carl listen` prints "measuring the room... " and hangs with no error, because stderr was `Stdio::null()`. | `waiting_on_a_dead_microphone_is_an_error_rather_than_forever`, `waiting_for_audio_that_never_arrives_gives_up` |
 
 ## bug 11, in full
 
@@ -157,3 +158,50 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## bug 15, in full
+
+A counter that is not moving looks exactly the same whether the room is quiet or the
+microphone is dead, and `Mic::wait` could only see the counter.
+
+Its only exit was the byte total advancing. The reader thread breaks out of its loop on `Ok(0)`
+or an error, and after that it never touches the total again, so once `arecord` is gone the
+condition `wait` is spinning on can never become true. Not unlikely, just impossible.
+
+Getting there is ordinary. `arecord` cannot open the capture device, because a USB microphone
+was unplugged or something else already has the source, so it exits straight after spawn.
+`Mic::open` only checks that the spawn succeeded, so it returns `Ok(Mic)` for a microphone that
+is already gone. stderr is `Stdio::null()`, so `arecord` said why and nobody heard it. The
+first `wait` is reached from `calibrate`, which runs immediately after printing
+"measuring the room... ", so `carl listen` sat there with that half sentence on screen forever.
+
+Fix, in two parts, because there are two ways to stall.
+
+The reader sets an `ended` flag when the pipe closes, and `wait` checks it. That is the real
+case and it is reported immediately rather than after any timeout, with a message naming the
+likely cause, since "arecord exited" on its own would send somebody looking in the wrong place.
+
+`wait` also has a deadline, ten times what was asked for with a floor of three seconds, for the
+other stall: the pipe still open and nothing arriving. Audio arrives in milliseconds, so three
+seconds of silence on a live pipe is already pathological. It is a backstop rather than a
+timing control, and the common case never reaches it.
+
+`wait` returns a `Result` now, and every caller propagates rather than ignoring it. That was
+the point of the change: `calibrate` returning a threshold invented from an empty buffer would
+have let everything downstream carry on as though it were listening.
+
+The `ended` check comes after the counter check on purpose, so audio already in flight still
+counts even if the pipe closed in the same instant.
+
+Guard. Both tests run `wait` on a thread and wait on a channel with a deadline, so a regression
+fails the test rather than hanging the suite. That is bug 2 in this list, and a guard against an
+infinite wait must not be able to become one.
+
+The microphone is built by hand rather than through `Mic::open`, and that is a real limitation
+worth stating. `open` runs `arecord` off `PATH` with nothing to point it elsewhere, and
+shadowing `PATH` is process wide, so a test doing it would race every other test in a parallel
+run. What is guarded is `wait`, which is where the bug was and which is reachable directly. The
+path from a failed `arecord` to `ended` being set is not covered by a test.
+
+Verified by stripping both new exits back out. Both tests failed at their own deadlines with
+"wait never returned".

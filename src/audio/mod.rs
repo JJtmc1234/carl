@@ -54,6 +54,11 @@ pub struct Mic {
     pub(super) shared: Arc<Mutex<Shared>>,
     pub(super) stop: Arc<AtomicBool>,
     pub(super) deaf: Arc<AtomicBool>,
+    /// Set when the audio pipe ends, which means no more audio is ever coming.
+    ///
+    /// Without this a waiter cannot tell a microphone that has died from one that is merely
+    /// quiet, because both look identical: a byte counter that is not moving. See bug 15.
+    pub(super) ended: Arc<AtomicBool>,
     pub(super) reader: Option<JoinHandle<()>>,
     pub(super) scratch: PathBuf,
 }
@@ -100,16 +105,23 @@ impl Mic {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let deaf = Arc::new(AtomicBool::new(false));
+        let ended = Arc::new(AtomicBool::new(false));
 
         let reader = {
             let shared = shared.clone();
             let stop = stop.clone();
             let deaf = deaf.clone();
+            let ended = ended.clone();
             std::thread::spawn(move || {
                 let mut chunk = vec![0u8; 4096];
                 while !stop.load(Ordering::Relaxed) {
                     match pipe.read(&mut chunk) {
-                        Ok(0) | Err(_) => break,
+                        // The pipe is done, so no byte counter will ever move again. Said out
+                        // loud, because a waiter that cannot see this waits forever.
+                        Ok(0) | Err(_) => {
+                            ended.store(true, Ordering::Relaxed);
+                            break;
+                        }
                         Ok(n) => {
                             let mut s = shared.lock().unwrap_or_else(|e| e.into_inner());
                             // Deaf still reads the pipe, and only then drops the bytes. A
@@ -136,6 +148,7 @@ impl Mic {
             shared,
             stop,
             deaf,
+            ended,
             reader: Some(reader),
             scratch: scratch_dir.join("listening.wav"),
         })
@@ -164,6 +177,69 @@ impl Drop for Mic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A microphone whose child is already gone, which is what an `arecord` that could not
+    /// open the capture device leaves behind.
+    ///
+    /// Built by hand rather than through `Mic::open`, because `open` runs `arecord` off
+    /// `PATH` with no way to point it elsewhere, and shadowing `PATH` is process wide and
+    /// would race every other test in the run. What is being guarded is `wait`, and `wait`
+    /// is reachable directly.
+    fn mic_with(ended: bool) -> Mic {
+        let child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 1"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        Mic {
+            child,
+            shared: Arc::new(Mutex::new(Shared::default())),
+            stop: Arc::new(AtomicBool::new(false)),
+            deaf: Arc::new(AtomicBool::new(false)),
+            ended: Arc::new(AtomicBool::new(ended)),
+            reader: None,
+            scratch: std::path::PathBuf::from("/dev/shm/carl-wait-test.wav"),
+        }
+    }
+
+    /// Runs `wait` on a thread with a deadline, so a regression fails the test instead of
+    /// hanging the suite. Bug 2 in this list was a test that hung a run with no output, and a
+    /// guard against an infinite wait must not be able to become one.
+    fn wait_outcome(mic: Mic, secs: f32) -> Option<Result<()>> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(mic.wait(secs));
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(8)).ok()
+    }
+
+    /// The bug. `wait` had no exit but the byte counter advancing, and the counter stops
+    /// moving forever once the reader thread breaks out. So an `arecord` that exited on the
+    /// first frame, because the device was missing or somebody else had it open, left
+    /// `carl listen` printing "measuring the room... " and hanging with no error at all.
+    #[test]
+    fn waiting_on_a_dead_microphone_is_an_error_rather_than_forever() {
+        let outcome = wait_outcome(mic_with(true), 0.6)
+            .expect("wait never returned, so a dead microphone still hangs");
+
+        let e = outcome.expect_err("a dead microphone must not look like success");
+        let text = e.to_string();
+        assert!(text.contains("arecord exited"), "{text}");
+    }
+
+    /// And the other way it can stall. The pipe is still open and simply nothing arrives, so
+    /// `ended` is never set. Without a deadline that spins just as forever as the first.
+    #[test]
+    fn waiting_for_audio_that_never_arrives_gives_up() {
+        let outcome = wait_outcome(mic_with(false), 0.1)
+            .expect("wait never returned, so a stalled microphone still hangs");
+
+        let text = outcome
+            .expect_err("silence forever is not success")
+            .to_string();
+        assert!(text.contains("never arrived"), "{text}");
+    }
 
     /// The bug this whole module was rewritten for. The ring must never grow past the
     /// window, however long the consumer is away, or the consumer reads stale audio.

@@ -9,9 +9,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::{BYTES_PER_SAMPLE, Mic, RATE, SETTLE};
-use crate::Result;
 use crate::audio::level::{SPEECH_FLOOR, rms_of};
 use crate::audio::wav::write_wav;
+use crate::{Error, Result};
 use std::sync::atomic::Ordering;
 
 impl Mic {
@@ -25,14 +25,45 @@ impl Mic {
     ///
     /// Sleeps rather than reading, because the reader thread owns the pipe now. Nothing here
     /// can fall behind: the window is always the most recent few seconds by construction.
-    pub fn wait(&self, secs: f32) {
+    ///
+    /// Errors rather than spinning when the audio stops coming. This used to have no exit but
+    /// the byte counter advancing, and a counter that is not moving looks identical whether
+    /// the room is quiet or `arecord` died on the first frame. So an unplugged microphone, or
+    /// a capture device somebody else already had open, hung `carl listen` forever after
+    /// printing "measuring the room... " and saying nothing else. See bug 15.
+    pub fn wait(&self, secs: f32) -> Result<()> {
         let want = (RATE as f32 * secs) as u64 * BYTES_PER_SAMPLE as u64;
         let start = self.shared.lock().unwrap_or_else(|e| e.into_inner()).total;
+
+        // A backstop, not a timing control. Ten times what was asked for, with a floor of
+        // three seconds so a short wait still gets room to be merely slow. Real audio arrives
+        // in milliseconds, so three seconds of nothing on a pipe that is still open is already
+        // pathological. The common case, arecord having died, is caught by `ended` below
+        // without waiting for this at all.
+        let deadline = std::time::Instant::now() + Duration::from_secs_f32((secs * 10.0).max(3.0));
+
         loop {
             std::thread::sleep(Duration::from_millis(50));
             let now = self.shared.lock().unwrap_or_else(|e| e.into_inner()).total;
             if now.saturating_sub(start) >= want {
-                return;
+                return Ok(());
+            }
+
+            // Checked after the counter, so audio already in flight still counts even if the
+            // pipe closed in the same moment.
+            if self.ended.load(Ordering::Relaxed) {
+                return Err(Error::Refused(
+                    "the microphone stopped sending audio. arecord exited, which usually means \
+                     the capture device is missing or something else already has it open"
+                        .into(),
+                ));
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Err(Error::Refused(format!(
+                    "waited for {secs} seconds of audio and it never arrived, though the \
+                     microphone is still open. Something upstream of arecord has stalled"
+                )));
             }
         }
     }
@@ -66,12 +97,16 @@ impl Mic {
     /// Returns the level below which this room counts as quiet. Rooms differ by more than
     /// any constant can cover: a laptop fan, an air conditioner and a quiet study are not
     /// the same number, and picking one wrong either records forever or cuts you off.
-    pub fn calibrate(&self, secs: f32) -> f32 {
-        self.wait(secs);
+    pub fn calibrate(&self, secs: f32) -> Result<f32> {
+        // The first thing that ever waits on the microphone, so it is where a dead one is
+        // found. Returning the error rather than a guessed threshold matters: a number
+        // invented from an empty buffer would let everything downstream carry on as though
+        // it were listening.
+        self.wait(secs)?;
         let room = rms_of(&self.window().0);
         // Comfortably above the room but far below speech. Speech typically sits ten times
         // over its own background, so tripling leaves room for both.
-        (room * 3.0).max(SPEECH_FLOOR)
+        Ok((room * 3.0).max(SPEECH_FLOOR))
     }
 
     /// Writes the current window out for whisper to read.
