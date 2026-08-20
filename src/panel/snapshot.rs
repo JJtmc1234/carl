@@ -64,8 +64,11 @@ pub fn build_from(people: &Personnel, records: &[Record], facts: &Facts) -> Resu
                 .and_then(|f| f.state.holding.as_ref())
                 .map(|t| t.to_string()),
             task_status: held.map(|t| t.status.clone()).into(),
+            // Through the helper rather than spelled out here. See bug 16.
             blocked: held
-                .map(|t| t.status == "changes_requested" && t.attempts >= crate::army::MAX_ATTEMPTS)
+                .map(|t| {
+                    tasks::changes_requested(&t.status) && t.attempts >= crate::army::MAX_ATTEMPTS
+                })
                 .into(),
             last_event: last_by(records, agent.name).into(),
             model: folder.map(|f| f.config.model.id().to_string()).into(),

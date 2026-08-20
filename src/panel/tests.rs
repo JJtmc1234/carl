@@ -154,6 +154,73 @@ fn the_folds_idea_of_finished_matches_the_types() {
         assert!(!tasks::settled(&s.to_string()), "{s} is not finished");
         assert!(!s.settled(), "and the type agrees");
     }
+
+    // Bug 16 was a spelling that could never match, so the spelling is checked against the
+    // thing that writes it rather than against a copy of itself.
+    assert!(tasks::changes_requested(
+        &Status::ChangesRequested.to_string()
+    ));
+    for s in [
+        Status::Assigned,
+        Status::InHand,
+        Status::Submitted,
+        Status::Accepted,
+        Status::Abandoned,
+    ] {
+        assert!(
+            !tasks::changes_requested(&s.to_string()),
+            "{s} is not a reviewer sending it back"
+        );
+    }
+}
+
+/// A task that has spent every attempt is waiting on somebody above, and the panel has to say
+/// so. This is the only signal it has, and it had no test at all.
+///
+/// The whole of bug 16. `Status::Display` writes "changes requested" with a space, `Event::moved`
+/// copies that string into the journal, and `snapshot.rs` compared it against
+/// "changes_requested" with an underscore, so `blocked` was permanently `Known(false)`.
+#[test]
+fn a_task_out_of_attempts_shows_as_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let people = army(dir.path());
+    let mut journal = Journal::open(people.journal_path()).unwrap();
+    let task = a_real_run(&mut journal);
+
+    // Rejected as many times as she is allowed, so the next move is not hers.
+    for attempt in 1..=crate::army::MAX_ATTEMPTS {
+        journal
+            .append(
+                "nora",
+                Event::Submitted {
+                    task: task.id.clone(),
+                    attempt,
+                    words: 40,
+                },
+            )
+            .unwrap();
+        journal
+            .append(
+                "mason",
+                Event::moved(&task.id, Status::Submitted, Status::ChangesRequested),
+            )
+            .unwrap();
+    }
+
+    let records = event::read(people.journal_path()).unwrap();
+    let snap = snapshot::build_from(&people, &records, &Facts::army_only()).unwrap();
+    let nora = snap.agents.iter().find(|a| a.name == "nora").unwrap();
+
+    assert_eq!(
+        nora.blocked,
+        Maybe::known(true),
+        "a task out of attempts did not show as blocked: {nora:?}"
+    );
+
+    // And the sibling fold, which the report says gets this right, must agree. Two folds over
+    // one journal disagreeing is what made this hard to see.
+    let other = crate::providers::army::journal::fold(&records);
+    assert_eq!(other.blocked().len(), 1, "the two folds disagree");
 }
 
 // ───────────────────────────── JJ interventions ─────────────────────────────

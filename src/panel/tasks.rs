@@ -131,3 +131,14 @@ pub fn held_by<'a>(tasks: &'a [TaskView], agent: &str) -> Option<&'a TaskView> {
 pub fn settled(status: &str) -> bool {
     matches!(status, "accepted" | "abandoned")
 }
+
+/// Whether a status is a reviewer sending the work back.
+///
+/// Here rather than spelled out at the call site, which is what bug 16 was. `snapshot.rs`
+/// compared against `changes_requested` with an underscore and `Status::Display` writes it
+/// with a space, so the comparison could never be true and the panel's only signal that a task
+/// had run out of attempts was permanently false. A spelling used in one place is a spelling
+/// nobody checks, so both live here next to `settled` and a test holds them against the enum.
+pub fn changes_requested(status: &str) -> bool {
+    status == "changes requested"
+}

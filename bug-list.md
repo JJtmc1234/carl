@@ -78,6 +78,31 @@ kind of thing that produces a confident answer about something that is not there
 
 | 11 | An interrupted append to the milestone file left it without a trailing newline, so the next append was glued onto the broken line and both were lost. | One crash cost two milestones, and the second was the one somebody had just recorded and believed was safe | `a_truncated_line_costs_only_itself_and_the_next_appends_survive_a_reopen` |
 
+| 16 | `snapshot.rs` compared a task status against `changes_requested` with an underscore, and `Status::Display` writes it with a space, so the comparison could never be true. | `AgentView.blocked` was permanently false, and it is the panel's only signal that a task has spent every attempt and is waiting on somebody above. One view showed `task_status: "changes requested"` and `blocked: false` at the same time | `a_task_out_of_attempts_shows_as_blocked`, and the spelling half of `the_folds_idea_of_finished_matches_the_types` |
+
+## bug 16, in full
+
+Numbered 16 because 12 through 15 are on the branches for issues 22 to 25, none landed.
+
+A one character typo, and the reason it survived is the part worth keeping.
+
+`Status::Display` writes "changes requested" with a space. `Event::moved` copies that string
+into the journal, and `panel::tasks::fold` assigns it verbatim. One place compared it against
+"changes_requested" with an underscore, and that place was the only consumer, so the
+comparison was never true and nothing ever looked wrong.
+
+The sibling fold in `providers/army/journal.rs` gets it right, which is what makes this a typo
+rather than two conventions. Two folds over one journal, one reporting the task blocked and
+the other not, and no test on the field at all.
+
+Comparing against the right string would have fixed it and left the shape that caused it. The
+spelling now lives next to `settled` in `panel/tasks.rs`, which is where the fold's other
+string knowledge already lives, and it is checked against `Status::Display` rather than
+against a copy of itself. A spelling used in exactly one place is a spelling nobody checks.
+
+The new test also asserts the two folds agree on the same journal, since that disagreement was
+the thing that would have made this visible if anybody had put them side by side.
+
 ## bug 11, in full
 
 Found by Process 3 while writing durability tests for the project store, not by anything failing.
