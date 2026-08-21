@@ -13,6 +13,7 @@ pub mod disk;
 pub mod gpu;
 pub mod proc;
 pub mod process;
+pub mod started;
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
