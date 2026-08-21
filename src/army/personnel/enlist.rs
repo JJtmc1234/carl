@@ -10,6 +10,13 @@
 //! only rank that may touch it.
 //!
 //! One thing to be exact about, because it is easy to read this as more than it is. The
+//! **Announced before it is written.** Both operations append the journal record first and
+//! create the folder second, and the id in `identity.json` is the sequence number of that
+//! record. That order is the house rule: a crash after the record loses an outcome anybody can
+//! look up, and a crash before it loses the fact that anything was attempted, which nothing
+//! recovers. It only works because every reason to refuse is asked before either happens.
+//!
+//! One thing to be exact about, because it is easy to read this as more than it is. The
 //! organisation in v1 is the fixed table in `army::org`. Enlisting gives a member of that
 //! table a folder and announces it. It does not invent a new agent: that means adding a row to
 //! `org.rs`, which is a change to a compiled in table and deliberately not something any agent
@@ -23,6 +30,7 @@ use crate::{Error, Result};
 
 use super::config::Config;
 use super::founding::founding_profile;
+use super::identity::{AgentId, Identity};
 use super::profile::Profile;
 use super::state::State;
 use super::store::{Folder, Personnel};
@@ -64,18 +72,15 @@ pub fn found(home: impl Into<std::path::PathBuf>, now: u64) -> Result<Personnel>
     for agent in org::everyone().iter().filter(|a| a.rank != Rank::Human) {
         let profile = founding_profile(agent.name);
         let said = announcement(agent, &profile);
-        army.install(Folder {
+        write_folder(
+            &mut army,
+            &mut journal,
+            "jj",
             agent,
             profile,
-            config: Config::default(),
-            state: State::fresh(now),
-        })?;
-        journal.append(
-            "jj",
-            Event::Decided {
-                task: None,
-                what: said,
-            },
+            Config::default(),
+            said,
+            now,
         )?;
     }
 
@@ -98,21 +103,58 @@ pub fn enlist(
     may_enlist(actor)?;
     let agent = org::require(name)?;
     let said = announcement(agent, &profile);
+    write_folder(
+        &mut *army, journal, actor, agent, profile, config, said, now,
+    )
+}
 
-    army.install(Folder {
+/// Announces one agent and then gives it a folder carrying the id of that announcement.
+///
+/// The single place either operation writes an agent, so founding and enlisting cannot come to
+/// disagree about what an agent starts as. Both refuse first, announce second and write third.
+#[allow(clippy::too_many_arguments)]
+fn write_folder(
+    army: &mut Personnel,
+    journal: &mut Journal,
+    actor: &str,
+    agent: &'static Agent,
+    profile: Profile,
+    config: Config,
+    said: String,
+    now: u64,
+) -> Result<Logged> {
+    // The id is minted here rather than inside the folder, because an id is only durable if
+    // exactly one thing may hand one out. Asked for before the record is written so that a
+    // machine with no /dev/urandom refuses rather than announcing an agent it cannot identify.
+    let id = AgentId::fresh()?;
+
+    // Every refusal happens before the announcement, so a refused enlistment leaves no folder
+    // and no record. After this line only the disk can fail.
+    army.may_install(&Folder {
         agent,
-        profile,
-        config,
+        identity: None,
+        profile: profile.clone(),
+        config: config.clone(),
         state: State::fresh(now),
     })?;
 
-    journal.append(
+    let record = journal.append(
         actor,
         Event::Decided {
             task: None,
             what: said,
         },
-    )
+    )?;
+
+    army.install(Folder {
+        agent,
+        identity: Some(Identity::new(id, record.seq)),
+        profile,
+        config,
+        state: State::fresh(now),
+    })?;
+
+    Ok(record)
 }
 
 /// What the rest of the army is told about a newcomer.

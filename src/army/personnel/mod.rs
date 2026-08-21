@@ -31,6 +31,8 @@ mod config;
 mod enlist;
 mod files;
 mod founding;
+mod identity;
+pub mod memory;
 mod profile;
 mod state;
 mod store;
@@ -40,6 +42,7 @@ mod tests;
 
 pub use config::{Config, DEFAULT_DEADLINE, Model};
 pub use enlist::{announcement, enlist, found, may_enlist};
+pub use identity::{AgentId, Identity};
 pub use profile::Profile;
 pub use state::{NOTE_LIMIT, RECENT_KEPT, State};
 pub use store::{Folder, Personnel};
@@ -66,10 +69,17 @@ pub fn describe(folder: &Folder) -> String {
          changes nothing: rank, reporting line and permission all come from the compiled \
          organisation table, not from any file here._\n\n\
          ## Identity\n\n\
-         - Name: {}\n- Role: {}\n- Rank: {}\n- Sits in: {}\n\n\
+         - Id: {}\n- Name: {}\n- Role: {}\n- Rank: {}\n- Sits in: {}\n\n\
+         The id is the durable one. The name, the role and the department may all change; the \
+         id was minted once and never will. Sessions and processes are replaced under it \
+         without this agent becoming a different agent.\n\n\
          ## Remit\n\n{}\n\n\
          ## Does not\n\n",
         agent.name,
+        folder.identity.as_ref().map_or_else(
+            || "none, this folder predates ids".to_string(),
+            |i| i.id.to_string()
+        ),
         agent.name,
         agent.display,
         agent.rank,
@@ -116,7 +126,13 @@ pub fn describe(folder: &Folder) -> String {
     out.push_str(
         "\n## State\n\nWhich task this agent is holding is in `state.json`, the only file here \
          that changes often. The status of that task belongs to the task itself and is not \
-         copied here.\n",
+         copied here.\n\n\
+         ## Memory\n\n`memory/` is this agent's own, and `memory/summary.md` is the way in. It \
+         is the one thing an agent is told about without having to go and look. Nothing in it \
+         grants anything; it is what this agent knows, not what it may do.\n\n\
+         ## Process\n\nWhether a process is running for this agent is not here either. That \
+         belongs to the supervisor, which writes it under `run/agents/` where this folder \
+         cannot reach it.\n",
     );
     out
 }

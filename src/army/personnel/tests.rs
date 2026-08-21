@@ -409,3 +409,145 @@ fn state_cannot_be_written_for_somebody_who_is_not_in_the_organisation() {
     assert!(army.update_state("piper", |s| s.note("hello", 1)).is_err());
     assert!(army.update_state("jj", |s| s.note("hello", 1)).is_err());
 }
+
+/// An id is worth having only if it is the same id tomorrow. Everything else about an agent is
+/// allowed to change, so this is the property the whole runtime layer is going to hang off.
+#[test]
+fn an_agent_keeps_its_id_across_a_restart() {
+    let d = tempfile::tempdir().unwrap();
+    let before = found(d.path(), 100).unwrap();
+    let written: Vec<Identity> = before
+        .names()
+        .iter()
+        .map(|n| before.identity(n).expect("founding mints one").clone())
+        .collect();
+    drop(before);
+
+    let after = reopen(d.path());
+    let read: Vec<Identity> = after
+        .names()
+        .iter()
+        .map(|n| after.identity(n).unwrap().clone())
+        .collect();
+    assert_eq!(written, read);
+}
+
+#[test]
+fn every_agent_gets_a_different_id() {
+    let d = tempfile::tempdir().unwrap();
+    let army = found(d.path(), 100).unwrap();
+    let ids: std::collections::BTreeSet<_> = army
+        .names()
+        .iter()
+        .map(|n| army.identity(n).unwrap().id.clone())
+        .collect();
+    assert_eq!(ids.len(), army.len(), "four agents, four ids");
+}
+
+/// The identity file points at the record that created the agent rather than repeating it, so
+/// "how did this agent get here" is answered by the journal and cannot be answered twice.
+#[test]
+fn an_identity_points_at_the_record_that_announced_it() {
+    let d = tempfile::tempdir().unwrap();
+    let army = found(d.path(), 100).unwrap();
+    let all = event::read(army.journal_path()).unwrap();
+
+    for name in army.names() {
+        let identity = army.identity(name).unwrap();
+        let record = all
+            .iter()
+            .find(|r| r.seq == identity.enlisted)
+            .unwrap_or_else(|| panic!("{name} points at a record that is not there"));
+        assert!(
+            matches!(&record.event, Event::Decided { what, .. } if what.contains(name)),
+            "{name} should be named by the record it points at"
+        );
+    }
+}
+
+/// The announcement is written before the folder, so a refusal has to happen before either.
+/// If it did not, a refused enlistment would leave a record of an agent that does not exist.
+#[test]
+fn a_refused_enlistment_leaves_no_record_and_no_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let mut army = found(d.path(), 100).unwrap();
+    let mut journal = Journal::open(army.journal_path()).unwrap();
+    let before = event::read(army.journal_path()).unwrap().len();
+
+    // Already has a folder, which is refused inside the store rather than by the caller.
+    let err = enlist(
+        &mut army,
+        &mut journal,
+        "carl",
+        "nora",
+        Profile::default(),
+        Config::default(),
+        200,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("already"), "{err}");
+
+    let after = event::read(army.journal_path()).unwrap();
+    assert_eq!(after.len(), before, "nothing was announced");
+}
+
+/// A folder from before identities existed is a folder full of real state. Refusing to load it
+/// would throw that away to enforce a field it could not have had.
+#[test]
+fn a_folder_with_no_identity_still_loads_and_says_so() {
+    let d = tempfile::tempdir().unwrap();
+    drop(found(d.path(), 100).unwrap());
+    std::fs::remove_file(d.path().join("army").join("nora").join("identity.json")).unwrap();
+
+    let army = reopen(d.path());
+    assert!(army.identity("nora").is_none(), "absent, and not invented");
+    assert!(army.identity("mason").is_some(), "the others are untouched");
+    assert_eq!(army.len(), 4, "and the army still loads");
+}
+
+/// Absent is a fact. Unreadable is a break, and loading past one would hand back an agent that
+/// has an id written down somewhere and does not know it.
+#[test]
+fn an_identity_that_will_not_parse_is_refused_rather_than_treated_as_absent() {
+    let d = tempfile::tempdir().unwrap();
+    drop(found(d.path(), 100).unwrap());
+    let path = d.path().join("army").join("nora").join("identity.json");
+    std::fs::write(&path, "{ not json").unwrap();
+
+    let err = Personnel::open(d.path()).unwrap_err().to_string();
+    assert!(err.contains("identity.json"), "{err}");
+}
+
+#[test]
+fn founding_gives_every_agent_a_memory_folder_with_a_way_in() {
+    let d = tempfile::tempdir().unwrap();
+    let army = found(d.path(), 100).unwrap();
+
+    for name in army.names() {
+        let dir = army.memory_dir(name);
+        assert!(dir.is_dir(), "{name} has no memory folder");
+        assert!(
+            dir.join(memory::SUMMARY).is_file(),
+            "{name} has no way into it"
+        );
+    }
+}
+
+/// The memory folder is the agent's own, so nothing that reloads the army may touch what is in
+/// it. Reopening a home is the most common way that would happen by accident.
+#[test]
+fn reopening_the_army_does_not_rewrite_what_an_agent_remembered() {
+    let d = tempfile::tempdir().unwrap();
+    let army = found(d.path(), 100).unwrap();
+    let summary = army.memory_dir("nora").join(memory::SUMMARY);
+    std::fs::write(&summary, "the counter overflows at 2^31").unwrap();
+    drop(army);
+
+    let army = reopen(d.path());
+    army.write_readme("nora").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&summary).unwrap(),
+        "the counter overflows at 2^31"
+    );
+}
