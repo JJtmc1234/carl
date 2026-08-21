@@ -1,0 +1,13 @@
+#!/bin/bash
+# A stand in for `claude` that behaves like a held open session: it reads one message per line
+# from stdin and stays up until stdin is closed. The supervisor tests need a process with a
+# lifetime they control, not a model.
+#
+# Checked in rather than written by the test, and that is the whole point of the file. A test
+# that writes a script and then execs it races every other thread in the same test binary: for
+# the moment between a fork and its exec, a child holds a copy of every open descriptor,
+# including a handle on the script still being written, and Linux refuses to exec a file
+# anybody has open for writing. The answer used elsewhere is to retry. Here a retry would mean
+# retrying a supervisor tick, which counts a failed attempt and changes what is being tested.
+# A file that is never written during a test run cannot be busy.
+while IFS= read -r _line; do :; done

@@ -42,6 +42,9 @@ mod tests;
 
 pub use config::{Config, DEFAULT_DEADLINE, Model};
 pub use enlist::{announcement, enlist, found, may_enlist};
+/// The careful small file reader and writer every agent file goes through, shared with the
+/// supervisor so its records get the same staged write and the same error naming the file.
+pub(crate) use files::{read_json, write_json};
 pub use identity::{AgentId, Identity};
 pub use profile::Profile;
 pub use state::{NOTE_LIMIT, RECENT_KEPT, State};

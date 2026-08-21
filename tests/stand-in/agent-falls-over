@@ -1,0 +1,4 @@
+#!/bin/bash
+# A stand in for `claude` that exits the moment it starts, which is what a broken one does.
+# Checked in for the same reason as agent-stays-up, next to it.
+exit 3

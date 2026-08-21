@@ -40,6 +40,8 @@ pub mod org;
 pub mod personnel;
 mod report;
 mod roster;
+/// Keeping agent processes alive, which is a different job from giving them work.
+pub mod runtime;
 pub mod task;
 
 pub use campaign::{Departmental, JOBS_PER_HEAD, Outcome, parse_jobs, run_department};

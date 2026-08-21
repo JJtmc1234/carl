@@ -252,6 +252,26 @@ impl Session {
     pub fn alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
+
+    /// Which process this is.
+    ///
+    /// Only a supervisor has any business with this. Everything else here talks to a session
+    /// through its pipes and would be worse for knowing a pid.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// The exit code, once there is one.
+    ///
+    /// `alive` asks the same question and throws the answer away. A supervisor deciding whether
+    /// to restart wants the code, because a process killed by a signal and one that chose to
+    /// exit are the same shape of event and not the same thing.
+    pub fn ended(&mut self) -> Option<Option<i32>> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(status.code()),
+            _ => None,
+        }
+    }
 }
 
 impl Drop for Session {
