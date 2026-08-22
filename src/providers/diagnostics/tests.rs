@@ -205,7 +205,7 @@ fn a_home_on_the_root_filesystem_does_not_duplicate_the_disk_component() {
 
 /// One source failing must cost one row, not the whole board.
 #[test]
-fn a_missing_systemctl_costs_three_rows_and_nothing_else() {
+fn a_missing_systemctl_costs_the_service_rows_and_nothing_else() {
     let d = tempfile::tempdir().unwrap();
     let army = crate::providers::army::Army::new(d.path());
 
@@ -221,7 +221,12 @@ fn a_missing_systemctl_costs_three_rows_and_nothing_else() {
         .iter()
         .filter(|x| x.component.starts_with("army.service."))
         .collect();
-    assert_eq!(services.len(), 3);
+    // Counted from the list rather than written down, because a unit added to the army is a
+    // unit this test should already cover rather than a number somebody has to remember.
+    assert_eq!(
+        services.len(),
+        crate::providers::army::services::CARL_UNITS.len()
+    );
     for s in services {
         assert_eq!(s.health, Health::Unknown, "{}", s.component);
         assert!(s.summary.contains("did not answer"), "{}", s.summary);

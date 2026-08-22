@@ -1,11 +1,17 @@
-//! Whether Carl himself is running.
+//! Whether Carl himself is running, and whether the army is.
 //!
-//! Carl is three systemd **user** units rather than a daemon with a control socket, so the only
-//! way to ask how he is doing from another process is to ask systemd. That is a good thing
+//! Four systemd **user** units rather than a daemon with a control socket, so the only way to
+//! ask how any of them is doing from another process is to ask systemd. That is a good thing
 //! here: systemd already knows about restarts, start time and exit status, and none of it
 //! needs elevated rights because user units belong to the user.
 //!
-//! Verified on this machine. `systemctl --user show` answers for all three units and reports
+//! Three of the four are ways of talking to Carl. The fourth, `carl-army`, is the supervisor,
+//! and it is a different kind of answer: if the microphone is down Carl cannot hear, and if the
+//! supervisor is down no agent is running at all. Nothing here ranks them, because the panel
+//! shows a row per unit and a ranking invented in this file would be a judgement nobody asked
+//! for. It is worth knowing while reading the rows.
+//!
+//! Verified on this machine. `systemctl --user show` answers for every unit and reports
 //! `ActiveState`, `SubState`, `NRestarts` and `ExecMainPID`.
 //!
 //! A restart count above zero matters even when the unit is active. All three units are
@@ -17,7 +23,7 @@ use std::process::Command;
 use crate::providers::health::{Diagnostic, Health, Kind, Metric, Reading};
 
 /// The units `etc/systemd/install.sh` installs.
-pub const CARL_UNITS: &[&str] = &["carl-aec", "carl-listen", "carl-slack"];
+pub const CARL_UNITS: &[&str] = &["carl-aec", "carl-listen", "carl-slack", "carl-army"];
 
 /// The binary that answers about them.
 pub const SYSTEMCTL: &str = "systemctl";

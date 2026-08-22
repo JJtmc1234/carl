@@ -1,0 +1,47 @@
+[Unit]
+# The Army Runtime Supervisor, which keeps every agent's process alive.
+#
+# The fourth unit, and the first that is not about Carl's voice. The other three are a
+# microphone, an echo canceller and a Slack connection, all of which are ways of talking to
+# Carl. This one is the army being up at all.
+#
+# No graphical session anywhere in here, on purpose. The supervisor needs no microphone, no
+# speakers and no screen, so unlike carl-listen it can genuinely run with nobody logged in.
+# That needs lingering, which install.sh explains.
+Description=Carl's army, supervised
+After=network-online.target
+Wants=network-online.target
+
+# These belong in [Unit]. systemd ignores them in [Service] without complaining, so the
+# obvious place gives rate limiting that silently does nothing.
+#
+# Wider than the others because a restart here is not free. Every supervisor start ends the
+# agent processes left by the last one and starts replacements resuming their conversations,
+# which is four `claude` startups. Five of those in ten minutes is already a lot of work to
+# have done for nothing, and past that something is wrong that restarting will not fix.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/carl supervise
+Restart=always
+# Long, for the same reason the limit is wide. There is nothing to gain by coming back in a
+# second, and a fast loop here spends money.
+RestartSec=30
+
+# The default, written down because it is what stops agents being left behind and it is not
+# obvious. Stopping the unit sends SIGTERM to every process in the cgroup, which is the
+# supervisor and every `claude` it started. Without that, a stop would kill only the
+# supervisor, and four models would sit there running with nothing able to talk to them,
+# because their pipes went with their parent.
+KillMode=control-group
+# Enough for a `claude` asked to stop to finish writing its transcript, which is what the next
+# start is going to resume. Not much more, because past that it is not going to.
+TimeoutStopSec=30
+
+# claude itself lives in ~/.local/bin, so this is not only about finding carl.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

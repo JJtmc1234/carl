@@ -43,7 +43,8 @@ replaced process quietly loses a conversation.
 | `army::runtime::store` | the records on disk, with one writer |
 | `army::runtime::lock` | one supervisor per home |
 | `army::runtime::supervisor` | the part that spawns, kills, wakes and carries a message |
-| `carl supervise` | the loop, and eventually a systemd unit around it |
+| `carl supervise` | the loop |
+| `etc/systemd/carl-army.service` | the unit that keeps the loop alive and starts it at boot |
 
 ### The properties worth knowing
 
@@ -77,6 +78,28 @@ somebody else composed. A test reads the supervisor's own source and fails if th
 journal answers what happened, and "the worker crashed, and then the task was reported finished"
 is a sentence somebody has to be able to read in order. Two files cannot be read in order, so
 there is one, and the sequence numbering is locked so two writers cannot claim one place in it.
+
+### The unit
+
+`carl-army.service` is a user unit, like the other three, and it is the only one with no
+business with a microphone or a screen, so it can genuinely run with nobody logged in. That
+needs lingering, which `install.sh` explains.
+
+Two numbers are wider than the other units', for the same reason. A supervisor restart is not
+free: every start ends the agent processes the last one left and starts replacements resuming
+their conversations, which is four `claude` startups. So it waits thirty seconds rather than
+five, and five restarts in ten minutes is the limit rather than five in two.
+
+**Stopping the unit stops every agent with it**, and that is the default rather than something
+clever. systemd signals the whole control group, which is the supervisor and every process it
+started. Without it, a stop would kill only the supervisor and leave four models running with
+nothing able to talk to them, because their pipes went with their parent. Verified rather than
+read off the manual page: run under a transient unit, four agents appear in the cgroup, and
+stopping it leaves none.
+
+`install.sh` installs the unit always and starts it only once an army has been founded.
+Starting a supervisor on a home with no agents gives a service saying "nobody to run" every few
+seconds forever, and enabling it by surprise starts four models that stay up and bill for it.
 
 ### Restart policy
 
@@ -134,9 +157,6 @@ different fact from an agent that is not running.
 - **Compaction.** Claude Code compacts a session under pressure on its own. Nothing here measures
   how full a conversation is, and the protocol exposes no usable figure for it. A percentage
   nobody measured would be worse than a gap, because somebody would plan around it.
-- **The systemd unit.** `carl supervise` is a loop that a unit will one day restart, in the way
-  the supervisor restarts its agents. The three existing units under `etc/systemd/` are Carl's
-  voice, not the army's.
 - **Arbitrary hierarchy depth.** `army::org` is still a compiled in table with four named agents
   and a fixed chief, lead, worker set of ranks. Nothing in the runtime layer depends on the
   depth, which is the part that mattered, but the organisation itself does not yet grow.

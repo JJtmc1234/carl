@@ -444,3 +444,33 @@ fn an_empty_army_directory_reads_as_an_army_with_nobody_in_it() {
         "an agent row appeared without a folder"
     );
 }
+
+/// Every unit this reports on has a file, and the installer installs it.
+///
+/// The failure this catches is silent, which is why it is worth a test that reads the
+/// repository. A unit named here with no file cannot be installed, and a unit with a file that
+/// the installer skips is never on the machine. Both look identical from the panel: a row
+/// saying systemd did not answer, forever, which reads as a service that is down rather than as
+/// one that was never installed.
+#[test]
+fn every_reported_unit_has_a_file_and_is_installed() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let installer = std::fs::read_to_string(repo.join("etc/systemd/install.sh")).unwrap();
+
+    for unit in services::CARL_UNITS {
+        let path = repo.join("etc/systemd").join(format!("{unit}.service"));
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("{} is missing: {e}", path.display()));
+
+        // Without this `systemctl enable` fails, and the unit is only ever running until the
+        // next reboot, which is the sort of thing nobody notices until the reboot.
+        assert!(
+            text.contains("[Install]"),
+            "{unit} has no [Install] section, so it cannot be enabled"
+        );
+        assert!(
+            installer.contains(unit),
+            "install.sh never mentions {unit}, so it is never put on the machine"
+        );
+    }
+}
