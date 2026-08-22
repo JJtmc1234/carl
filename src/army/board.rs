@@ -21,6 +21,16 @@
 //! what the work is and nothing about what is running, and neither can answer the other's
 //! question, which is why an agent dying can never mean a task succeeded.
 //!
+//! **Backups are not a scheduler.** A worker holds one task it is working on and up to three its
+//! lead has already approved. When the first is blocked it may turn to the next approved one, in
+//! the order they were handed down, and that is the entire rule. There is no priority, no
+//! preemption and nothing that weighs one task against another, because all of those are
+//! decisions and decisions belong to a lead.
+//!
+//! A worker cannot invent a backup, and there is no check that stops it, which is better. The
+//! approved set is exactly the tasks already handed to it, and handing a task down goes through
+//! `Task::assign`, which refuses anybody who is not the owner's boss.
+//!
 //! Not here, on purpose: priorities, scheduling, and anything that decides which task should be
 //! done next. A lead decides that. This only refuses the moves that are not allowed.
 
@@ -37,6 +47,16 @@ use crate::{Error, Result};
 /// choosing what to do, which is its lead's job, and a lead who can hand out fifteen has stopped
 /// deciding anything.
 pub const AT_ONCE: usize = 4;
+
+/// What one agent is holding, split into the one it is doing and the ones it may turn to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Standing {
+    /// The task this agent has started. `None` when it has started nothing, which is a worker
+    /// that has been given work and has not picked it up rather than a worker with none.
+    pub primary: Option<Task>,
+    /// Everything else it is carrying, oldest first.
+    pub backups: Vec<Task>,
+}
 
 /// The work, as the record has it.
 pub struct Board {
@@ -60,13 +80,13 @@ impl Board {
         self.journal.path()
     }
 
-    /// Every task, rebuilt from what happened to it.
-    pub fn tasks(&self) -> Result<BTreeMap<TaskId, Task>> {
+    /// Every task, rebuilt from what happened to it, in the order it was handed down.
+    pub fn tasks(&self) -> Result<Vec<Task>> {
         Ok(rebuild(&read(self.journal.path())?))
     }
 
     pub fn get(&self, id: &TaskId) -> Result<Option<Task>> {
-        Ok(self.tasks()?.remove(id))
+        Ok(self.tasks()?.into_iter().find(|t| t.id == *id))
     }
 
     /// Hands one task down, refusing it if the owner is already holding as many as it may.
@@ -92,7 +112,7 @@ impl Board {
 
         self.journal.decide_and_append(move |records| {
             let tasks = rebuild(records);
-            if tasks.contains_key(&id) {
+            if tasks.iter().any(|t| t.id == id) {
                 return Err(Error::Refused(format!("{id} has already been handed down")));
             }
 
@@ -126,16 +146,45 @@ impl Board {
     /// including the case where somebody else got there first, because "it is already accepted"
     /// is the answer the caller asked for rather than a failure of theirs.
     pub fn advance(&mut self, by: &str, id: &TaskId, next: Status) -> Result<Task> {
-        self.write(id, {
-            let by = by.to_string();
-            let id = id.clone();
-            move |task| {
-                let mut task = task.clone();
-                let from = task.status;
-                task.advance(&by, next)?;
-                Ok(Some((by.clone(), Event::moved(&id, from, next))))
+        let wanted = id.clone();
+        let by = by.to_string();
+
+        self.journal.decide_and_append(move |records| {
+            let tasks = rebuild(records);
+            let task = tasks.iter().find(|t| t.id == wanted).ok_or_else(|| {
+                Error::Refused(format!(
+                    "there is no task {wanted} in the record, so nothing can be done to it"
+                ))
+            })?;
+
+            // One at a time, checked against everything the owner is holding rather than against
+            // the task being moved. A worker with two tasks in hand has to be told which to put
+            // down, and nobody is in a position to tell it.
+            //
+            // In hand and not merely started. A blocked task is one the worker still owns and is
+            // not working on, and treating it as busy would mean blocking made a worker idle,
+            // which is the opposite of what backups are for.
+            if next == Status::InHand
+                && let Some(busy) = holding(&tasks, &task.owner)
+                    .into_iter()
+                    .find(|t| t.status == Status::InHand)
+                && busy.id != wanted
+            {
+                return Err(Error::Refused(format!(
+                    "{} has already started {}, and nobody works on two tasks at once. Block or \
+                     finish that one before picking up {wanted}.",
+                    task.owner, busy.id
+                )));
             }
-        })
+
+            let mut moving = task.clone();
+            let from = moving.status;
+            moving.advance(&by, next)?;
+            Ok(Some((by.clone(), Event::moved(&wanted, from, next))))
+        })?;
+
+        self.get(id)?
+            .ok_or_else(|| Error::Refused(format!("{id} vanished from the record")))
     }
 
     /// The owner says it is done and offers it for review.
@@ -181,30 +230,47 @@ impl Board {
         Ok(holding(&self.tasks()?, agent))
     }
 
+    /// What one agent is working on, and what it has been approved to turn to.
+    pub fn standing(&self, agent: &str) -> Result<Standing> {
+        let carrying = holding(&self.tasks()?, agent);
+        let primary = started(&carrying).cloned();
+
+        let backups = carrying
+            .into_iter()
+            .filter(|t| Some(&t.id) != primary.as_ref().map(|p| &p.id))
+            .collect();
+
+        Ok(Standing { primary, backups })
+    }
+
+    /// The backup this agent may pick up right now, if any.
+    ///
+    /// Only when what it is working on is blocked. Not when it is waiting on review, because
+    /// review comes back and a worker holding two started tasks has to be told which to put down.
+    /// Not when it has simply been given several, because then nothing has gone wrong and the
+    /// first one is the one to do.
+    ///
+    /// The earliest approved backup, so which one it is does not depend on how a map happened to
+    /// sort or on the worker's opinion.
+    pub fn backup_for(&self, agent: &str) -> Result<Option<Task>> {
+        let standing = self.standing(agent)?;
+        let blocked = standing
+            .primary
+            .as_ref()
+            .is_some_and(|p| p.status == Status::Blocked);
+
+        if !blocked {
+            return Ok(None);
+        }
+        Ok(standing
+            .backups
+            .into_iter()
+            .find(|t| t.status == Status::Assigned))
+    }
+
     /// The record itself, for a reader that wants the history rather than the state.
     pub fn records(&self) -> Result<Vec<Record>> {
         read(self.journal.path())
-    }
-
-    /// The shared shape of every guarded move: find the task, decide, write.
-    fn write(
-        &mut self,
-        id: &TaskId,
-        decide: impl FnOnce(&Task) -> Result<Option<(String, Event)>>,
-    ) -> Result<Task> {
-        let wanted = id.clone();
-        self.journal.decide_and_append(move |records| {
-            let tasks = rebuild(records);
-            let task = tasks.get(&wanted).ok_or_else(|| {
-                Error::Refused(format!(
-                    "there is no task {wanted} in the record, so nothing can be done to it"
-                ))
-            })?;
-            decide(task)
-        })?;
-
-        self.get(id)?
-            .ok_or_else(|| Error::Refused(format!("{id} vanished from the record")))
     }
 }
 
@@ -213,7 +279,8 @@ impl Board {
 /// A task whose `Delegated` line is missing is skipped rather than invented. There is nowhere
 /// else the goal and the conditions could come from, and a task with an empty goal would be one
 /// nobody could review, which is the failure the whole design is shaped to avoid.
-pub fn rebuild(records: &[Record]) -> BTreeMap<TaskId, Task> {
+pub fn rebuild(records: &[Record]) -> Vec<Task> {
+    let mut order: Vec<TaskId> = Vec::new();
     let mut tasks: BTreeMap<TaskId, Task> = BTreeMap::new();
 
     for record in records {
@@ -234,6 +301,7 @@ pub fn rebuild(records: &[Record]) -> BTreeMap<TaskId, Task> {
                 let Ok(verification) = Verification::of(must.clone()) else {
                     continue;
                 };
+                order.push(task.clone());
                 tasks.insert(
                     task.clone(),
                     Task {
@@ -273,16 +341,43 @@ pub fn rebuild(records: &[Record]) -> BTreeMap<TaskId, Task> {
             _ => {}
         }
     }
-    tasks
+
+    // Handed down order, not id order. Ids are random hex, so a map's order is arbitrary, and
+    // which backup a worker turns to next has to be the one its lead approved first rather than
+    // whichever id happened to sort lowest.
+    order
+        .into_iter()
+        .filter_map(|id| tasks.remove(&id))
+        .collect()
 }
 
 /// Everything one agent is carrying that is not finished, in the order it was handed down.
-fn holding(tasks: &BTreeMap<TaskId, Task>, agent: &str) -> Vec<Task> {
+fn holding(tasks: &[Task], agent: &str) -> Vec<Task> {
     tasks
-        .values()
+        .iter()
         .filter(|t| t.owner == agent && !t.status.settled())
         .cloned()
         .collect()
+}
+
+/// The task in a list that its owner is on.
+///
+/// Whatever is in hand, and only then the earliest of the ones it has started and is not
+/// currently working on. Preferring in hand matters once backups are in play: a worker whose
+/// first task is blocked and who has picked up the next one is on the second, and answering with
+/// the parked one would make every reader think it was still stuck.
+fn started(tasks: &[Task]) -> Option<&Task> {
+    tasks
+        .iter()
+        .find(|t| t.status == Status::InHand)
+        .or_else(|| {
+            tasks.iter().find(|t| {
+                matches!(
+                    t.status,
+                    Status::Blocked | Status::ChangesRequested | Status::Submitted
+                )
+            })
+        })
 }
 
 /// The status a `Moved` line names.

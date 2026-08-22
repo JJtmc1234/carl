@@ -301,3 +301,141 @@ fn a_task_that_was_never_handed_down_cannot_be_moved() {
         .to_string();
     assert!(e.contains("no task"), "{e}");
 }
+
+/// One primary and three approved backups, which is the shape a lead hands down.
+fn with_backups(b: &mut Board) -> Vec<TaskId> {
+    let mut ids = Vec::new();
+    for _ in 0..AT_ONCE {
+        let task = task_for("mason", "nora");
+        b.delegate("mason", &task).unwrap();
+        ids.push(task.id);
+    }
+    b.advance("nora", &ids[0], Status::InHand).unwrap();
+    ids
+}
+
+/// A worker with two tasks in hand has to be told which to put down, and nobody is in a
+/// position to tell it.
+#[test]
+fn a_worker_works_on_one_task_at_a_time() {
+    let d = home();
+    let mut b = board(&d);
+    let ids = with_backups(&mut b);
+
+    let e = b
+        .advance("nora", &ids[1], Status::InHand)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("already started"), "{e}");
+    assert!(e.contains("Block or finish"), "and says what to do: {e}");
+
+    let standing = b.standing("nora").unwrap();
+    assert_eq!(standing.primary.unwrap().id, ids[0]);
+    assert_eq!(standing.backups.len(), AT_ONCE - 1);
+}
+
+/// Nothing has gone wrong, so the first one is the one to do. Offering a choice here would be
+/// letting the worker decide what matters.
+#[test]
+fn a_worker_getting_on_with_its_task_is_offered_no_backup() {
+    let d = home();
+    let mut b = board(&d);
+    with_backups(&mut b);
+    assert!(b.backup_for("nora").unwrap().is_none());
+}
+
+/// The rule, and the whole of it. Blocked, so turn to the next one the lead approved.
+#[test]
+fn a_blocked_worker_may_turn_to_the_earliest_approved_backup() {
+    let d = home();
+    let mut b = board(&d);
+    let ids = with_backups(&mut b);
+    b.advance("nora", &ids[0], Status::Blocked).unwrap();
+
+    let next = b
+        .backup_for("nora")
+        .unwrap()
+        .expect("a backup was approved");
+    assert_eq!(
+        next.id, ids[1],
+        "the earliest, not whichever id sorts first"
+    );
+
+    b.advance("nora", &next.id, Status::InHand).unwrap();
+    assert_eq!(b.standing("nora").unwrap().primary.unwrap().id, ids[1]);
+    assert_eq!(
+        b.get(&ids[0]).unwrap().unwrap().owner,
+        "nora",
+        "and the blocked one is still hers"
+    );
+}
+
+/// Review comes back, and a worker holding two started tasks has to be told which to put down.
+#[test]
+fn waiting_on_review_is_not_a_reason_to_start_a_backup() {
+    let d = home();
+    let mut b = board(&d);
+    let ids = with_backups(&mut b);
+    b.submit("nora", &ids[0], 10).unwrap();
+
+    assert!(b.backup_for("nora").unwrap().is_none());
+    assert!(
+        b.advance("nora", &ids[1], Status::InHand).is_ok(),
+        "and once nothing is started, the next one may be picked up"
+    );
+}
+
+/// A worker cannot approve its own backup, and there is no check that stops it. The approved
+/// set is the tasks already handed down, and handing one down refuses anybody but the boss.
+#[test]
+fn a_worker_cannot_approve_its_own_backup() {
+    let d = home();
+    let mut b = board(&d);
+    with_backups(&mut b);
+
+    assert!(
+        Task::assign(
+            "nora",
+            "nora",
+            "a job I fancy",
+            Verification::of(["done"]).unwrap()
+        )
+        .is_err(),
+        "nobody hands work to themselves"
+    );
+
+    let invented = task_for("mason", "nora");
+    let e = b.delegate("nora", &invented).unwrap_err().to_string();
+    assert!(e.contains("cannot hand down"), "{e}");
+    assert_eq!(
+        b.holding("nora").unwrap().len(),
+        AT_ONCE,
+        "no more than before"
+    );
+}
+
+/// With nothing else approved there is nothing to turn to, and being blocked is then a thing to
+/// report rather than a thing to work around.
+#[test]
+fn a_blocked_worker_with_no_approved_backup_is_offered_nothing() {
+    let d = home();
+    let mut b = board(&d);
+    let id = in_hand(&mut b);
+    b.advance("nora", &id, Status::Blocked).unwrap();
+    assert!(b.backup_for("nora").unwrap().is_none());
+}
+
+/// A worker that has been given work and not picked it up has no primary, which is a different
+/// thing from a worker with nothing to do.
+#[test]
+fn a_worker_that_has_started_nothing_has_no_primary() {
+    let d = home();
+    let mut b = board(&d);
+    let task = task_for("mason", "nora");
+    b.delegate("mason", &task).unwrap();
+
+    let standing = b.standing("nora").unwrap();
+    assert!(standing.primary.is_none());
+    assert_eq!(standing.backups.len(), 1);
+    assert!(b.backup_for("nora").unwrap().is_none());
+}
