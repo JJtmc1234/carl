@@ -211,6 +211,8 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
             1_003,
         )
         .unwrap();
+    // She was asleep, so this really did wake her.
+    assert!(matches!(slice.lifecycle("nora"), Lifecycle::Exited { .. }));
     slice.supervisor.tick(&slice.people, 1_004).unwrap();
     assert!(matches!(slice.lifecycle("nora"), Lifecycle::Running { .. }));
 
@@ -815,4 +817,48 @@ fn the_panel_shows_a_lost_conversation_as_degraded() {
     };
     assert_eq!(continuity.session, SessionContinuity::Replaced);
     assert!(continuity.degraded(), "and it is not shown as healthy");
+}
+
+/// Waking an agent that is already up used to clear its lifecycle, which made the next pass see
+/// a record with no process behind it, start a second one resuming the same conversation, and
+/// drop the first. That closed the pipe whoever was about to speak to it was holding, and it
+/// showed up as the model failing to answer.
+#[test]
+fn waking_an_agent_that_is_already_up_does_nothing_at_all() {
+    let mut slice = Slice::founded(&stand_in("agent-does-as-told"));
+    slice.supervisor.tick(&slice.people, 1_000).unwrap();
+
+    let nora = slice.id("nora");
+    let before = slice.supervisor.roll().get(&nora).unwrap().clone();
+
+    let woken = slice
+        .supervisor
+        .wake(
+            &nora,
+            Because::Task {
+                task: TaskId::quoted("something"),
+            },
+            1_001,
+        )
+        .unwrap();
+    assert!(!woken, "it said it woke an agent that was already awake");
+
+    slice.supervisor.tick(&slice.people, 1_002).unwrap();
+    let after = slice.supervisor.roll().get(&nora).unwrap().clone();
+    assert_eq!(
+        after.lifecycle.pid(),
+        before.lifecycle.pid(),
+        "a second process was started for an agent that already had one"
+    );
+
+    assert!(
+        !slice
+            .runtime_trail("nora")
+            .contains(&"agent_woken".to_string()),
+        "a wake nobody performed was written down as though it happened"
+    );
+
+    // And the pipe the caller was about to use still works.
+    let said = slice.supervisor.deliver(&nora, "hello", PATIENCE).unwrap();
+    assert!(said.contains("nothing to do about"), "{said}");
 }

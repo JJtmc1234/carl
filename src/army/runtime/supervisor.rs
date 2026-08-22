@@ -197,12 +197,28 @@ impl Supervisor {
     /// The reason is a value with no "in general" in it. An agent woken for nothing in
     /// particular is an agent nobody can say why is running, and what that costs is a model
     /// sitting there thinking.
-    pub fn wake(&mut self, agent: &AgentId, because: Because, now: u64) -> Result<()> {
+    ///
+    /// Returns whether anything was actually done. An agent that is already up needs nothing,
+    /// and this must not touch it: clearing the lifecycle of a running agent makes the next pass
+    /// see a record with no process behind it, start a second one resuming the same
+    /// conversation, and drop the first, which closes the pipe the caller was about to use. That
+    /// is not theoretical. It is what happened the first time this was pointed at real sessions,
+    /// and it looked like the model failing to answer.
+    pub fn wake(&mut self, agent: &AgentId, because: Because, now: u64) -> Result<bool> {
         let Some(mut record) = self.roll.get(agent).cloned() else {
             return Err(crate::Error::Refused(format!(
                 "{agent} has no runtime record, so there is nothing asleep to wake"
             )));
         };
+
+        // Already up, and held by this supervisor, so there is nothing to wake. No event
+        // either: a wake nobody performed is not something that happened.
+        if let Lifecycle::Running { pid, started, .. } = record.lifecycle
+            && record.owned_by(self.pid)
+            && started::is_still(pid, started)
+        {
+            return Ok(false);
+        }
 
         // Degraded is not asleep. It means starting this agent is something the supervisor
         // could not fix by doing it again, and clearing that here would restart the loop that
@@ -234,7 +250,8 @@ impl Supervisor {
         record.attempts = 0;
         record.supervisor = None;
         record.updated_at = now;
-        self.roll.save(&self.home, record)
+        self.roll.save(&self.home, record)?;
+        Ok(true)
     }
 
     /// Hands a message to an agent's process and returns what it said.
