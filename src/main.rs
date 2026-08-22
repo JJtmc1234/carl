@@ -9,6 +9,7 @@
 mod chat;
 mod ear;
 mod repl;
+mod supervise;
 
 use std::path::PathBuf;
 
@@ -150,6 +151,26 @@ enum Command {
         journal: Option<String>,
     },
 
+    /// Keep every agent's process running, and nothing else.
+    ///
+    /// The supervisor owns process existence. It starts an agent that is not running, resumes
+    /// the conversation of one whose process was replaced, backs off one that keeps falling
+    /// over, and gives up on one that will not start at all. It hands out no work: that is
+    /// Carl's, and there is deliberately no way to do it from here.
+    ///
+    /// One supervisor per home. A second is refused rather than allowed to fight the first
+    /// over every agent.
+    Supervise {
+        /// Run one pass and stop, which is what a check is.
+        #[arg(long)]
+        once: bool,
+        /// Seconds between passes.
+        #[arg(long, default_value_t = 5)]
+        every: u64,
+        /// Which `claude` to run, for pointing at a different build.
+        #[arg(long, default_value = "claude")]
+        claude: String,
+    },
     /// Serve the Command Panel backend on a local socket.
     ///
     /// Owner only, under ~/.carl/panel/. Nothing listens on the network. The protocol is in
@@ -347,6 +368,12 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+
+        Command::Supervise {
+            once,
+            every,
+            claude,
+        } => supervise::run(&home, &claude, every, once),
 
         Command::Panel => {
             let at = carl::panel::socket_path(&home);
