@@ -270,6 +270,20 @@ impl Task {
         Ok(task)
     }
 
+    /// Says where the work may happen.
+    ///
+    /// Only at creation, and consuming `self` for the same reason `for_project` does: there is
+    /// no way to reach a task somebody is already holding and widen where it may write. A worker
+    /// that could move its own workspace has no workspace.
+    ///
+    /// This is the record of a grant and not the enforcement of one. What stops a worker writing
+    /// elsewhere is the capability layer it runs against, in another process. A path written in a
+    /// task stops nothing on its own and must never be mistaken for a boundary.
+    pub fn in_workspace(mut self, at: impl Into<String>) -> Self {
+        self.workspace = Some(at.into());
+        self
+    }
+
     /// Says which project this task belongs to.
     ///
     /// Only at creation, before anybody has been handed it. Consuming `self` rather than taking

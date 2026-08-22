@@ -32,6 +32,7 @@ pub fn fold(records: &[Record]) -> Vec<TaskView> {
                 parent,
                 must,
                 project,
+                ..
             } => {
                 let id = task.to_string();
                 if !by_id.contains_key(&id) {
@@ -114,7 +115,11 @@ pub fn fold(records: &[Record]) -> Vec<TaskView> {
             | Event::AgentStartFailed { .. }
             | Event::AgentStopped { .. }
             | Event::AgentGaveUp { .. }
-            | Event::ContinuityChanged { .. } => {}
+            | Event::AgentWoken { .. }
+            | Event::ContinuityChanged { .. }
+            // A grant is about a task and is still not a change to it. Showing it as a status
+            // would put a permission in the column that says how far the work has got.
+            | Event::Granted { .. } => {}
         }
     }
 

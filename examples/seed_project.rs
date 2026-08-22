@@ -32,6 +32,8 @@ fn main() {
             parent: None,
             must: t.verification.must.clone(),
             project: t.project.clone(),
+
+            workspace: t.workspace.clone(),
         },
     )
     .unwrap();

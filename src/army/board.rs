@@ -101,6 +101,7 @@ impl Board {
         let must = task.verification.must.clone();
         let parent = task.parent.clone();
         let project = task.project.clone();
+        let workspace = task.workspace.clone();
         let by = by.to_string();
 
         if by != task.created_by {
@@ -134,6 +135,7 @@ impl Board {
                     parent,
                     must,
                     project,
+                    workspace,
                 },
             )))
         })?;
@@ -225,6 +227,54 @@ impl Board {
         Ok(task)
     }
 
+    /// Records that a lead allowed its worker to do something, for one task.
+    ///
+    /// The grant, and not the enforcement. What stops a worker writing outside the directory it
+    /// was given is the capability layer it runs against, in another process. Writing a path into
+    /// a record stops nothing, and the two must not be confused: this answers "who allowed it",
+    /// which is the question nobody can answer afterwards without a line like this.
+    ///
+    /// Only whoever assigned the task may grant against it. A worker widening its own permission
+    /// and writing down that it did would otherwise look exactly like a lead deciding.
+    pub fn grant(&mut self, by: &str, id: &TaskId, what: &str) -> Result<()> {
+        let wanted = id.clone();
+        let by = by.to_string();
+        let what = what.to_string();
+
+        self.journal.decide_and_append(move |records| {
+            let tasks = rebuild(records);
+            let task = tasks
+                .iter()
+                .find(|t| t.id == wanted)
+                .ok_or_else(|| Error::Refused(format!("there is no task {wanted} to grant on")))?;
+
+            if by != task.created_by {
+                return Err(Error::Refused(format!(
+                    "{by} cannot grant anything on {wanted}. It was assigned by {}, and only \
+                     whoever assigned a task decides what doing it is allowed to touch.",
+                    task.created_by
+                )));
+            }
+            if task.status.settled() {
+                return Err(Error::Refused(format!(
+                    "{wanted} is {} and nothing more will be done to it, so there is nothing to \
+                     allow.",
+                    task.status
+                )));
+            }
+
+            Ok(Some((
+                by.clone(),
+                Event::Granted {
+                    task: wanted.clone(),
+                    to: task.owner.clone(),
+                    what: what.clone(),
+                },
+            )))
+        })?;
+        Ok(())
+    }
+
     /// Everything one agent is carrying that is not finished, oldest first.
     pub fn holding(&self, agent: &str) -> Result<Vec<Task>> {
         Ok(holding(&self.tasks()?, agent))
@@ -292,6 +342,7 @@ pub fn rebuild(records: &[Record]) -> Vec<Task> {
                 parent,
                 must,
                 project,
+                workspace,
             } => {
                 // Already there means a repeated line, and the first one is the one that
                 // happened. Overwriting would reset the status of a task that has since moved.
@@ -314,7 +365,7 @@ pub fn rebuild(records: &[Record]) -> Vec<Task> {
                         parent: parent.clone(),
                         attempts: 0,
                         project: project.clone(),
-                        workspace: None,
+                        workspace: workspace.clone(),
                     },
                 );
             }

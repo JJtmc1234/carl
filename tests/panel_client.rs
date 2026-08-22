@@ -113,6 +113,7 @@ fn a_real_delegation(journal: &mut Journal) -> TaskId {
                 parent: t.parent.clone(),
                 must: t.verification.must.clone(),
                 project: None,
+                workspace: None,
             },
         )
         .unwrap();

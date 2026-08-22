@@ -220,6 +220,7 @@ mod tests {
                     parent: None,
                     must: vec!["it works".into()],
                     project: None,
+                    workspace: None,
                 },
             ),
             (
@@ -275,6 +276,7 @@ mod tests {
                     parent: None,
                     must: vec!["it works".into()],
                     project: None,
+                    workspace: None,
                 },
             ),
             (
@@ -323,6 +325,7 @@ mod tests {
                 parent: None,
                 must: vec!["it works".into()],
                 project: None,
+                workspace: None,
             },
         )];
         for attempt in 1..=MAX_ATTEMPTS {
@@ -372,6 +375,7 @@ mod tests {
                     parent: None,
                     must: vec!["it works".into()],
                     project: None,
+                    workspace: None,
                 },
             ),
             (
@@ -445,6 +449,7 @@ mod tests {
                 parent: None,
                 must: vec!["it works".into()],
                 project: None,
+                workspace: None,
             },
         )]);
         assert_eq!(folded.tasks[0].status, None);

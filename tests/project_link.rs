@@ -96,6 +96,8 @@ fn delegate(journal: &mut Journal, t: &Task) {
                 parent: t.parent.clone(),
                 must: t.verification.must.clone(),
                 project: t.project.clone(),
+
+                workspace: t.workspace.clone(),
             },
         )
         .unwrap();

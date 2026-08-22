@@ -86,6 +86,7 @@ fn one_army_event(journal: &mut Journal, goal: &str) -> u64 {
                 parent: None,
                 must: t.verification.must.clone(),
                 project: None,
+                workspace: None,
             },
         )
         .unwrap()

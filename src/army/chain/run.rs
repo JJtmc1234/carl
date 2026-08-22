@@ -247,6 +247,7 @@ impl Chain {
         self.journal.append(
             from,
             Event::Delegated {
+                workspace: task.workspace.clone(),
                 task: task.id.clone(),
                 to: to.to_string(),
                 goal: task.goal.clone(),

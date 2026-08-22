@@ -1,0 +1,34 @@
+#!/bin/bash
+# A stand in for `claude` that does exactly one thing when told to, and says so.
+#
+# Checked in rather than written by the test, for the reason agent-stays-up gives next to it:
+# a file written during a run can still be open for writing when a sibling thread tries to
+# exec it, and the usual answer of retrying would mean retrying a supervisor tick.
+#
+# It speaks the same protocol as tests/session.rs uses, which is one JSON object per line in
+# and one result line out. The prompt is pulled out by hand because a stand in that needed a
+# JSON parser would need a language runtime no test should assume is there.
+#
+# It obeys one instruction, WRITE followed by a path, and answers anything else by repeating
+# what it was told. A worker that could do more than one thing would make a test about
+# delegation into a test about the stand in.
+while IFS= read -r line; do
+  text=${line#*'"text":"'}
+  text=${text%%'"'*}
+
+  case "$text" in
+    WRITE\ *)
+      target=${text#WRITE }
+      if mkdir -p "$(dirname "$target")" && printf 'done\n' > "$target"; then
+        said="wrote $target"
+      else
+        said="could not write $target"
+      fi
+      ;;
+    *)
+      said="nothing to do about: $text"
+      ;;
+  esac
+
+  printf '{"type":"result","subtype":"success","result":"%s","session_id":"stand-in"}\n' "$said"
+done

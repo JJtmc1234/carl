@@ -192,6 +192,7 @@ fn a_blocked_task_turns_the_task_diagnostic_blocked() {
             parent: None,
             must: vec!["it works".into()],
             project: None,
+            workspace: None,
         },
     )
     .unwrap();

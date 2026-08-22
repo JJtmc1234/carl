@@ -122,6 +122,7 @@ fn a_working_home(dir: &Path) -> Task {
                 parent: None,
                 must: t.verification.must.clone(),
                 project: t.project.clone(),
+                workspace: None,
             },
         )
         .unwrap();
@@ -195,6 +196,7 @@ fn an_unlinked_task_does_not_join_a_project_over_the_wire() {
                 parent: None,
                 must: t.verification.must.clone(),
                 project: None,
+                workspace: None,
             },
         )
         .unwrap();

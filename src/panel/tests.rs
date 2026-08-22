@@ -48,6 +48,7 @@ fn a_real_run(journal: &mut Journal) -> Task {
                 parent: t.parent.clone(),
                 must: t.verification.must.clone(),
                 project: None,
+                workspace: None,
             },
         )
         .unwrap();

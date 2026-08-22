@@ -26,6 +26,7 @@
 //! working: the process was disposable, the conversation was not.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use super::continuity::{self, Continuity};
 use super::lock::Lock;
@@ -33,7 +34,7 @@ use super::policy::{self, Next, Start};
 use super::record::{Lifecycle, Runtime};
 use super::store::Roll;
 use crate::army::chain::{brief_for, tools_for};
-use crate::army::event::{Event, Journal};
+use crate::army::event::{Because, Event, Journal};
 use crate::army::personnel::{AgentId, Personnel, memory};
 use crate::claude::{Runner, Session};
 use crate::providers::system::started;
@@ -185,6 +186,96 @@ impl Supervisor {
             },
         )?;
         self.roll.save(&self.home, record)
+    }
+
+    /// Asks for a stopped or sleeping agent again, saying what for.
+    ///
+    /// The supervisor's half of a wake. It clears the refusal so the next pass starts a process,
+    /// and it has no opinion about whether the reason is a good one, because judging that is
+    /// work and work is Carl's.
+    ///
+    /// The reason is a value with no "in general" in it. An agent woken for nothing in
+    /// particular is an agent nobody can say why is running, and what that costs is a model
+    /// sitting there thinking.
+    pub fn wake(&mut self, agent: &AgentId, because: Because, now: u64) -> Result<()> {
+        let Some(mut record) = self.roll.get(agent).cloned() else {
+            return Err(crate::Error::Refused(format!(
+                "{agent} has no runtime record, so there is nothing asleep to wake"
+            )));
+        };
+
+        // Degraded is not asleep. It means starting this agent is something the supervisor
+        // could not fix by doing it again, and clearing that here would restart the loop that
+        // gave up in the first place.
+        if let Lifecycle::Degraded { why } = &record.lifecycle {
+            return Err(crate::Error::Refused(format!(
+                "{} was given up on, not put to sleep: {why}. Waking it would start the same \
+                 loop again.",
+                record.name
+            )));
+        }
+
+        self.journal.append(
+            ACTOR,
+            Event::AgentWoken {
+                agent: agent.clone(),
+                name: record.name.clone(),
+                because,
+            },
+        )?;
+
+        // Back to the state a process that ended leaves behind, so the ordinary policy decides
+        // what happens next. Starting it here would be the supervisor keeping a second way to
+        // start an agent, and two ways to do one thing is two backoff counters.
+        record.lifecycle = Lifecycle::Exited {
+            code: None,
+            at: now,
+        };
+        record.attempts = 0;
+        record.supervisor = None;
+        record.updated_at = now;
+        self.roll.save(&self.home, record)
+    }
+
+    /// Hands a message to an agent's process and returns what it said.
+    ///
+    /// Delivery, not instruction. The supervisor never composes a message and has nowhere to
+    /// get one from; it holds the pipe, and holding the pipe is the only reason this is here
+    /// rather than in Carl. What is in the message, who it is for and whether it should be sent
+    /// at all are decided by whoever calls this.
+    ///
+    /// Refused for an agent this supervisor is not holding, including one that is running under
+    /// a supervisor that has since gone, because that process is alive and unreachable.
+    pub fn deliver(&mut self, agent: &AgentId, text: &str, deadline: Duration) -> Result<String> {
+        let session = self
+            .live
+            .iter_mut()
+            .find(|(id, _)| id == agent)
+            .map(|(_, session)| session)
+            .ok_or_else(|| {
+                crate::Error::Refused(format!(
+                    "{agent} has no process this supervisor is holding, so there is nothing to \
+                     say it to"
+                ))
+            })?;
+
+        let began = std::time::Instant::now();
+        let answer = session.ask(
+            text,
+            &mut |_| crate::claude::Flow::Continue,
+            &mut || match began.elapsed() > deadline {
+                true => crate::claude::Flow::Stop,
+                false => crate::claude::Flow::Continue,
+            },
+        )?;
+
+        match answer.interrupted {
+            true => Err(crate::Error::Claude(format!(
+                "{agent} did not finish answering within {:.0}s",
+                deadline.as_secs_f32()
+            ))),
+            false => Ok(answer.text),
+        }
     }
 
     fn one(&mut self, people: &Personnel, name: &str, now: u64) -> Result<Outcome> {

@@ -20,6 +20,7 @@ fn main() {
                 parent: None,
                 must: t.verification.must.clone(),
                 project: None,
+                workspace: None,
             },
         )
         .unwrap();

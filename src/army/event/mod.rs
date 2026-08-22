@@ -62,6 +62,9 @@ pub enum Event {
         /// only record of everything that happened before this field did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         project: Option<ProjectId>,
+        /// Where the work may happen, when a lead said. Defaults, so an older line still reads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace: Option<String>,
     },
     /// A task moved from one state to another.
     Moved {
@@ -180,11 +183,61 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         abandoned: Option<SessionId>,
     },
+    /// A sleeping or stopped agent was asked for again, and what for.
+    ///
+    /// The reason is a value rather than a sentence, so there is no way to write down a wake
+    /// meaning "something happened". An agent woken for nothing in particular is an agent
+    /// nobody can tell why is running, and the cost of it is a model sitting there thinking.
+    AgentWoken {
+        agent: AgentId,
+        name: String,
+        because: Because,
+    },
+    /// A lead gave one of its people permission to do something, for one task.
+    ///
+    /// The grant is here and the enforcement is not. Recording that a lead allowed a worker to
+    /// write in one directory is Carl's business. Stopping it writing anywhere else is the
+    /// capability layer's, in a different process, which is the only place a boundary can be
+    /// made to actually hold.
+    ///
+    /// Refusals are not a separate event, because `Refused` already records everything anybody
+    /// was stopped from doing and splitting that in two would mean counting refusals twice.
+    Granted {
+        task: TaskId,
+        to: String,
+        what: String,
+    },
     /// Somebody was told about something they did not do.
     ///
     /// Points at the sequence number of what they are being told about rather than repeating it,
     /// so a notification can never come to disagree with the thing it notifies about.
     Notified { who: String, about: u64 },
+}
+
+/// Why an agent was woken.
+///
+/// Deliberately without a variant meaning "in general". Every way of waking an agent names the
+/// thing it is being woken for, so there is no way to express a wake that nobody could later
+/// justify.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "because", rename_all = "snake_case")]
+pub enum Because {
+    /// There is a task waiting for it.
+    Task { task: TaskId },
+    /// Something has gone wrong that it is needed for.
+    Incident { what: String },
+    /// Whoever it reports to asked for it.
+    Lead { who: String },
+}
+
+impl Because {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Because::Task { .. } => "task",
+            Because::Incident { .. } => "incident",
+            Because::Lead { .. } => "lead",
+        }
+    }
 }
 
 /// What JJ did, in a form a reader can count rather than parse.
@@ -251,6 +304,8 @@ impl Event {
             Event::AgentStopped { .. } => "agent_stopped",
             Event::AgentGaveUp { .. } => "agent_gave_up",
             Event::ContinuityChanged { .. } => "continuity_changed",
+            Event::AgentWoken { .. } => "agent_woken",
+            Event::Granted { .. } => "granted",
         }
     }
 
@@ -265,7 +320,8 @@ impl Event {
             | Event::AgentStartFailed { agent, .. }
             | Event::AgentStopped { agent, .. }
             | Event::AgentGaveUp { agent, .. }
-            | Event::ContinuityChanged { agent, .. } => Some(agent),
+            | Event::ContinuityChanged { agent, .. }
+            | Event::AgentWoken { agent, .. } => Some(agent),
             _ => None,
         }
     }
@@ -277,7 +333,8 @@ impl Event {
             | Event::Moved { task, .. }
             | Event::Submitted { task, .. }
             | Event::Reviewed { task, .. }
-            | Event::EmergencyDeclared { task, .. } => Some(task),
+            | Event::EmergencyDeclared { task, .. }
+            | Event::Granted { task, .. } => Some(task),
             Event::Decided { task, .. } => task.as_ref(),
             Event::Intervened { what } => match what {
                 Intervention::Stopped { task, .. } | Intervention::Replaced { task, .. } => {
@@ -296,6 +353,7 @@ impl Event {
             | Event::AgentStartFailed { .. }
             | Event::AgentStopped { .. }
             | Event::AgentGaveUp { .. }
+            | Event::AgentWoken { .. }
             | Event::ContinuityChanged { .. } => None,
         }
     }
