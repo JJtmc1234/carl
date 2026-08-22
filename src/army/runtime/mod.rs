@@ -23,18 +23,20 @@
 //! is broken. The process is expected to die and be replaced, and doing so costs the agent
 //! nothing, because the conversation it was serving is resumed into the next one.
 //!
-//! Four modules, split by what would break if they were one.
+//! Six modules, split by what would break if they were one.
 //!
 //! | module | what it is | why it is separate |
 //! |---|---|---|
 //! | `record` | what is known about one agent's process | it is a file, and files outlive processes |
 //! | `policy` | what to do next about it | pure, so a fourth crash is a test rather than an afternoon |
+//! | `continuity` | how much of what an agent had is still with it | three things that fail separately |
 //! | `store` | the records on disk | one writer, and it is not the agent |
-//! | `supervisor` | the part that spawns and kills | the only part that cannot be reasoned about without a process |
+//! | `lock` | one supervisor per home | two would spend the night ending each other's processes |
+//! | `supervisor` | the part that spawns, kills, wakes and carries a sentence | the only part that cannot be reasoned about without a process |
 //!
-//! Not built here, on purpose: the schedule, sleep windows, waking an agent early, compaction,
-//! the work queue, and anything that hands an agent a task. Every one of those needs an agent
-//! that is running, which is what this is.
+//! Not built here, on purpose: the timetable that would decide when an agent sleeps, compaction,
+//! the work queue, and anything that hands an agent a task. Stopping an agent and waking one are
+//! here, because both are about whether a process exists. Deciding when to is not.
 
 mod continuity;
 mod lock;

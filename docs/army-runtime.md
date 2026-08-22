@@ -1,105 +1,153 @@
-# Army Runtime, design note
+# Army Runtime
 
-**Design only. Nothing here is built, and nothing here should be built as part of Command Panel
-v1.** This exists so the decisions already made are written down in one place before anybody
-starts, and so the next phase argues with a document rather than with somebody's memory.
+This started as a design note written before anything existed, saying what had been decided so
+that the phase which built it would argue with a document rather than with somebody's memory.
+The first slice is now built, so this is no longer that note. It is a description of what runs,
+followed by the decisions the note left open and what was actually chosen, followed by what is
+still not built.
 
-Command Panel v1 shows an army that does not yet run. Every agent state it draws comes from
-folders and a journal that a chain run writes and then exits. The runtime is what makes the army
-a thing that is up rather than a thing that is invoked.
+Command Panel v1 showed an army that did not run. Every agent state it drew came from folders and
+a journal that a chain run wrote and then exited. The runtime is what makes the army a thing that
+is up rather than a thing that is invoked.
 
-## The shape
+## What is built
 
-One dedicated long running Claude process per agent, supervised, with memory on disk.
+One dedicated long running `claude` process per agent, supervised, with memory on disk.
 
-That single sentence is most of the design, and it is a change in kind rather than in degree.
-Today a chain run spawns processes, uses them and drops them, so an agent has no continuity
-beyond what it wrote down. A long running session means an agent has a working context that
-survives between tasks, which is the difference between a colleague and a contractor.
+```text
+  army/nora/identity.json     who this is, forever                    never rewritten
+  army/nora/memory/           what she keeps between conversations    hers to write
+  run/agents/a-....json       which session, which process            the supervisor's
+  run/events.jsonl            what happened, in order                 append only
+  the claude process          the thing doing the work                replaceable
+```
 
-## Decided
+**Three lifetimes, and each outlives the one below it.** That column is the whole design. The
+agent id is minted once when the agent is given a folder and never changes. The session outlives
+any number of processes and is what `--resume` continues. The process is the most disposable
+thing in the system and is expected to be replaced, which costs the agent nothing because the
+conversation it was serving is resumed into the next one.
 
-### Processes and sessions
+Squashing any two of those together is how a restart quietly becomes a different agent, or how a
+replaced process quietly loses a conversation.
 
-- **One dedicated long running Claude process per agent.** Not a pool, not per task.
-- **Native `--resume` is preferred after a restart**, rather than replaying a transcript into a
-  fresh session. The CLI already keeps the session; rebuilding one by hand would be a second,
-  worse implementation of something that exists.
-- **Context compacts under pressure**, not on a timer and not per turn. Compaction is a cost paid
-  when the window demands it.
+### The pieces
 
-### Memory
+| where | what it is |
+|---|---|
+| `army::personnel::identity` | the agent id, and the journal record that created it |
+| `army::personnel::memory` | the folder, and the one sentence an agent is told for free |
+| `army::runtime::record` | what is known about one agent's process |
+| `army::runtime::policy` | what to do next about it, pure |
+| `army::runtime::continuity` | how much of what an agent had is still with it |
+| `army::runtime::store` | the records on disk, with one writer |
+| `army::runtime::lock` | one supervisor per home |
+| `army::runtime::supervisor` | the part that spawns, kills, wakes and carries a message |
+| `carl supervise` | the loop, and eventually a systemd unit around it |
 
-- **Every agent has a memory folder.**
-- **One permanently known fact per agent: the folder exists, and `summary.md` is the way in.**
-  That is deliberately the only thing an agent is told for free. Everything else it must go and
-  read, so the brief stays small and the memory stays honest.
-- **Markdown for anything a person will read.** Persistent state that only a person reads has no
-  business being a format only a program can.
+### The properties worth knowing
 
-### Supervision
+**The runtime record is not in the agent's folder.** An agent writes its own `state.json` every
+turn. A process record next to that file would be a thing an agent could write down about itself
+and be believed. It lives under `run/`, next to the journal, which is the other thing in this
+system that describes agents and is not written by them.
 
-- **A systemd user service starts the Army Runtime Supervisor.** The supervisor keeps agent
-  processes alive.
-- **Carl controls work. The supervisor controls process existence.** This separation is the whole
-  point and is worth stating twice: Carl deciding that Nora should stop working on something is a
-  different act from Nora's process exiting, and a design that conflates them gives Carl a kill
-  switch he was never meant to have and gives the supervisor opinions about work it cannot judge.
-- **Restart policy: immediate on the first crash, then backoff, then degraded session recovery.**
-  A process that dies once is unlucky. A process that dies repeatedly is broken, and hammering it
-  turns one fault into a busy loop. Degraded recovery is the admission that the session itself may
-  be what is wrong.
+**Records are named by agent id, not by name.** Names are expected to become changeable. A record
+keyed by name would orphan the first time one did, and the orphan would look exactly like an
+agent that had never been started.
 
-### Hours
+**A pid is not a name.** Every record carries the process start time from `/proc/<pid>/stat`
+alongside the pid, so a reused pid is not mistaken for a survivor. A zombie is not running either,
+which matters more than it sounds: a child that has exited and not been reaped keeps its pid, its
+`/proc` entry and its start time, so a supervisor comparing start times alone watches an agent
+exit and calls it healthy forever, kept alive by its own failure to reap it.
 
-- **The army runs nearly continuously.**
-- **Normal agents have scheduled overnight sleep windows.** An agent that never stops is an agent
-  whose context and cost grow without anybody choosing it.
-- **Carl is currently the only default overnight exception.**
+**One supervisor per home, enforced.** Two would each read the other's records, find processes
+they did not own, decide those were orphans of a dead supervisor, and end them. All night. Both
+behaving exactly as designed. The lock is a pid file carrying a start time, so a lock left by a
+process that was killed is recognised as stale rather than held forever by whatever inherits
+the pid.
 
-### Work
+**The supervisor knows nothing about work.** There is no way from it to give an agent a task. It
+can start a process, end one, wake a stopped agent when told what for, and carry a sentence
+somebody else composed. A test reads the supervisor's own source and fails if the words `Task`,
+`Board`, `delegate` or `Status` appear in it.
 
-- **Workers keep two or three lead approved backup tasks.** So a worker blocked on one thing is
-  not idle, and the alternatives were agreed in advance rather than invented by a worker who
-  wanted something to do.
-- **Global priorities with delegated local queues.** The priorities are the organisation's; the
-  ordering within them belongs to the lead who owns the work.
-- **Leads grant task scoped read and write access.** Scoped to the task, so access ends when the
-  task does rather than accumulating.
+**One journal, one numbering.** The records under `run/agents/` answer what is true now. The
+journal answers what happened, and "the worker crashed, and then the task was reported finished"
+is a sentence somebody has to be able to read in order. Two files cannot be read in order, so
+there is one, and the sequence numbering is locked so two writers cannot claim one place in it.
 
-### What Carl sees
+### Restart policy
 
-- **A structured live feed, plus richer summaries from leads.** Two channels on purpose: the feed
-  is machine readable and complete, the summaries are judged and partial. Carl needs both, and a
-  design that gives him only prose cannot count while one that gives him only events cannot tell
-  him what mattered.
+Immediate on the first crash, then backoff, then the session is treated as the suspect, then the
+supervisor gives up. Each step is a different claim about what is wrong.
 
-### Security
+- Once is bad luck. Try again now; waiting five seconds to find out helps nobody.
+- Repeatedly is a fault, and hammering a fault turns one broken agent into a busy loop. The gap
+  doubles, to a five minute cap.
+- Repeatedly *while resuming* points at the session. A transcript can be too long, corrupt or
+  gone, and retrying the resume fixes none of those, so the session is set aside, kept for
+  inspection, and a fresh one is pinned under the same agent id.
+- After that there is nothing left to vary. The record says degraded and why, the panel shows
+  it, and a person decides.
 
-Security architecture is a separate document and a separate decision. Nothing here weakens what
-already exists: no agent gets sudo, no agent gets a privilege field, and agents run with no home
-directory bound.
+A process that stayed up for a minute before ending did not fail to start, so its exit does not
+count toward any of this. Without that rule an agent restarted once a night declares itself
+degraded within a fortnight, having never once failed to start.
 
-## Open, and worth settling before anybody writes code
+## The questions the note left open, and what was chosen
 
-These are not decided and are written down as questions rather than guessed at.
+**1. What wakes a sleeping agent early.** The supervisor has a wake, and the reason is a value
+rather than a sentence: a task, an incident, or the agent's lead asking. There is deliberately no
+variant meaning "in general", so a wake nobody could later justify cannot be written down. Waking
+an agent that is already up does nothing and records nothing, because a wake nobody performed is
+not something that happened. What is still not decided is the timetable that would make an agent
+sleep in the first place.
 
-1. **What wakes a sleeping agent early.** A scheduled window and an urgent task will collide on
-   the first night.
-2. **What a degraded session actually is.** "Recover degraded" is currently a phrase, not a
-   behaviour. Probably: a fresh session seeded from `summary.md` with the old one kept for
-   inspection, but that is a guess and should be decided rather than defaulted into.
-3. **Who reaps a task whose owner's process died mid work.** The task is `InHand` and its owner
-   is gone. The lead is the obvious answer and the journal needs an event for it either way.
-4. **Whether the supervisor is allowed to refuse to start an agent**, and what the panel shows
-   when it does.
-5. **How `AgentView.process` becomes answerable.** The supervisor is the only thing that can
-   authoritatively associate a process with an agent, so it should publish that association
-   rather than have anything infer it from process names. This is what closes the one honest
-   `unknown` left in the panel.
+**2. What a degraded session actually is.** Set aside, kept, and replaced with a fresh one under
+the same agent id. Not seeded with anything by the supervisor, and this is where the embedded
+memory fact earns its place: every agent is permanently told that its memory folder exists and
+that `summary.md` is the way in, so a fresh session reads what the agent knew without the
+supervisor having an opinion about what an agent should remember. If a fresh session fails too,
+the supervisor stops rather than guessing further.
 
-## What this note is not
+**3. Who reaps a task whose owner's process died mid work.** The lead blocks it, and the worker
+picks it up again after the restart. It is not returned to a queue and not reassigned, because
+the task never stopped being that agent's. A second board told to accept the same task is
+refused.
 
-Not a plan, not an ordering, and not a commitment to build any of it next. It is the set of
-things already agreed, so that the phase which does start writes code against a decision instead
-of rediscovering one.
+**4. Whether the supervisor may refuse to start an agent.** Yes, and it records why. Two ways:
+degraded, which it decided itself after enough failures, and stopped, which somebody decided.
+The panel shows those as different rows, because an agent that needs a decision and an agent
+that is simply not wanted today are not the same thing.
+
+**5. How `AgentView.process` becomes answerable.** From the supervisor's records, which is the
+only thing that can authoritatively associate a process with an agent. Unknown still means
+unknown: an agent with no runtime record is one nobody has said anything about, which is a
+different fact from an agent that is not running.
+
+## Not built
+
+- **The timetable.** Sleep windows, overnight hours, and Carl as the standing exception. The
+  mechanism to stop and wake an agent exists; nothing decides when.
+- **Compaction.** Claude Code compacts a session under pressure on its own. Nothing here measures
+  how full a conversation is, and the protocol exposes no usable figure for it. A percentage
+  nobody measured would be worse than a gap, because somebody would plan around it.
+- **The systemd unit.** `carl supervise` is a loop that a unit will one day restart, in the way
+  the supervisor restarts its agents. The three existing units under `etc/systemd/` are Carl's
+  voice, not the army's.
+- **Arbitrary hierarchy depth.** `army::org` is still a compiled in table with four named agents
+  and a fixed chief, lead, worker set of ranks. Nothing in the runtime layer depends on the
+  depth, which is the part that mattered, but the organisation itself does not yet grow.
+- **Security officers, detector families, severity routing.** A separate document and a separate
+  decision. Nothing built weakens what exists: no agent gets sudo, there is no privilege field
+  anywhere, and there is nowhere on disk to write one.
+
+## The rule that everything else hangs off
+
+Carl controls work. The supervisor controls process existence.
+
+Carl deciding that Nora should stop working on something and Nora's process exiting are different
+acts. A design that ran them together would give Carl a kill switch he was never meant to have,
+and would give the supervisor opinions about work it is in no position to judge.
