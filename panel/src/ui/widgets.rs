@@ -74,22 +74,14 @@ pub fn chip(ui: &mut Ui, text: &str, color: Color32) {
 
 /// A dim all caps label, spaced rather than shrunk.
 pub fn small(ui: &mut Ui, text: &str) {
-    ui.label(
-        RichText::new(theme::spaced(text))
-            .font(theme::label())
-            .color(theme::FAINT),
-    );
+    ui.label(theme::spaced(text).font(theme::label()).color(theme::FAINT));
 }
 
 /// A section heading with a rule running to the right of it, which is what gives the layout
 /// its structure without drawing boxes around everything.
 pub fn section(ui: &mut Ui, title: &str) {
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(theme::spaced(title))
-                .font(theme::label())
-                .color(theme::DIM),
-        );
+        ui.label(theme::spaced(title).font(theme::label()).color(theme::DIM));
         let y = ui.cursor().center().y;
         let x0 = ui.cursor().left() + 6.0;
         let x1 = ui.max_rect().right();
@@ -189,7 +181,7 @@ pub fn link_badge(ui: &mut Ui, link: &Link) {
     ui.horizontal(|ui| {
         pip(ui, color, filled);
         ui.label(
-            RichText::new(theme::spaced(&link.label()))
+            theme::spaced(&link.label())
                 .font(theme::label())
                 .color(color),
         );

@@ -125,6 +125,16 @@ fn main() -> eframe::Result<()> {
         // than be unreadable.
         theme::install(ctx);
 
+        // Ask for fullscreen again on the first frame the window is really up.
+        //
+        // The builder hint alone is not enough. Under Wayland the window is not mapped when
+        // that hint is read, so the compositor is free to ignore it and hand back an ordinary
+        // window, which is what it was doing. Sending the command once the window exists is
+        // what actually makes it fullscreen, and it costs one command on one frame.
+        if drawn == 0 && !args.windowed {
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+        }
+
         // Live by polling the source every frame, never by asking a person to refresh.
         app.tick();
 

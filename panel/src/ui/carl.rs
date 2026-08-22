@@ -50,7 +50,7 @@ fn decisions(app: &mut App, ui: &mut Ui) {
             .inner_margin(eframe::egui::Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new(theme::spaced("CARL NEEDS YOU"))
+                    theme::spaced("CARL NEEDS YOU")
                         .font(theme::label())
                         .color(theme::ACCENT),
                 );
@@ -125,11 +125,7 @@ fn conversation(app: &mut App, ui: &mut Ui, width: f32) {
                     Speaker::Carl => ("CARL", theme::ACCENT),
                 };
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(theme::spaced(who))
-                            .font(theme::label())
-                            .color(color),
-                    );
+                    ui.label(theme::spaced(who).font(theme::label()).color(color));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.label(
                             RichText::new(widgets::ago(now, turn.at))

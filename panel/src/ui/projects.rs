@@ -110,7 +110,7 @@ fn detail(app: &mut App, ui: &mut Ui) {
         .id_salt("project-detail")
         .show(ui, |ui| {
             ui.label(
-                RichText::new(theme::spaced(&p.project.name.to_uppercase()))
+                theme::spaced(&p.project.name.to_uppercase())
                     .font(theme::big())
                     .color(theme::TEXT),
             );
