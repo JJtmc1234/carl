@@ -121,6 +121,14 @@ pub fn decide(record: &Runtime, supervisor: u32, alive: bool, now: u64) -> Next 
 
         Lifecycle::Never => Next::Start(Start::Fresh),
 
+        // Refused rather than waited for, and the difference matters. A wait is a deadline this
+        // module worked out and will act on. Sleep ends when the timetable says so, which is
+        // somewhere else entirely, and a deadline invented here would be a second opinion about
+        // when the morning is.
+        Lifecycle::Asleep { .. } => Next::Refuse {
+            why: "asleep, by its own hours".into(),
+        },
+
         Lifecycle::Running { pid, started, .. } => match (alive, record.owned_by(supervisor)) {
             (true, true) => Next::Leave,
             (true, false) => Next::Reclaim {

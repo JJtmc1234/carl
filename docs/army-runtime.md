@@ -41,6 +41,7 @@ replaced process quietly loses a conversation.
 | `army::runtime::policy` | what to do next about it, pure |
 | `army::runtime::continuity` | how much of what an agent had is still with it |
 | `army::runtime::store` | the records on disk, with one writer |
+| `army::personnel::hours` | when an agent is meant to be off |
 | `army::runtime::lock` | one supervisor per home |
 | `army::runtime::supervisor` | the part that spawns, kills, wakes and carries a message |
 | `carl supervise` | the loop |
@@ -101,6 +102,34 @@ stopping it leaves none.
 Starting a supervisor on a home with no agents gives a service saying "nobody to run" every few
 seconds forever, and enabling it by surprise starts four models that stay up and bill for it.
 
+### Hours
+
+Normal agents are off between 23:00 and 07:00 local. Carl is the exception and keeps no window
+at all, because he is what JJ talks to and an assistant who is off between eleven and seven is
+off exactly when somebody remembers something at midnight.
+
+The window lives in each agent's `config.json`, assigned by rank at founding so a new lead gets
+the ordinary arrangement without anybody remembering to say so. Hours rather than minutes, and
+local rather than UTC, because a person sets it and reads it back.
+
+`keep_hours` is its own pass rather than part of a tick, and it runs first. A tick makes reality
+match the record; the timetable decides what the record ought to say, which is the same kind of
+act as Carl deciding an agent should stop. Running it second would mean starting agents that were
+about to be put down.
+
+**Asleep is not stopped.** They are undone by different things: a stop waits for a person and a
+night ends by itself. If they were one state the morning would quietly undo a decision JJ made on
+Tuesday, which is the failure the separate state exists to prevent. A degraded agent is not put
+to sleep either, because it is the thing somebody is meant to look at.
+
+Sleeping ends the process, which is the whole point, and that includes a process left behind by a
+supervisor that has since gone. Nothing here holds its pipes, so it takes the same route a
+reclaim does. The alternative is a record saying asleep while a model sits there billing.
+
+A night costs an agent nothing. The exit is recorded at the moment it went down rather than at
+the moment it woke, so the morning does not hand it a backoff it never earned, and its attempt
+count is untouched. Otherwise an army would degrade itself over a week of ordinary nights.
+
 ### Restart policy
 
 Immediate on the first crash, then backoff, then the session is treated as the suspect, then the
@@ -125,8 +154,12 @@ degraded within a fortnight, having never once failed to start.
 rather than a sentence: a task, an incident, or the agent's lead asking. There is deliberately no
 variant meaning "in general", so a wake nobody could later justify cannot be written down. Waking
 an agent that is already up does nothing and records nothing, because a wake nobody performed is
-not something that happened. What is still not decided is the timetable that would make an agent
-sleep in the first place.
+not something that happened.
+
+The collision the question was really about is the one the timetable answers. An agent woken
+inside its own window stays up until the window ends, rather than being put back on the next pass
+sixty seconds later. Being woken exempts an agent from the rest of one night and not from every
+night after it, so the flag is cleared by the morning rather than by whoever set it.
 
 **2. What a degraded session actually is.** Set aside, kept, and replaced with a fresh one under
 the same agent id. Not seeded with anything by the supervisor, and this is where the embedded
@@ -152,14 +185,14 @@ different fact from an agent that is not running.
 
 ## Not built
 
-- **The timetable.** Sleep windows, overnight hours, and Carl as the standing exception. The
-  mechanism to stop and wake an agent exists; nothing decides when.
 - **Compaction.** Claude Code compacts a session under pressure on its own. Nothing here measures
   how full a conversation is, and the protocol exposes no usable figure for it. A percentage
   nobody measured would be worse than a gap, because somebody would plan around it.
 - **Arbitrary hierarchy depth.** `army::org` is still a compiled in table with four named agents
   and a fixed chief, lead, worker set of ranks. Nothing in the runtime layer depends on the
   depth, which is the part that mattered, but the organisation itself does not yet grow.
+- **A way to change an agent's hours without editing JSON.** Founding sets them and a text editor
+  changes them. That is enough to run on and is not enough to live with.
 - **Security officers, detector families, severity routing.** A separate document and a separate
   decision. Nothing built weakens what exists: no agent gets sudo, there is no privilege field
   anywhere, and there is nowhere on disk to write one.

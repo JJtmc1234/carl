@@ -55,4 +55,4 @@ pub use policy::{
 };
 pub use record::{Lifecycle, Runtime};
 pub use store::{Roll, dir, path};
-pub use supervisor::{Outcome, Supervisor, Tick};
+pub use supervisor::{Clocked, Outcome, Supervisor, Tick};

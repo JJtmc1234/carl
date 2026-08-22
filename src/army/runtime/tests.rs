@@ -567,3 +567,334 @@ fn the_supervisor_and_carl_share_one_ordered_record() {
     let stopped = kinds.iter().position(|k| *k == "agent_stopped").unwrap();
     assert!(decided < stopped, "and the order is the order it happened");
 }
+
+/// A local hour, turned back into a timestamp this machine agrees is that hour.
+///
+/// The tests below need "three in the morning" and "midday" as unix seconds, and the machine's
+/// zone decides which seconds those are. Searching for it rather than computing it keeps the
+/// zone table out of the test, which is the same reason `local_hour` exists.
+fn at_local_hour(wanted: u32) -> u64 {
+    let start = 1_787_000_000;
+    for step in 0..48 {
+        let when = start + step * 3600;
+        if crate::army::personnel::local_hour(when) == Some(wanted) {
+            return when;
+        }
+    }
+    panic!("no timestamp in two days had local hour {wanted}");
+}
+
+/// An army whose every agent keeps the same window, so a test can pick an hour and know what
+/// the whole army should do at it. Founding gives the chief no window at all, which is correct
+/// and makes for a poor fixture.
+fn all_sleeping(dir: &Path, hours: crate::army::personnel::Hours) -> Personnel {
+    found(dir, 100).unwrap();
+    for name in ["carl", "adrian", "mason", "nora"] {
+        let path = dir.join("army").join(name).join("config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        config["hours"] = serde_json::to_value(hours).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+    }
+    Personnel::open(dir).unwrap()
+}
+
+#[test]
+fn an_army_inside_its_window_is_put_down_and_stays_down() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let mut sup = supervisor(d.path(), &stays_up());
+    let night = at_local_hour(3);
+
+    sup.tick(&people, night).unwrap();
+    assert_eq!(sup.holding(), 4, "up before the timetable is consulted");
+
+    let changed = sup.keep_hours(&people, night).unwrap();
+    assert_eq!(changed.len(), 4, "all four were put down");
+    assert_eq!(sup.holding(), 0, "and their processes let go");
+
+    // And the tick that follows leaves them alone rather than starting them again, which is the
+    // whole point of the state being its own rather than an absence.
+    let tick = sup.tick(&people, night).unwrap();
+    assert_eq!(
+        tick.count(|o| matches!(o, Outcome::NotStarting { .. })),
+        4,
+        "{:?}",
+        tick.lines()
+    );
+    assert_eq!(sup.holding(), 0);
+}
+
+#[test]
+fn a_second_pass_inside_the_window_changes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let mut sup = supervisor(d.path(), &stays_up());
+    let night = at_local_hour(2);
+
+    sup.keep_hours(&people, night).unwrap();
+    let again = sup.keep_hours(&people, night + 60).unwrap();
+    assert!(again.is_empty(), "nothing changed, so nothing is reported");
+}
+
+/// The morning. The agent comes back on the conversation it had, because sleeping is a process
+/// ending and a process ending is the one thing this whole layer is built to survive.
+#[test]
+fn the_window_ending_lets_an_agent_start_again_on_the_same_conversation() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), &stays_up());
+
+    let night = at_local_hour(3);
+    sup.tick(&people, night).unwrap();
+    let before = sup.roll().get(&nora).unwrap().session.clone();
+    sup.keep_hours(&people, night).unwrap();
+
+    let morning = at_local_hour(9);
+    let changed = sup.keep_hours(&people, morning).unwrap();
+    assert_eq!(changed.len(), 4, "all four are allowed up again");
+
+    let tick = sup.tick(&people, morning).unwrap();
+    assert_eq!(
+        tick.count(|o| matches!(o, Outcome::Started(Start::Resume))),
+        4,
+        "resumed rather than started over: {:?}",
+        tick.lines()
+    );
+    assert_eq!(sup.roll().get(&nora).unwrap().session, before);
+    assert!(before.is_some(), "and there was a conversation to keep");
+}
+
+/// Sleeping must not count as failing to start, or an army would degrade itself over a week of
+/// perfectly ordinary nights.
+#[test]
+fn a_night_costs_an_agent_no_attempts_and_no_backoff() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), &stays_up());
+
+    let night = at_local_hour(1);
+    sup.tick(&people, night).unwrap();
+    sup.keep_hours(&people, night).unwrap();
+    sup.keep_hours(&people, at_local_hour(8)).unwrap();
+
+    let record = sup.roll().get(&nora).unwrap();
+    assert_eq!(record.attempts, 0, "a night is not a failure");
+    // Started at once rather than sat in a backoff worked out from a fresh timestamp.
+    let tick = sup.tick(&people, at_local_hour(8)).unwrap();
+    assert_eq!(tick.count(|o| matches!(o, Outcome::Started(_))), 4);
+}
+
+/// The collision the design note flagged first. Somebody needs an agent at two in the morning,
+/// and the timetable must not take it away again on the next pass.
+#[test]
+fn an_agent_woken_inside_its_window_is_left_up_until_the_window_ends() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), &stays_up());
+
+    let night = at_local_hour(1);
+    sup.tick(&people, night).unwrap();
+    sup.keep_hours(&people, night).unwrap();
+
+    let woke = sup
+        .wake(
+            &nora,
+            crate::army::event::Because::Incident {
+                what: "the panel stopped answering".into(),
+            },
+            night + 60,
+        )
+        .unwrap();
+    assert!(woke, "she was asleep, so waking her did something");
+
+    // The timetable runs again, still inside the window, and leaves her alone.
+    let changed = sup.keep_hours(&people, night + 120).unwrap();
+    assert!(
+        !changed.iter().any(|(name, _)| name == "nora"),
+        "nora was put back to sleep: {changed:?}"
+    );
+    let tick = sup.tick(&people, night + 120).unwrap();
+    assert_eq!(
+        tick.what
+            .iter()
+            .find(|(n, _)| n == "nora")
+            .map(|(_, o)| o.clone()),
+        Some(Outcome::Started(Start::Resume)),
+        "and she is started rather than refused"
+    );
+}
+
+/// Being woken exempts an agent from the rest of one window, not from every window after it.
+#[test]
+fn an_agent_woken_one_night_still_sleeps_the_next() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), &stays_up());
+
+    let night = at_local_hour(1);
+    sup.keep_hours(&people, night).unwrap();
+    sup.wake(
+        &nora,
+        crate::army::event::Because::Lead {
+            who: "mason".into(),
+        },
+        night + 60,
+    )
+    .unwrap();
+
+    // Morning clears it, without her having to be asleep at the time.
+    sup.keep_hours(&people, at_local_hour(10)).unwrap();
+    assert!(!sup.roll().get(&nora).unwrap().roused);
+
+    // And the next night she goes down like everybody else.
+    let changed = sup.keep_hours(&people, at_local_hour(23)).unwrap();
+    assert!(
+        changed.iter().any(|(name, _)| name == "nora"),
+        "nora stayed up a second night: {changed:?}"
+    );
+}
+
+/// The failure the state exists to prevent. An agent JJ switched off must not come back by
+/// itself in the morning.
+#[test]
+fn the_morning_does_not_undo_a_decision_to_stop() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), &stays_up());
+
+    sup.tick(&people, at_local_hour(12)).unwrap();
+    sup.stop(&nora, "JJ wanted her off", at_local_hour(12))
+        .unwrap();
+
+    sup.keep_hours(&people, at_local_hour(2)).unwrap();
+    sup.keep_hours(&people, at_local_hour(9)).unwrap();
+
+    let record = sup.roll().get(&nora).unwrap();
+    assert!(
+        matches!(&record.lifecycle, Lifecycle::Stopped { why } if why.contains("JJ")),
+        "{:?}",
+        record.lifecycle
+    );
+}
+
+/// An agent the supervisor gave up on is the thing a person is meant to look at, so the night
+/// must not quietly file it away as asleep.
+#[test]
+fn a_degraded_agent_is_not_put_to_sleep_over_it() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let nora = id_of(&people, "nora");
+
+    // Written before the supervisor opens, which is the only way in from outside and is exactly
+    // how a supervisor that gave up last night hands the state to the one running now.
+    let mut roll = Roll::open(d.path()).unwrap();
+    let mut record = Runtime::never(nora.clone(), "nora", 1);
+    record.lifecycle = Lifecycle::Degraded {
+        why: "will not start".into(),
+    };
+    roll.save(d.path(), record).unwrap();
+    drop(roll);
+
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.keep_hours(&people, at_local_hour(3)).unwrap();
+    assert!(matches!(
+        sup.roll().get(&nora).unwrap().lifecycle,
+        Lifecycle::Degraded { .. }
+    ));
+}
+
+/// The chief keeps no hours, so nothing about the night touches him.
+#[test]
+fn an_agent_with_no_window_is_never_put_down() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let mut sup = supervisor(d.path(), &stays_up());
+    let night = at_local_hour(3);
+
+    sup.tick(&people, night).unwrap();
+    let changed = sup.keep_hours(&people, night).unwrap();
+
+    assert!(
+        !changed.iter().any(|(name, _)| name == "carl"),
+        "carl has no window and was put down anyway: {changed:?}"
+    );
+    assert_eq!(changed.len(), 3, "the other three do have one");
+}
+
+/// Sleeping is a thing that happened to an agent, and the record has to be able to tell it
+/// apart from somebody deciding to stop one.
+#[test]
+fn going_to_sleep_is_recorded_as_its_own_event() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let mut sup = supervisor(d.path(), &stays_up());
+
+    sup.keep_hours(&people, at_local_hour(3)).unwrap();
+
+    let records = crate::army::event::read(people.journal_path()).unwrap();
+    let slept: Vec<_> = records
+        .iter()
+        .filter(|r| r.event.kind() == "agent_slept")
+        .collect();
+    assert_eq!(slept.len(), 4);
+    assert!(
+        !records.iter().any(|r| r.event.kind() == "agent_stopped"),
+        "a night is not somebody deciding to stop an agent"
+    );
+}
+
+/// A process left behind by a supervisor that has gone is still a model sitting there billing.
+/// Putting the agent down for the night has to end it, and this supervisor holds no pipe to it,
+/// so it takes the same route a reclaim does.
+///
+/// The orphan is built rather than produced by killing a supervisor, because two supervisors
+/// cannot share a home and inside one test process there is only one pid to be. A record naming
+/// a live process and somebody else's supervisor is exactly the state either way.
+#[test]
+fn sleeping_ends_a_process_left_by_a_supervisor_that_is_gone() {
+    let d = tempfile::tempdir().unwrap();
+    let people = all_sleeping(d.path(), crate::army::personnel::Hours::night());
+    let nora = id_of(&people, "nora");
+
+    let mut orphan = std::process::Command::new(stays_up())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("the stand in runs");
+    let pid = orphan.id();
+    let started = crate::providers::system::started::started(pid).expect("it is running");
+
+    let mut record = Runtime::never(nora.clone(), "nora", 1);
+    record.lifecycle = Lifecycle::Running {
+        pid,
+        started,
+        since: 1,
+    };
+    record.session = Some(crate::SessionId::fresh().unwrap());
+    // Somebody else's supervisor, which is what makes this an orphan rather than ours.
+    record.supervisor = Some(u32::MAX);
+    let mut roll = Roll::open(d.path()).unwrap();
+    roll.save(d.path(), record).unwrap();
+    drop(roll);
+
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.keep_hours(&people, at_local_hour(3)).unwrap();
+
+    assert!(
+        !crate::providers::system::started::is_still(pid, started),
+        "the orphaned process was left running all night"
+    );
+    assert!(matches!(
+        sup.roll().get(&nora).unwrap().lifecycle,
+        Lifecycle::Asleep { .. }
+    ));
+
+    // Reaped here rather than left for the harness, so the test leaves nothing behind.
+    let _ = orphan.wait();
+}

@@ -35,7 +35,7 @@ use super::record::{Lifecycle, Runtime};
 use super::store::Roll;
 use crate::army::chain::{brief_for, tools_for};
 use crate::army::event::{Because, Event, Journal};
-use crate::army::personnel::{AgentId, Personnel, memory};
+use crate::army::personnel::{AgentId, Hours, Personnel, local_hour, memory};
 use crate::claude::{Runner, Session};
 use crate::providers::system::started;
 use crate::{Result, SessionId};
@@ -73,6 +73,28 @@ pub enum Outcome {
     Failed {
         why: String,
     },
+}
+
+/// What the clock did to one agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Clocked {
+    /// Put down for the night, by the window given.
+    Slept(Hours),
+    /// Its window ended, so it is startable again. The start itself is the next tick's.
+    Woke,
+}
+
+impl std::fmt::Display for Clocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Clocked::Slept(hours) => write!(
+                f,
+                "asleep until {:02}:00, by its hours of {hours}",
+                hours.to
+            ),
+            Clocked::Woke => f.write_str("its hours are over, so it may start again"),
+        }
+    }
 }
 
 /// One pass over the army.
@@ -249,9 +271,123 @@ impl Supervisor {
         };
         record.attempts = 0;
         record.supervisor = None;
+        // So the timetable does not put it straight back to sleep on the next pass. Cleared
+        // there, when the window ends, rather than here, so an agent woken at noon is not
+        // exempt from that night.
+        record.roused = true;
         record.updated_at = now;
         self.roll.save(&self.home, record)?;
         Ok(true)
+    }
+
+    /// Puts agents down for the night and lets them back up, by their own hours.
+    ///
+    /// Its own pass rather than part of `tick`, because the two answer different questions. A
+    /// tick makes reality match the record. This decides what the record ought to say, which is
+    /// the same kind of act as Carl deciding an agent should stop working on something, and it
+    /// happens to be about process existence rather than about work.
+    ///
+    /// Order matters when both run: this first, so a tick sees an agent that is already asleep
+    /// rather than starting one it is about to put down.
+    ///
+    /// Returns only what changed. An army that is awake and meant to be awake produces nothing,
+    /// which is what makes it safe to call every few seconds and what makes a line in the log
+    /// mean something.
+    pub fn keep_hours(&mut self, people: &Personnel, now: u64) -> Result<Vec<(String, Clocked)>> {
+        // No local time means no timetable, and no timetable means leave everything alone. An
+        // army that all went to sleep because a clock could not be read would be worse than one
+        // that kept working through the night.
+        let Some(hour) = local_hour(now) else {
+            return Ok(Vec::new());
+        };
+
+        let mut changed = Vec::new();
+        for name in people.names() {
+            let folder = people.get(name).expect("named by the roster");
+            let (Some(identity), Some(hours)) = (&folder.identity, folder.config.hours) else {
+                continue;
+            };
+            let id = identity.id.clone();
+            let mut record = match self.roll.get(&id) {
+                Some(known) => known.clone(),
+                None => Runtime::never(id.clone(), name, now),
+            };
+
+            match hours.asleep_at(hour) {
+                true => {
+                    // Roused outranks the clock until the window ends, and so do the two states
+                    // that somebody or something else decided. Sleeping a degraded agent would
+                    // hide the thing a person is meant to look at, and sleeping a stopped one
+                    // would mean the morning quietly undoes a decision.
+                    let already = matches!(
+                        record.lifecycle,
+                        Lifecycle::Asleep { .. }
+                            | Lifecycle::Stopped { .. }
+                            | Lifecycle::Degraded { .. }
+                    );
+                    if already || record.roused {
+                        continue;
+                    }
+
+                    // Dropping the session is what ends a process this supervisor holds: it
+                    // closes stdin and waits, so the transcript the morning will resume is
+                    // written out properly.
+                    self.live.retain(|(held, _)| *held != id);
+
+                    // A process left by a supervisor that has since gone is not ended by that,
+                    // because nothing here holds its pipes. Without this the record would say
+                    // asleep while a model sat there running all night, which is both the
+                    // expensive failure and the dishonest one.
+                    if let Lifecycle::Running { pid, started, .. } = record.lifecycle
+                        && !record.owned_by(self.pid)
+                    {
+                        end(pid, started);
+                    }
+
+                    record.lifecycle = Lifecycle::Asleep { since: now };
+                    record.supervisor = None;
+                    record.updated_at = now;
+                    self.journal.append(
+                        ACTOR,
+                        Event::AgentSlept {
+                            agent: id.clone(),
+                            name: record.name.clone(),
+                            hours,
+                        },
+                    )?;
+                    self.roll.save(&self.home, record)?;
+                    changed.push((name.to_string(), Clocked::Slept(hours)));
+                }
+                false => {
+                    let waking = match record.lifecycle {
+                        Lifecycle::Asleep { since } => Some(since),
+                        _ => None,
+                    };
+                    if waking.is_none() && !record.roused {
+                        continue;
+                    }
+
+                    // Cleared whether or not this agent was asleep. That is the whole point of
+                    // it: being woken exempts an agent from the rest of one window, not from
+                    // every window after it.
+                    record.roused = false;
+
+                    if let Some(since) = waking {
+                        // Handed back the exit it actually had, hours ago, rather than a fresh
+                        // one. A timestamp of now would put the agent into a backoff it never
+                        // earned and leave it sitting there at seven in the morning.
+                        record.lifecycle = Lifecycle::Exited {
+                            code: None,
+                            at: since,
+                        };
+                        changed.push((name.to_string(), Clocked::Woke));
+                    }
+                    record.updated_at = now;
+                    self.roll.save(&self.home, record)?;
+                }
+            }
+        }
+        Ok(changed)
     }
 
     /// Hands a message to an agent's process and returns what it said.

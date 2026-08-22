@@ -41,7 +41,18 @@ pub fn run(home: &Path, program: &str, every: u64, once: bool) -> Result<()> {
                 eprintln!("  no army has been founded in this home, so there is nobody to run")
             }
             Ok(people) => {
-                let tick = supervisor.tick(&people, now())?;
+                let at = now();
+
+                // Before the tick, so a tick never starts an agent this pass is about to put
+                // down for the night.
+                for (name, clocked) in supervisor.keep_hours(&people, at)? {
+                    println!("  {name:8} {clocked}");
+                    // The army looks different now, so whatever was printed last no longer
+                    // describes it and the next tick should say so in full.
+                    said = None;
+                }
+
+                let tick = supervisor.tick(&people, at)?;
                 if said.as_ref() != Some(&tick.what) {
                     for line in tick.lines() {
                         println!("{line}");

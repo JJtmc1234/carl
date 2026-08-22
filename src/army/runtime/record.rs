@@ -62,6 +62,17 @@ pub enum Lifecycle {
     Degraded { why: String },
     /// Deliberately not running. The supervisor will not start it until somebody says so.
     Stopped { why: String },
+    /// Off for the night, by the hours in its own config.
+    ///
+    /// Its own state rather than a `Stopped` with a reason in the string, because the two are
+    /// undone by different things. A stop is undone by somebody deciding, and the clock must
+    /// never undo one: an agent JJ switched off on Tuesday coming back by itself at seven on
+    /// Wednesday is the whole failure this variant exists to prevent.
+    ///
+    /// `since` is when the process was ended for the night, kept so that waking can hand the
+    /// policy an exit that is genuinely in the past. Waking with a fresh timestamp would put the
+    /// agent into a backoff it never earned.
+    Asleep { since: u64 },
 }
 
 impl Lifecycle {
@@ -73,6 +84,7 @@ impl Lifecycle {
             Lifecycle::Exited { .. } => "exited",
             Lifecycle::Degraded { .. } => "degraded",
             Lifecycle::Stopped { .. } => "stopped",
+            Lifecycle::Asleep { .. } => "asleep",
         }
     }
 
@@ -122,6 +134,16 @@ pub struct Runtime {
     /// Consecutive starts that did not stick. Reset by a process that stayed up.
     #[serde(default)]
     pub attempts: u32,
+    /// Woken deliberately, and not to be put back until its window ends.
+    ///
+    /// The collision the design note flagged first: a scheduled window and an urgent task will
+    /// meet on the first night. Without this the timetable puts the agent straight back to sleep
+    /// on the next pass, and whoever woke it gets one tick of an agent.
+    ///
+    /// Cleared by the timetable the moment the window ends rather than by whoever set it, so an
+    /// agent woken at noon is not exempt from that night.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub roused: bool,
     /// The pid of the supervisor that last wrote this.
     ///
     /// So a record can say who owns it. A supervisor reading a record written by a pid that is
@@ -142,6 +164,7 @@ impl Runtime {
             continuity: None,
             abandoned: Vec::new(),
             attempts: 0,
+            roused: false,
             supervisor: None,
             updated_at: now,
         }

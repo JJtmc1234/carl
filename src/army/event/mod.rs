@@ -29,7 +29,7 @@ pub use journal::{Journal, about, read};
 
 use serde::{Deserialize, Serialize};
 
-use super::personnel::AgentId;
+use super::personnel::{AgentId, Hours};
 use super::runtime::{Continuity, Session};
 use super::task::{Status, TaskId};
 use crate::{ProjectId, SessionId};
@@ -155,6 +155,23 @@ pub enum Event {
         agent: AgentId,
         name: String,
         why: String,
+    },
+    /// An agent was put down for the night by its own hours.
+    ///
+    /// Separate from `AgentStopped` because the two are undone by different things. A stop waits
+    /// for somebody to decide and this one ends by itself, and counting "how often was an agent
+    /// deliberately not running" gives a useless answer if a nightly event and a decision are
+    /// the same row.
+    ///
+    /// There is no event for waking again. The next pass starts the process and writes
+    /// `AgentStarted`, which already says everything a second record would, and two records of
+    /// one fact are one failed write away from disagreeing.
+    AgentSlept {
+        agent: AgentId,
+        name: String,
+        /// The window, so a reader can see which arrangement put it down without going and
+        /// finding a config file that may have changed since.
+        hours: Hours,
     },
     /// The supervisor has stopped trying to start this agent.
     ///
@@ -302,6 +319,7 @@ impl Event {
             Event::AgentCrashed { .. } => "agent_crashed",
             Event::AgentStartFailed { .. } => "agent_start_failed",
             Event::AgentStopped { .. } => "agent_stopped",
+            Event::AgentSlept { .. } => "agent_slept",
             Event::AgentGaveUp { .. } => "agent_gave_up",
             Event::ContinuityChanged { .. } => "continuity_changed",
             Event::AgentWoken { .. } => "agent_woken",
@@ -319,6 +337,7 @@ impl Event {
             | Event::AgentCrashed { agent, .. }
             | Event::AgentStartFailed { agent, .. }
             | Event::AgentStopped { agent, .. }
+            | Event::AgentSlept { agent, .. }
             | Event::AgentGaveUp { agent, .. }
             | Event::ContinuityChanged { agent, .. }
             | Event::AgentWoken { agent, .. } => Some(agent),
@@ -352,6 +371,7 @@ impl Event {
             | Event::AgentCrashed { .. }
             | Event::AgentStartFailed { .. }
             | Event::AgentStopped { .. }
+            | Event::AgentSlept { .. }
             | Event::AgentGaveUp { .. }
             | Event::AgentWoken { .. }
             | Event::ContinuityChanged { .. } => None,

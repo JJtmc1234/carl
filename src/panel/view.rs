@@ -135,6 +135,12 @@ pub enum ProcessState {
     Degraded,
     /// Deliberately not running.
     Stopped,
+    /// Off for the night, and coming back by itself.
+    ///
+    /// Its own state rather than a stop, because the two need different things from whoever is
+    /// reading. A stopped agent is waiting for a person and a sleeping one is waiting for the
+    /// morning.
+    Asleep,
 }
 
 impl ProcessState {
@@ -147,6 +153,7 @@ impl ProcessState {
             Lifecycle::Exited { .. } => ProcessState::Exited,
             Lifecycle::Degraded { .. } => ProcessState::Degraded,
             Lifecycle::Stopped { .. } => ProcessState::Stopped,
+            Lifecycle::Asleep { .. } => ProcessState::Asleep,
         }
     }
 }

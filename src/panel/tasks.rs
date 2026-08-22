@@ -114,6 +114,7 @@ pub fn fold(records: &[Record]) -> Vec<TaskView> {
             | Event::AgentCrashed { .. }
             | Event::AgentStartFailed { .. }
             | Event::AgentStopped { .. }
+            | Event::AgentSlept { .. }
             | Event::AgentGaveUp { .. }
             | Event::AgentWoken { .. }
             | Event::ContinuityChanged { .. }
