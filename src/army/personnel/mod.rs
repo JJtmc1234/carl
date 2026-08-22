@@ -31,6 +31,7 @@ mod config;
 mod enlist;
 mod files;
 mod founding;
+mod hours;
 mod identity;
 pub mod memory;
 mod profile;
@@ -45,6 +46,7 @@ pub use enlist::{announcement, enlist, found, may_enlist};
 /// The careful small file reader and writer every agent file goes through, shared with the
 /// supervisor so its records get the same staged write and the same error naming the file.
 pub(crate) use files::{read_json, write_json};
+pub use hours::{Hours, local_hour};
 pub use identity::{AgentId, Identity};
 pub use profile::Profile;
 pub use state::{NOTE_LIMIT, RECENT_KEPT, State};
@@ -126,8 +128,16 @@ pub fn describe(folder: &Folder) -> String {
         out.push_str(&format!("- Rule: {rule}\n"));
     }
 
-    out.push_str(
-        "\n## State\n\nWhich task this agent is holding is in `state.json`, the only file here \
+    let hours = match &folder.config.hours {
+        Some(hours) => format!(
+            "Asleep {hours}, local time. The supervisor stops the process for the window and starts it again after."
+        ),
+        None => "Never sleeps. Nothing stops this agent's process for the night.".to_string(),
+    };
+
+    out.push_str(&format!(
+        "\n## Hours\n\n{hours}\n\n\
+         ## State\n\nWhich task this agent is holding is in `state.json`, the only file here \
          that changes often. The status of that task belongs to the task itself and is not \
          copied here.\n\n\
          ## Memory\n\n`memory/` is this agent's own, and `memory/summary.md` is the way in. It \
@@ -135,7 +145,7 @@ pub fn describe(folder: &Folder) -> String {
          grants anything; it is what this agent knows, not what it may do.\n\n\
          ## Process\n\nWhether a process is running for this agent is not here either. That \
          belongs to the supervisor, which writes it under `run/agents/` where this folder \
-         cannot reach it.\n",
-    );
+         cannot reach it.\n"
+    ));
     out
 }

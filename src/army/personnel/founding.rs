@@ -5,7 +5,32 @@
 //! purpose. It is a seed rather than a source of truth: once an agent has a folder, the folder
 //! is what counts.
 
+use super::config::Config;
+use super::hours::Hours;
 use super::profile::Profile;
+use crate::army::Rank;
+
+/// What hours an agent keeps when it is enlisted.
+///
+/// Normal agents are off overnight. An agent that never stops is an agent whose context and cost
+/// grow without anybody choosing it, and nobody chooses a thing that has no moment of being
+/// decided.
+///
+/// The chief is the exception, and it is the only one. Carl is what JJ talks to, and an assistant
+/// that is off between eleven and seven is an assistant that is off exactly when somebody
+/// remembers something at midnight. Everybody else can be started when there is work.
+///
+/// By rank rather than by name, so a second lead added to `org.rs` gets the ordinary arrangement
+/// without anybody remembering to come back here.
+pub(super) fn founding_config(rank: Rank) -> Config {
+    Config {
+        hours: match rank {
+            Rank::Chief => None,
+            _ => Some(Hours::night()),
+        },
+        ..Config::default()
+    }
+}
 
 /// What each founding agent's folder starts as.
 ///

@@ -552,3 +552,55 @@ fn reopening_the_army_does_not_rewrite_what_an_agent_remembered() {
         "the counter overflows at 2^31"
     );
 }
+
+/// Normal agents are off overnight and the chief is not, which is the arrangement JJ asked for.
+/// By rank rather than by name, so a second lead added to the table gets it without anybody
+/// remembering to come back and say so.
+#[test]
+fn founding_gives_everybody_but_the_chief_a_sleep_window() {
+    let d = tempfile::tempdir().unwrap();
+    let army = found(d.path(), 100).unwrap();
+
+    for name in army.names() {
+        let hours = army.config(name).unwrap().hours;
+        match org::require(name).unwrap().rank {
+            crate::army::Rank::Chief => assert_eq!(
+                hours, None,
+                "{name} is the chief and should never be switched off"
+            ),
+            _ => assert_eq!(
+                hours,
+                Some(Hours::night()),
+                "{name} should keep the ordinary hours"
+            ),
+        }
+    }
+}
+
+#[test]
+fn a_sleep_window_survives_a_restart_and_reads_in_the_readme() {
+    let d = tempfile::tempdir().unwrap();
+    drop(found(d.path(), 100).unwrap());
+
+    let army = reopen(d.path());
+    assert_eq!(army.config("nora").unwrap().hours, Some(Hours::night()));
+
+    let readme = std::fs::read_to_string(army.folder("nora").join("README.md")).unwrap();
+    assert!(readme.contains("23:00 to 07:00"), "{readme}");
+    let carl = std::fs::read_to_string(army.folder("carl").join("README.md")).unwrap();
+    assert!(carl.contains("Never sleeps"), "{carl}");
+}
+
+/// A window nobody can act on is refused when the folder loads rather than at three in the
+/// morning, which is the only time anybody would otherwise find out.
+#[test]
+fn a_config_with_an_impossible_window_is_refused_at_load() {
+    let d = tempfile::tempdir().unwrap();
+    drop(found(d.path(), 100).unwrap());
+    let path = d.path().join("army").join("nora").join("config.json");
+    let honest = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, honest.replace("\"to\": 7", "\"to\": 23")).unwrap();
+
+    let err = Personnel::open(d.path()).unwrap_err().to_string();
+    assert!(err.contains("never or always"), "{err}");
+}

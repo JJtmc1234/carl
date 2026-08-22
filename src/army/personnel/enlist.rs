@@ -29,7 +29,7 @@ use crate::army::org::{self, Agent};
 use crate::{Error, Result};
 
 use super::config::Config;
-use super::founding::founding_profile;
+use super::founding::{founding_config, founding_profile};
 use super::identity::{AgentId, Identity};
 use super::profile::Profile;
 use super::state::State;
@@ -78,7 +78,7 @@ pub fn found(home: impl Into<std::path::PathBuf>, now: u64) -> Result<Personnel>
             "jj",
             agent,
             profile,
-            Config::default(),
+            founding_config(agent.rank),
             said,
             now,
         )?;

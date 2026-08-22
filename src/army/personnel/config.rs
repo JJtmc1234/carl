@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::hours::Hours;
 use crate::{Error, Result};
 
 /// Which model an agent runs on.
@@ -56,18 +57,32 @@ pub struct Config {
     /// Standing rules the harness puts in front of this agent, beyond its remit.
     #[serde(default)]
     pub rules: Vec<String>,
+    /// When this agent is meant to be off, if it ever is.
+    ///
+    /// `None` means it never sleeps, which is the chief's arrangement and nobody else's.
+    /// Defaulted, so a folder written before agents had hours still loads and reads as an agent
+    /// nobody has given a window to, which is what it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hours: Option<Hours>,
 }
 
 impl Default for Config {
-    /// Everybody starts on the strongest model.
+    /// Everybody starts on the strongest model, and nobody sleeps.
     ///
     /// Which agents are worth running cheaper is a judgement about cost that belongs to JJ, so
     /// the default does not quietly make it for him. Change one folder when there is a reason.
+    ///
+    /// No sleep window here for a different reason. Which agents keep which hours is an
+    /// organisational fact, so it is written where the organisation is founded rather than in
+    /// the value everything else in the program reaches for when it needs a config. A default
+    /// that switched an agent off at eleven would also make every test that builds one behave
+    /// differently depending on when it was run.
     fn default() -> Self {
         Self {
             model: Model::Opus,
             deadline_secs: DEFAULT_DEADLINE,
             rules: Vec::new(),
+            hours: None,
         }
     }
 }
@@ -81,6 +96,9 @@ impl Config {
                 "a deadline must be between 1 and 3600 seconds, got {}",
                 self.deadline_secs
             )));
+        }
+        if let Some(hours) = &self.hours {
+            hours.check()?;
         }
         Ok(())
     }
