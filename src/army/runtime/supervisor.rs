@@ -13,6 +13,12 @@
 //! omission. Carl controls work and the supervisor controls process existence, so the only thing
 //! this ever says to an agent is where its memory folder is.
 //!
+//! **It writes to the same journal Carl does, and that is the point.** The records under `run/`
+//! answer what is true now. The journal answers what happened, and "the worker crashed, and then
+//! the task was reported finished" is a sentence somebody has to be able to read in order. Two
+//! files cannot be read in order, so there is one, and the numbering is locked so two writers
+//! cannot claim one place in it.
+//!
 //! **The awkward case, written down because it looks like a bug.** When a supervisor exits, its
 //! agents' processes go with it, because dropping a session closes stdin and waits. Their records
 //! still say running. The next supervisor finds a record claiming a process that is not there,
@@ -21,15 +27,24 @@
 
 use std::path::PathBuf;
 
+use super::continuity::{self, Continuity};
 use super::lock::Lock;
 use super::policy::{self, Next, Start};
 use super::record::{Lifecycle, Runtime};
 use super::store::Roll;
 use crate::army::chain::{brief_for, tools_for};
+use crate::army::event::{Event, Journal};
 use crate::army::personnel::{AgentId, Personnel, memory};
 use crate::claude::{Runner, Session};
 use crate::providers::system::started;
 use crate::{Result, SessionId};
+
+/// Who the runtime events are attributed to.
+///
+/// Not an agent, and deliberately not the name of the agent a record is about. A process ending
+/// is something that happened to an agent rather than something it did, and writing it down as
+/// though the agent did it would make "the last thing Nora did" answer with Nora dying.
+pub const ACTOR: &str = "supervisor";
 
 /// How long a reclaimed process is given to end politely before it is not asked again.
 const POLITE: std::time::Duration = std::time::Duration::from_secs(2);
@@ -106,6 +121,8 @@ pub struct Supervisor {
     /// A record can say a process is running. It cannot hold the pipes to it, and pipes are what
     /// ownership actually means here: a process whose pipes are gone is alive and unreachable.
     live: Vec<(AgentId, Session)>,
+    /// Where what happened is written down. The same file Carl writes work to.
+    journal: Journal,
     pid: u32,
     /// Dropped last, releasing the claim on this home.
     _lock: Lock,
@@ -118,6 +135,7 @@ impl Supervisor {
         let _lock = Lock::take(&home)?;
         Ok(Self {
             roll: Roll::open(&home)?,
+            journal: Journal::open(home.join("run").join("events.jsonl"))?,
             home,
             program: program.into(),
             live: Vec::new(),
@@ -152,10 +170,20 @@ impl Supervisor {
         let Some(mut record) = self.roll.get(agent).cloned() else {
             return Ok(());
         };
+        let why = why.into();
         self.live.retain(|(id, _)| id != agent);
-        record.lifecycle = Lifecycle::Stopped { why: why.into() };
+        record.lifecycle = Lifecycle::Stopped { why: why.clone() };
         record.supervisor = None;
         record.updated_at = now;
+
+        self.journal.append(
+            ACTOR,
+            Event::AgentStopped {
+                agent: record.agent.clone(),
+                name: record.name.clone(),
+                why,
+            },
+        )?;
         self.roll.save(&self.home, record)
     }
 
@@ -182,6 +210,14 @@ impl Supervisor {
                 record.lifecycle = Lifecycle::Degraded { why: why.clone() };
                 record.supervisor = None;
                 record.updated_at = now;
+                self.journal.append(
+                    ACTOR,
+                    Event::AgentGaveUp {
+                        agent: record.agent.clone(),
+                        name: record.name.clone(),
+                        why: why.clone(),
+                    },
+                )?;
                 self.roll.save(&self.home, record)?;
                 Ok(Outcome::NotStarting { why })
             }
@@ -233,6 +269,18 @@ impl Supervisor {
             true => 0,
             false => record.attempts.saturating_add(1),
         };
+
+        // Written before the record is saved. A crash after the write leaves an outcome that can
+        // be looked up. A crash before it loses the only evidence anything happened at all.
+        self.journal.append(
+            ACTOR,
+            Event::AgentCrashed {
+                agent: record.agent.clone(),
+                name: record.name.clone(),
+                code,
+                attempt: record.attempts,
+            },
+        )?;
         self.roll.save(&self.home, record.clone())?;
         Ok(false)
     }
@@ -252,6 +300,22 @@ impl Supervisor {
         if how == Start::Renew
             && let Some(old) = record.session.take()
         {
+            self.journal.append(
+                ACTOR,
+                Event::ContinuityChanged {
+                    agent: record.agent.clone(),
+                    name: name.to_string(),
+                    from: continuity::Session::Resumed,
+                    to: continuity::Session::Replaced,
+                    why: format!(
+                        "{} starts in a row did not stick while resuming, so the conversation is \
+                         the suspect and retrying it cannot fix a transcript that is too long, \
+                         corrupt or gone",
+                        record.attempts
+                    ),
+                    abandoned: Some(old.clone()),
+                },
+            )?;
             record.abandoned.push(old);
         }
 
@@ -262,6 +326,10 @@ impl Supervisor {
         let resume = how == Start::Resume && record.session.is_some();
 
         let workdir = people.folder(name);
+        // Asked before the process starts, because after it there is nothing to do about the
+        // answer, and an agent that comes up looking healthy while knowing nothing is the one
+        // failure here that reports itself as a success.
+        let continuity = Continuity::of(&record, how, memory::summary_path(&workdir).is_file());
         let system = format!(
             "{}\n\n{}",
             brief_for(folder.agent),
@@ -271,6 +339,7 @@ impl Supervisor {
 
         record.name = name.to_string();
         record.session = Some(session.clone());
+        record.continuity = Some(continuity);
         record.updated_at = now;
 
         // Two ways for this to fail and they are the same failure: no process. Either the binary
@@ -294,6 +363,15 @@ impl Supervisor {
                 };
                 record.supervisor = Some(self.pid);
                 let id = record.agent.clone();
+                self.journal.append(
+                    ACTOR,
+                    Event::AgentStarted {
+                        agent: id.clone(),
+                        name: name.to_string(),
+                        continuity,
+                        attempt: record.attempts,
+                    },
+                )?;
                 self.roll.save(&self.home, record)?;
 
                 // Replacing rather than adding. Anything still held for this agent is a session
@@ -309,6 +387,15 @@ impl Supervisor {
                 };
                 record.supervisor = None;
                 record.attempts = record.attempts.saturating_add(1);
+                self.journal.append(
+                    ACTOR,
+                    Event::AgentStartFailed {
+                        agent: record.agent.clone(),
+                        name: name.to_string(),
+                        why: e.to_string(),
+                        attempt: record.attempts,
+                    },
+                )?;
                 self.roll.save(&self.home, record)?;
                 Ok(Outcome::Failed { why: e.to_string() })
             }

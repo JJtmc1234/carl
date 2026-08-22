@@ -12,7 +12,9 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
+use crate::army::event::Event;
 use crate::army::personnel::{Personnel, found};
+use crate::army::runtime::Session as SessionContinuity;
 
 /// A stand in that reads its stdin until it is closed, which is what a held open session does.
 fn stays_up() -> PathBuf {
@@ -328,4 +330,240 @@ fn an_agent_is_started_in_its_own_folder() {
         cwd.canonicalize().unwrap(),
         people.folder("nora").canonicalize().unwrap()
     );
+}
+
+/// Everything about one agent that was written to the journal, in order.
+fn trail(home: &Path, agent: &crate::army::personnel::AgentId) -> Vec<String> {
+    crate::army::event::read(home.join("run").join("events.jsonl"))
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.event.agent() == Some(agent))
+        .map(|r| r.event.kind().to_string())
+        .collect()
+}
+
+/// A record under `run/` answers what is true now. It cannot answer what happened, and "the
+/// worker crashed and then the task was reported finished" is a sentence somebody has to be able
+/// to read in order.
+#[test]
+fn starting_an_agent_is_written_down_with_what_survived_into_it() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.tick(&people, 1000).unwrap();
+
+    let records = crate::army::event::read(d.path().join("run/events.jsonl")).unwrap();
+    let started: Vec<_> = records
+        .iter()
+        .filter(|r| r.event.kind() == "agent_started")
+        .collect();
+    assert_eq!(started.len(), 4, "carl, adrian, mason and nora");
+
+    let hers = started
+        .iter()
+        .find(|r| r.event.agent() == Some(&nora))
+        .unwrap();
+    assert_eq!(hers.actor, "supervisor", "not nora, who did not do this");
+
+    let Event::AgentStarted { continuity, .. } = &hers.event else {
+        panic!("wrong event");
+    };
+    assert_eq!(continuity.process, Process::First);
+    assert_eq!(continuity.session, SessionContinuity::Fresh);
+    assert_eq!(continuity.memory, Memory::Kept, "she was given a folder");
+    assert!(!continuity.degraded());
+}
+
+/// The whole point of separating the id from the session from the pid, written down where
+/// somebody can check it afterwards rather than only implied by a record.
+#[test]
+fn a_process_replaced_under_a_kept_conversation_is_recorded_as_exactly_that() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let nora = id_of(&people, "nora");
+
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.tick(&people, 1000).unwrap();
+    drop(sup);
+
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.tick(&people, 2000).unwrap();
+
+    assert_eq!(
+        trail(d.path(), &nora),
+        ["agent_started", "agent_crashed", "agent_started"],
+        "started, went down with its supervisor, came back"
+    );
+
+    let latest = sup.roll().get(&nora).unwrap().continuity.unwrap();
+    assert_eq!(latest.process, Process::Replaced);
+    assert_eq!(latest.session, SessionContinuity::Resumed);
+    assert!(
+        !latest.degraded(),
+        "a replaced process that resumed has lost nothing"
+    );
+}
+
+/// An agent that comes back knowing nothing must not be reported as an ordinary restart, and
+/// which conversation was given up on has to survive, because that transcript is the evidence.
+#[test]
+fn a_conversation_that_had_to_be_replaced_is_recorded_and_the_old_one_is_kept() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), &falls_over());
+
+    let mut now = 1000;
+    for _ in 0..GIVE_UP_AFTER * 4 {
+        let tick = sup.tick(&people, now).unwrap();
+        settled(&sup);
+        now = match tick.what.iter().find(|(n, _)| n == "nora").map(|(_, o)| o) {
+            Some(Outcome::Waiting { until }) => *until,
+            _ => now + 1,
+        };
+        if trail(d.path(), &nora).contains(&"continuity_changed".to_string()) {
+            break;
+        }
+    }
+
+    let records = crate::army::event::read(d.path().join("run/events.jsonl")).unwrap();
+    let changed = records
+        .iter()
+        .find(|r| r.event.kind() == "continuity_changed" && r.event.agent() == Some(&nora))
+        .expect("the conversation was set aside and nobody wrote it down");
+
+    let Event::ContinuityChanged {
+        from,
+        to,
+        abandoned,
+        ..
+    } = &changed.event
+    else {
+        panic!("wrong event");
+    };
+    assert_eq!(*from, SessionContinuity::Resumed);
+    assert_eq!(*to, SessionContinuity::Replaced);
+
+    let kept = abandoned
+        .clone()
+        .expect("which conversation was given up on");
+    assert!(
+        sup.roll().get(&nora).unwrap().abandoned.contains(&kept),
+        "the record and the journal name the same one"
+    );
+
+    // Written once for a streak of failures, not once per attempt.
+    let times = records
+        .iter()
+        .filter(|r| r.event.kind() == "continuity_changed" && r.event.agent() == Some(&nora))
+        .count();
+    assert_eq!(times, 1, "one session set aside per streak");
+}
+
+/// A start that produced no process is not a crash. A crash has a transcript to go and read and
+/// this does not, and sending somebody looking for one wastes the only lead they had.
+#[test]
+fn a_start_that_never_produced_a_process_is_not_recorded_as_a_crash() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let nora = id_of(&people, "nora");
+    let mut sup = supervisor(d.path(), Path::new("/nonexistent/definitely-not-claude"));
+
+    sup.tick(&people, 1000).unwrap();
+
+    let kinds = trail(d.path(), &nora);
+    assert_eq!(kinds, ["agent_start_failed"]);
+    assert!(!kinds.contains(&"agent_crashed".to_string()));
+}
+
+/// An agent nobody is trying to start looks exactly like an agent nobody has needed yet, and
+/// those are not the same thing.
+#[test]
+fn giving_up_and_being_told_to_stop_are_two_different_records() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let nora = id_of(&people, "nora");
+
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.tick(&people, 1000).unwrap();
+    sup.stop(&nora, "JJ said so", 1001).unwrap();
+
+    let kinds = trail(d.path(), &nora);
+    assert_eq!(kinds, ["agent_started", "agent_stopped"]);
+
+    let records = crate::army::event::read(d.path().join("run/events.jsonl")).unwrap();
+    let stopped = records
+        .iter()
+        .rfind(|r| r.event.kind() == "agent_stopped")
+        .unwrap();
+    let Event::AgentStopped { why, .. } = &stopped.event else {
+        panic!("wrong event");
+    };
+    assert_eq!(why, "JJ said so", "and the reason is kept");
+}
+
+/// A crash says nothing about whether the work succeeded, and the vocabulary must not let it.
+#[test]
+fn a_runtime_event_is_never_about_a_task() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.tick(&people, 1000).unwrap();
+    drop(sup);
+    supervisor(d.path(), &stays_up())
+        .tick(&people, 2000)
+        .unwrap();
+
+    let records = crate::army::event::read(d.path().join("run/events.jsonl")).unwrap();
+    assert!(records.iter().any(|r| r.event.agent().is_some()));
+    for record in records {
+        if record.event.agent().is_some() {
+            assert_eq!(
+                record.event.task(),
+                None,
+                "{} claimed a task",
+                record.event.kind()
+            );
+        }
+    }
+}
+
+/// Two writers over one file, which is what the army actually is. The supervisor is recording
+/// processes while Carl records work, and the order they went in has to survive.
+#[test]
+fn the_supervisor_and_carl_share_one_ordered_record() {
+    let d = tempfile::tempdir().unwrap();
+    let people = army(d.path());
+    let path = d.path().join("run").join("events.jsonl");
+
+    let mut sup = supervisor(d.path(), &stays_up());
+    sup.tick(&people, 1000).unwrap();
+
+    let mut carl = crate::army::event::Journal::open(&path).unwrap();
+    carl.append(
+        "carl",
+        Event::Decided {
+            task: None,
+            what: "the coding department takes this".into(),
+        },
+    )
+    .unwrap();
+
+    sup.tick(&people, 1001).unwrap();
+    let nora = id_of(&people, "nora");
+    sup.stop(&nora, "enough for today", 1002).unwrap();
+
+    let records = crate::army::event::read(&path).unwrap();
+    let seqs: Vec<u64> = records.iter().map(|r| r.seq).collect();
+    assert_eq!(
+        seqs,
+        (1..=records.len() as u64).collect::<Vec<_>>(),
+        "one place in the order each, and none reused"
+    );
+
+    let kinds: Vec<&str> = records.iter().map(|r| r.event.kind()).collect();
+    let decided = kinds.iter().position(|k| *k == "decided").unwrap();
+    let stopped = kinds.iter().position(|k| *k == "agent_stopped").unwrap();
+    assert!(decided < stopped, "and the order is the order it happened");
 }

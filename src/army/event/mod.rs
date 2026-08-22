@@ -29,8 +29,10 @@ pub use journal::{Journal, about, read};
 
 use serde::{Deserialize, Serialize};
 
+use super::personnel::AgentId;
+use super::runtime::{Continuity, Session};
 use super::task::{Status, TaskId};
-use crate::ProjectId;
+use crate::{ProjectId, SessionId};
 
 /// Something worth being able to ask about later.
 ///
@@ -100,6 +102,84 @@ pub enum Event {
     ///
     /// JJ has absolute authority, so this is never refused. It is only ever made visible.
     Intervened { what: Intervention },
+    /// A process was started for an agent, and what survived into it.
+    ///
+    /// The supervisor is the only writer of this and the four below it. They are the only events
+    /// in the vocabulary that are about a process rather than about work, and keeping them here
+    /// rather than in a second log is deliberate: "the worker crashed and then the task was
+    /// reported finished" is a sentence somebody needs to be able to read in order, and two files
+    /// cannot be read in order.
+    AgentStarted {
+        agent: AgentId,
+        /// What the agent was called at the time, for whoever reads the file. The id is the
+        /// identifier, and nothing decides anything from this.
+        name: String,
+        continuity: Continuity,
+        /// Consecutive failed starts before this one. Zero is the ordinary case.
+        #[serde(default)]
+        attempt: u32,
+    },
+    /// A process ended and nobody asked it to.
+    ///
+    /// Includes a process that went down with the supervisor that started it, which is not a
+    /// fault in the agent but is still an end nobody requested. What separates this from
+    /// `AgentStopped` is not how violent it was, it is whether anybody decided it.
+    AgentCrashed {
+        agent: AgentId,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<i32>,
+        /// Consecutive failed starts including this one.
+        #[serde(default)]
+        attempt: u32,
+    },
+    /// A start was attempted and there was no process at the end of it.
+    ///
+    /// Separate from a crash because nothing ran. A crash has a process that did something and
+    /// then stopped, and reporting a binary that will not execute as one would send whoever is
+    /// debugging it looking for a transcript that was never written.
+    AgentStartFailed {
+        agent: AgentId,
+        name: String,
+        why: String,
+        #[serde(default)]
+        attempt: u32,
+    },
+    /// The supervisor was told to keep no process for this agent.
+    ///
+    /// Says nothing about the agent's work, which is not the supervisor's to say.
+    AgentStopped {
+        agent: AgentId,
+        name: String,
+        why: String,
+    },
+    /// The supervisor has stopped trying to start this agent.
+    ///
+    /// The end of the backoff, and the point at which a person has to decide something. Recorded
+    /// as its own event because an agent nobody is trying to start looks exactly like an agent
+    /// nobody has needed yet, and those are not the same.
+    AgentGaveUp {
+        agent: AgentId,
+        name: String,
+        why: String,
+    },
+    /// An agent came back with less than it had.
+    ///
+    /// Only written when something was actually lost, never on an ordinary start. `AgentStarted`
+    /// already carries the continuity of every start, so writing this alongside each one would be
+    /// a second record of the same fact, and two records of one fact are one failed write away
+    /// from disagreeing. This is here for the case worth finding by searching: the conversation
+    /// that could not be resumed, and which session was set aside over it.
+    ContinuityChanged {
+        agent: AgentId,
+        name: String,
+        from: Session,
+        to: Session,
+        why: String,
+        /// The conversation that was given up on, kept so somebody can go and read it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        abandoned: Option<SessionId>,
+    },
     /// Somebody was told about something they did not do.
     ///
     /// Points at the sequence number of what they are being told about rather than repeating it,
@@ -165,6 +245,28 @@ impl Event {
             Event::Decided { .. } => "decided",
             Event::Intervened { .. } => "intervened",
             Event::Notified { .. } => "notified",
+            Event::AgentStarted { .. } => "agent_started",
+            Event::AgentCrashed { .. } => "agent_crashed",
+            Event::AgentStartFailed { .. } => "agent_start_failed",
+            Event::AgentStopped { .. } => "agent_stopped",
+            Event::AgentGaveUp { .. } => "agent_gave_up",
+            Event::ContinuityChanged { .. } => "continuity_changed",
+        }
+    }
+
+    /// The agent whose process this is about, when it is about one.
+    ///
+    /// The runtime half of the vocabulary answers this and the work half answers `task`. An event
+    /// answering neither is one about the organisation rather than about anybody in particular.
+    pub fn agent(&self) -> Option<&AgentId> {
+        match self {
+            Event::AgentStarted { agent, .. }
+            | Event::AgentCrashed { agent, .. }
+            | Event::AgentStartFailed { agent, .. }
+            | Event::AgentStopped { agent, .. }
+            | Event::AgentGaveUp { agent, .. }
+            | Event::ContinuityChanged { agent, .. } => Some(agent),
+            _ => None,
         }
     }
 
@@ -183,7 +285,18 @@ impl Event {
                 }
                 _ => None,
             },
-            Event::Refused { .. } | Event::Notified { .. } => None,
+            // The runtime events are about a process, not about work, which is the boundary the
+            // whole supervisor is built on. An agent crashing says nothing about whether its task
+            // succeeded, and letting one answer `task` here would be the first place that stopped
+            // being true.
+            Event::Refused { .. }
+            | Event::Notified { .. }
+            | Event::AgentStarted { .. }
+            | Event::AgentCrashed { .. }
+            | Event::AgentStartFailed { .. }
+            | Event::AgentStopped { .. }
+            | Event::AgentGaveUp { .. }
+            | Event::ContinuityChanged { .. } => None,
         }
     }
 
@@ -203,7 +316,11 @@ pub struct Record {
     pub seq: u64,
     /// Unix seconds.
     pub at: u64,
-    /// Who did it. An agent name, always.
+    /// Who did it.
+    ///
+    /// An agent name, or `supervisor` for the runtime events, which are the only ones no agent
+    /// performs. Attributing a crash to the agent it happened to would make "the last thing this
+    /// agent did" answer with something the agent did not do.
     pub actor: String,
     #[serde(flatten)]
     pub event: Event,

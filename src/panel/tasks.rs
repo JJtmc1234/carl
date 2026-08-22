@@ -103,10 +103,18 @@ pub fn fold(records: &[Record]) -> Vec<TaskView> {
                 }
                 _ => {}
             },
+            // Not a task between them. The runtime half of the vocabulary is about processes,
+            // and an agent crashing is deliberately not a thing that happens to a task.
             Event::Refused { .. }
             | Event::EmergencyDeclared { .. }
             | Event::Decided { .. }
-            | Event::Notified { .. } => {}
+            | Event::Notified { .. }
+            | Event::AgentStarted { .. }
+            | Event::AgentCrashed { .. }
+            | Event::AgentStartFailed { .. }
+            | Event::AgentStopped { .. }
+            | Event::AgentGaveUp { .. }
+            | Event::ContinuityChanged { .. } => {}
         }
     }
 

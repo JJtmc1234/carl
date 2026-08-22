@@ -103,6 +103,16 @@ pub struct Runtime {
     /// that is the whole point: it is what the next process resumes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionId>,
+    /// How much of what this agent had survived into the process it is in.
+    ///
+    /// Written at every start and kept afterwards, so the panel can answer "did this come back
+    /// with its conversation" by reading one file rather than by folding the whole journal. The
+    /// journal is still where the history is; this is only the latest answer.
+    ///
+    /// Absent before the first start, which is a different thing from a fresh start and is why
+    /// this is an option rather than a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuity: Option<super::continuity::Continuity>,
     /// Sessions given up on, kept rather than deleted.
     ///
     /// A session that could not be resumed is the best evidence there is about why, and Claude
@@ -129,6 +139,7 @@ impl Runtime {
             name: name.into(),
             lifecycle: Lifecycle::Never,
             session: None,
+            continuity: None,
             abandoned: Vec::new(),
             attempts: 0,
             supervisor: None,

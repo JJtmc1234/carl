@@ -36,6 +36,7 @@
 //! the work queue, and anything that hands an agent a task. Every one of those needs an agent
 //! that is running, which is what this is.
 
+mod continuity;
 mod lock;
 mod policy;
 mod record;
@@ -45,6 +46,7 @@ mod supervisor;
 #[cfg(test)]
 mod tests;
 
+pub use continuity::{Continuity, Memory, Process, Session};
 pub use lock::Lock;
 pub use policy::{
     BACKOFF_MAX, GIVE_UP_AFTER, HEALTHY_FOR, Next, RENEW_AFTER, Start, backoff, decide, was_healthy,
