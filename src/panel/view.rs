@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ProjectId;
 use crate::army::org::Rank;
+use crate::army::runtime::Continuity;
 
 /// Something the panel has not been told, distinguished from something it has been told is
 /// absent.
@@ -94,9 +95,19 @@ pub struct AgentView {
     pub model: Maybe<String>,
     /// Whether a process for this agent is running right now.
     ///
-    /// Always `Unknown` in v1. Nothing measures it yet, and saying `Known(false)` would be a
-    /// claim nobody checked. Process 3's providers fill this in.
+    /// `Unknown` when no supervisor has ever written a record for this agent, which is a
+    /// different fact from a process that is not running and must not be shown as one.
     pub process: Maybe<ProcessState>,
+    /// How much of what this agent had survived into the process it is in.
+    ///
+    /// `Unknown` before its first start. Present afterwards even while nothing is running,
+    /// because "it came back without its conversation" is exactly what somebody needs to know
+    /// before talking to it.
+    ///
+    /// Context pressure is deliberately not here. The protocol exposes no usable figure for how
+    /// full a conversation is, and a percentage nobody measured would be worse than a gap:
+    /// somebody would plan around it. What it would take is in the notes, not in this type.
+    pub continuity: Maybe<Continuity>,
 }
 
 /// The last thing an agent did, kept structured so a screen can count rather than parse.
@@ -108,11 +119,36 @@ pub struct LastEvent {
     pub task: Option<String>,
 }
 
+/// What the supervisor's record says about an agent's process.
+///
+/// The five the supervisor can actually be in, rather than two. Collapsing them would put an
+/// agent that was given up on and an agent that simply is not running today in the same row,
+/// and only one of those needs somebody to do something.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessState {
+    /// A record exists and no process ever has.
+    Never,
     Running,
     Exited,
+    /// The supervisor stopped trying, and a person has to decide something.
+    Degraded,
+    /// Deliberately not running.
+    Stopped,
+}
+
+impl ProcessState {
+    /// What the supervisor's record amounts to, for a screen.
+    pub fn of(lifecycle: &crate::army::runtime::Lifecycle) -> Self {
+        use crate::army::runtime::Lifecycle;
+        match lifecycle {
+            Lifecycle::Never => ProcessState::Never,
+            Lifecycle::Running { .. } => ProcessState::Running,
+            Lifecycle::Exited { .. } => ProcessState::Exited,
+            Lifecycle::Degraded { .. } => ProcessState::Degraded,
+            Lifecycle::Stopped { .. } => ProcessState::Stopped,
+        }
+    }
 }
 
 /// One task, rebuilt from the record.

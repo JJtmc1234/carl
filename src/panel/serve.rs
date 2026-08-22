@@ -169,7 +169,7 @@ fn everything(home: &Path, machine: &Mutex<Diagnostics>) -> Result<PanelSnapshot
         let mut machine = machine.lock().map_err(|_| {
             crate::Error::Refused("the diagnostics sampler panicked in another thread".into())
         })?;
-        Facts::gather(&mut machine, &Projects::open(home), &tasks)
+        Facts::gather(&mut machine, &Projects::open(home), &tasks).with_runtime(home)
     };
     snapshot::build_from(&people, &records, &facts)
 }

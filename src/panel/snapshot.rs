@@ -11,7 +11,7 @@
 
 use super::facts::Facts;
 use super::tasks;
-use super::view::{AgentView, CarlView, LastEvent, Maybe, PanelSnapshot, Pending};
+use super::view::{AgentView, CarlView, LastEvent, Maybe, PanelSnapshot, Pending, ProcessState};
 use crate::army::event::{self, Event, Record};
 use crate::army::org;
 use crate::army::personnel::Personnel;
@@ -29,7 +29,7 @@ const RECENT: usize = 10;
 pub fn build(home: &std::path::Path) -> Result<PanelSnapshot> {
     let people = Personnel::open(home)?;
     let records = event::read(people.journal_path())?;
-    build_from(&people, &records, &Facts::army_only())
+    build_from(&people, &records, &Facts::army_only().with_runtime(home))
 }
 
 /// The same, from state already in hand.
@@ -47,6 +47,8 @@ pub fn build_from(people: &Personnel, records: &[Record], facts: &Facts) -> Resu
         }
         let folder = people.get(agent.name);
         let held = tasks::held_by(&tasks, agent.name);
+        // Matched by name, which is what the supervisor writes alongside the id for exactly this.
+        let runtime = facts.runtime.iter().find(|r| r.name == agent.name);
 
         agents.push(AgentView {
             name: agent.name.to_string(),
@@ -69,9 +71,11 @@ pub fn build_from(people: &Personnel, records: &[Record], facts: &Facts) -> Resu
                 .into(),
             last_event: last_by(records, agent.name).into(),
             model: folder.map(|f| f.config.model.id().to_string()).into(),
-            // Nothing measures this yet. Saying `Known(false)` would be a claim nobody checked,
-            // and a dead agent would render as merely idle.
-            process: Maybe::Unknown,
+            // From the supervisor's records and from nowhere else. No record at all is Unknown
+            // rather than not running, because "nobody has said" and "it is not running" are
+            // different facts and only one of them means somebody should look.
+            process: runtime.map(|r| ProcessState::of(&r.lifecycle)).into(),
+            continuity: runtime.and_then(|r| r.continuity).into(),
         });
     }
 

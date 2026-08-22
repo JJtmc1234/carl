@@ -29,6 +29,7 @@ fn agent(name: &str, enlisted: bool) -> WireAgent {
         last_event: Maybe::Unknown,
         model: Maybe::Unknown,
         process: Maybe::Unknown,
+        continuity: Maybe::Unknown,
     }
 }
 

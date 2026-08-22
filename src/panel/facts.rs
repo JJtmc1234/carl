@@ -19,6 +19,7 @@
 use super::tasks;
 use super::view::TaskView;
 use crate::ProjectId;
+use crate::army::runtime::{Roll, Runtime};
 use crate::providers::projects::{ProjectView, Projects};
 use crate::providers::{Diagnostics, Snapshot as Diagnosed};
 
@@ -26,6 +27,15 @@ use crate::providers::{Diagnostics, Snapshot as Diagnosed};
 pub struct Facts {
     pub diagnostics: Diagnosed,
     pub projects: Vec<ProjectView>,
+    /// What the supervisor wrote about each agent's process.
+    ///
+    /// Gathered here rather than in `snapshot.rs` because it comes from a different place on
+    /// disk with different rules: agent folders are written by the agents, and these are written
+    /// only by the supervisor, which is the entire reason they are believed.
+    ///
+    /// Empty when no supervisor has ever run in this home. Empty is not "nothing is running": it
+    /// is "nobody has said", and the two arrive on screen as different things.
+    pub runtime: Vec<Runtime>,
 }
 
 impl Facts {
@@ -40,7 +50,19 @@ impl Facts {
                 machine: Vec::new(),
             },
             projects: Vec::new(),
+            runtime: Vec::new(),
         }
+    }
+
+    /// The same, plus whatever the supervisor has written in this home.
+    ///
+    /// Reading only. A panel that created `run/agents/` by looking at it would turn "no
+    /// supervisor has ever run here" into "one ran and started nobody".
+    pub fn with_runtime(mut self, home: &std::path::Path) -> Self {
+        self.runtime = Roll::open(home)
+            .map(|roll| roll.all().cloned().collect())
+            .unwrap_or_default();
+        self
     }
 
     /// Asks both providers, and joins projects to the tasks that name them.
@@ -81,6 +103,9 @@ impl Facts {
             // often is free, and there is no second cache here that could disagree with it.
             diagnostics: diagnostics.snapshot_at(at),
             projects: views,
+            // Filled by `with_runtime` when the caller knows the home. Gathering it here would
+            // mean this function needed a directory, and it deliberately does not.
+            runtime: Vec::new(),
         }
     }
 }

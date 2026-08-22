@@ -733,3 +733,86 @@ fn a_worker_cannot_grant_itself_a_wider_workspace() {
         "and her lead can"
     );
 }
+
+/// The panel used to say "unknown" about every process because nothing measured one. Something
+/// does now, and the row has to say what the supervisor actually wrote rather than a default.
+#[test]
+fn the_panel_reports_what_the_supervisor_recorded_and_not_a_guess() {
+    use carl::panel::{Maybe, ProcessState, snapshot};
+
+    let mut slice = Slice::founded(&stand_in("agent-does-as-told"));
+
+    // Before any supervisor has run, nobody has said anything about any process.
+    let before = snapshot::build(slice.home.path()).unwrap();
+    assert!(
+        before.agents.iter().all(|a| a.process.is_unknown()),
+        "a process was claimed before anything was started"
+    );
+    assert!(before.agents.iter().all(|a| a.continuity.is_unknown()));
+
+    slice.supervisor.tick(&slice.people, 1_000).unwrap();
+    slice
+        .supervisor
+        .stop(&slice.id("mason"), "not needed tonight", 1_001)
+        .unwrap();
+
+    let after = snapshot::build(slice.home.path()).unwrap();
+    let row = |name: &str| {
+        after
+            .agents
+            .iter()
+            .find(|a| a.name == name)
+            .unwrap_or_else(|| panic!("no row for {name}"))
+            .clone()
+    };
+
+    assert_eq!(row("nora").process, Maybe::known(ProcessState::Running));
+    assert_eq!(
+        row("mason").process,
+        Maybe::known(ProcessState::Stopped),
+        "asleep, which is not the same row as running and not the same as unknown"
+    );
+
+    let Maybe::Known { value: continuity } = row("nora").continuity else {
+        panic!("her first start said nothing about what survived into it");
+    };
+    assert!(!continuity.degraded(), "a first process has lost nothing");
+    assert!(continuity.describe().contains("first process"));
+
+    // And the parent, role and current task are all there, which is what a row is for.
+    assert_eq!(row("nora").reports_to.as_deref(), Some("mason"));
+    assert_eq!(row("nora").rank, carl::army::Rank::Worker);
+}
+
+/// An agent that came back without its conversation must not read as an ordinary restart.
+#[test]
+fn the_panel_shows_a_lost_conversation_as_degraded() {
+    use carl::panel::snapshot;
+
+    let mut slice = Slice::founded(&stand_in("agent-falls-over"));
+
+    let mut now = 1_000;
+    for _ in 0..carl::army::runtime::GIVE_UP_AFTER * 4 {
+        let tick = slice.supervisor.tick(&slice.people, now).unwrap();
+        slice.gone("nora");
+        now = match tick.what.iter().find(|(n, _)| n == "nora").map(|(_, o)| o) {
+            Some(carl::army::runtime::Outcome::Waiting { until }) => *until,
+            _ => now + 1,
+        };
+        if slice
+            .runtime_trail("nora")
+            .contains(&"continuity_changed".to_string())
+        {
+            break;
+        }
+    }
+
+    let snapshot = snapshot::build(slice.home.path()).unwrap();
+    let nora = snapshot.agents.iter().find(|a| a.name == "nora").unwrap();
+
+    let carl::panel::Maybe::Known { value: continuity } = nora.continuity else {
+        panic!("nothing was said about what she came back with");
+    };
+    assert_eq!(continuity.session, SessionContinuity::Replaced);
+    assert!(continuity.degraded(), "and it is not shown as healthy");
+}

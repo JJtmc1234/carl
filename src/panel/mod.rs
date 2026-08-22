@@ -56,6 +56,7 @@ pub use live::{Health as Link, LivePanel, Update};
 pub use serve::Server;
 pub use snapshot::build;
 pub use view::{
-    AgentView, CarlView, DiagnosticView, Health, Maybe, PanelSnapshot, ProjectView, TaskView,
+    AgentView, CarlView, DiagnosticView, Health, Maybe, PanelSnapshot, ProcessState, ProjectView,
+    TaskView,
 };
 pub use wire::{Ask, Frame, PanelEvent, Reply, Request, VERSION};
