@@ -120,6 +120,16 @@ pub enum Status {
     Submitted,
     /// Reviewed and sent back. The owner still owns it.
     ChangesRequested,
+    /// The owner cannot get on with it, and still owns it.
+    ///
+    /// Not a queue. A blocked task keeps its owner, which is the whole point of having the state
+    /// at all: the alternative to blocking is putting the work back and letting somebody else
+    /// start it, and then two agents are doing one task and the second one does not know.
+    ///
+    /// Reached from `InHand`, and it is the owner who says so, because nobody else can tell.
+    /// A worker whose process died mid task is left here by its lead rather than by the
+    /// supervisor, which owns processes and has no business touching work.
+    Blocked,
     /// Reviewed and finished.
     Accepted,
     /// Given up on, by whoever assigned it.
@@ -141,9 +151,12 @@ impl Status {
         use Status::*;
         match (self, next) {
             (Assigned, InHand | Abandoned) => true,
-            (InHand, Submitted | Abandoned) => true,
+            (InHand, Submitted | Blocked | Abandoned) => true,
             (Submitted, Accepted | ChangesRequested | Abandoned) => true,
             (ChangesRequested, InHand | Abandoned) => true,
+            // Back to being worked on, or given up on. Never straight to submitted: a task
+            // nobody could get on with is not a task that got done while nobody was looking.
+            (Blocked, InHand | Abandoned) => true,
             // Settled is settled. Reopening is a new task, so the history of the old one stays
             // true.
             (Accepted | Abandoned, _) => false,
@@ -159,6 +172,7 @@ impl fmt::Display for Status {
             Status::InHand => "in hand",
             Status::Submitted => "submitted",
             Status::ChangesRequested => "changes requested",
+            Status::Blocked => "blocked",
             Status::Accepted => "accepted",
             Status::Abandoned => "abandoned",
         })
@@ -280,7 +294,7 @@ impl Task {
 
         let allowed = match next {
             // Only the owner does the work.
-            Status::InHand | Status::Submitted => by == self.owner,
+            Status::InHand | Status::Submitted | Status::Blocked => by == self.owner,
             // Only whoever assigned it decides whether it is done.
             Status::Accepted | Status::ChangesRequested => by == self.created_by,
             // Either side may give up, and it is recorded who did.

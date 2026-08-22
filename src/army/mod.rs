@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use crate::claude::Runner;
 use crate::{Result, SessionId};
 
+pub mod board;
 mod campaign;
 pub mod chain;
 pub mod event;
@@ -44,6 +45,7 @@ mod roster;
 pub mod runtime;
 pub mod task;
 
+pub use board::Board;
 pub use campaign::{Departmental, JOBS_PER_HEAD, Outcome, parse_jobs, run_department};
 pub use chain::{Chain, Passage, brief_for as chain_brief, campaign, tools_for};
 pub use event::{Event, Journal, Record};

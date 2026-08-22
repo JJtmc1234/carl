@@ -98,6 +98,56 @@ impl Journal {
         Ok(record)
     }
 
+    /// Reads the whole record and appends what the caller decides from it, both under one lock.
+    ///
+    /// For the writer whose line depends on what is already there. "Accept this task if it is
+    /// still waiting on review" as two calls leaves a gap between the reading and the writing,
+    /// and that gap is exactly where two processes both find a task waiting and both accept it.
+    /// Held open across the decision instead, so whoever gets the lock second reads the first
+    /// one's line and refuses.
+    ///
+    /// The decision may say no, and saying no is not an error: a caller that finds the work
+    /// already done has got the answer it asked for.
+    pub fn decide_and_append(
+        &mut self,
+        decide: impl FnOnce(&[Record]) -> Result<Option<(String, Event)>>,
+    ) -> Result<Option<Record>> {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(&self.path)?;
+
+        let _held = Exclusive::take(&file)?;
+        self.catch_up(&mut file)?;
+
+        let mut whole = String::new();
+        file.seek(SeekFrom::Start(0))?;
+        file.read_to_string(&mut whole)?;
+        let records: Vec<Record> = whole
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+
+        let Some((actor, event)) = decide(&records)? else {
+            return Ok(None);
+        };
+
+        let record = Record {
+            seq: self.next_seq,
+            at: now(),
+            actor,
+            event,
+        };
+        writeln!(file, "{}", serde_json::to_string(&record)?)?;
+        file.flush()?;
+
+        self.next_seq += 1;
+        self.seen = file.metadata().map(|m| m.len()).unwrap_or(self.seen);
+        Ok(Some(record))
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
