@@ -55,7 +55,12 @@ pub fn stream(
     extra: Option<&str>,
     on_text: &mut dyn FnMut(&str) -> Flow,
 ) -> Result<Answer> {
-    let runner = Runner::default();
+    // The panel and the terminal are JJ's own surfaces, reached through a socket in a 0700
+    // directory or through his own keyboard. They read the `jj` permits. Slack reads `shared`,
+    // because who can send to it is a different set of people.
+    let book = crate::claude::permits::Book::load(home)?;
+    let runner =
+        Runner::default().permitted_by(book.for_surface(crate::claude::permits::Surface::Jj));
     Exchange {
         home,
         thread,

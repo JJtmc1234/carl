@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use crate::{Error, Result, SessionId};
 
+pub mod permits;
 mod pool;
 mod session;
 mod stream;
@@ -68,6 +69,9 @@ pub struct Runner {
     /// Headless has nobody to ask, so a tool that is not listed here is simply refused and
     /// Carl explains that he cannot do the thing rather than doing it.
     allowed: Vec<String>,
+    /// How much Claude decides for itself about the rest. `Ask` in headless means refuse, which
+    /// is why this is worth setting per surface rather than leaving at the default everywhere.
+    mode: permits::Mode,
 }
 
 /// Running python, which is what makes Carl able to work something out rather than guess.
@@ -81,6 +85,17 @@ pub struct Runner {
 /// file the user could read, and anybody able to message Carl in Slack could ask it to.
 pub const PYTHON: &str = "Bash(carl-python:*)";
 
+/// How a refusal reads when it is put in front of a person.
+///
+/// Names the tool in the CLI's own syntax, because the fix is to paste that into the allow list
+/// in `permissions.json`, and a message that describes the tool without naming it makes somebody
+/// go and look it up.
+pub fn refusal_line(tool: &str, why: &str) -> String {
+    format!(
+        "\n[refused: {tool}] {why}\nNobody can approve this while Carl runs headless. Add          {tool:?} to permissions.json, or raise the mode for this surface.\n"
+    )
+}
+
 /// Where the sandboxed interpreter lives, relative to the repository.
 pub const PYTHON_SCRIPT: &str = "etc/carl-python";
 
@@ -89,6 +104,7 @@ impl Default for Runner {
         Self {
             program: PathBuf::from("claude"),
             allowed: vec![PYTHON.to_string()],
+            mode: permits::Mode::Ask,
         }
     }
 }
@@ -98,12 +114,20 @@ impl Runner {
         Self {
             program: program.into(),
             allowed: vec![PYTHON.to_string()],
+            mode: permits::Mode::Ask,
         }
     }
 
     /// Replaces the allowed tool list. An empty list means Carl may use no tools at all.
     pub fn allowing(mut self, tools: Vec<String>) -> Self {
         self.allowed = tools;
+        self
+    }
+
+    /// Takes both the list and the mode from what JJ wrote down for this surface.
+    pub fn permitted_by(mut self, permits: &permits::Permits) -> Self {
+        self.allowed = permits.allow.clone();
+        self.mode = permits.mode;
         self
     }
 
@@ -138,6 +162,13 @@ impl Runner {
         if !self.allowed.is_empty() {
             args.push("--allowedTools".into());
             args.extend(self.allowed.iter().cloned());
+        }
+
+        // Only when it is not the default. Passing the default explicitly would be a second
+        // place that has to agree with the CLI about what the default is.
+        if let Some(mode) = self.mode.flag() {
+            args.push("--permission-mode".into());
+            args.push(mode.to_string());
         }
 
         // --session-id pins a new conversation to an id we chose. --resume continues one that

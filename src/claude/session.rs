@@ -187,6 +187,14 @@ impl Session {
             // single word has arrived. That is the whole difference between interrupting Carl
             // while he talks, which already worked, and interrupting him while he thinks.
             match self.chunks.recv_timeout(TICK) {
+                // Said out loud rather than swallowed. The person who can widen the allow list
+                // is the one reading this, and until now the refusal never left the transcript.
+                Ok(Chunk::Refused { tool, why }) => {
+                    let line = crate::claude::refusal_line(&tool, &why);
+                    if on_text(&line) == Flow::Stop {
+                        break;
+                    }
+                }
                 Ok(Chunk::Text(t)) => {
                     said.push_str(&t);
                     if on_text(&t) == Flow::Stop {
@@ -235,6 +243,8 @@ impl Session {
         let until = std::time::Instant::now() + DRAIN_LIMIT;
         while std::time::Instant::now() < until {
             match self.chunks.recv_timeout(TICK) {
+                // Nobody is listening to this turn any more, so a refusal in it is history.
+                Ok(Chunk::Refused { .. }) => continue,
                 Ok(Chunk::Final(_)) => break,
                 Ok(Chunk::Text(_)) => {}
                 Err(RecvTimeoutError::Timeout) => {}

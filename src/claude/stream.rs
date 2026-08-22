@@ -22,6 +22,17 @@ pub enum Chunk {
     Text(String),
     /// The final envelope, which carries the session id and the cost.
     Final(Box<Answer>),
+    /// A tool call that was refused for want of permission.
+    ///
+    /// Headless has nobody to ask, so this is not a prompt somebody missed, it is a decision
+    /// already taken. Carried out of the stream because otherwise the only party who knows is
+    /// Carl, who then spends a turn explaining that he could not do the thing. The person who
+    /// can actually fix it, by widening `permissions.json`, never hears about it at all.
+    Refused {
+        /// The tool as the CLI named it, so it can be pasted into the allow list.
+        tool: String,
+        why: String,
+    },
 }
 
 /// What the listener wants to happen next.
@@ -97,6 +108,14 @@ impl Runner {
 
         for chunk in &rx {
             match chunk {
+                // Put in front of whoever is watching, for the same reason as in a session: the
+                // only person who can widen the allow list is the one reading the answer.
+                Chunk::Refused { tool, why } => {
+                    let line = crate::claude::refusal_line(&tool, &why);
+                    if on_text(&line) == Flow::Stop {
+                        break;
+                    }
+                }
                 Chunk::Text(t) => {
                     said.push_str(&t);
                     if on_text(&t) == Flow::Stop {
@@ -166,8 +185,52 @@ pub fn chunk_of(line: &str) -> Option<Chunk> {
             }
             Some(Chunk::Text(delta.get("text")?.as_str()?.to_owned()))
         }
+        // A refusal arrives as the result of a tool call rather than as an event of its own,
+        // which is why nothing here saw it before: this branch did not exist and the line was
+        // one of "the many lines Carl does not care about".
+        "user" => refusal(&v),
         _ => None,
     }
+}
+
+/// A tool result that says the call was refused, if that is what this is.
+///
+/// Matched on the wording the CLI uses rather than on a flag, because `is_error` is also set by
+/// a command that ran and failed, and those are Carl's problem rather than JJ's.
+fn refusal(v: &serde_json::Value) -> Option<Chunk> {
+    let content = v.get("message")?.get("content")?.as_array()?;
+    for block in content {
+        if block.get("type")?.as_str()? != "tool_result" {
+            continue;
+        }
+        let text = match block.get("content") {
+            Some(serde_json::Value::String(t)) => t.clone(),
+            Some(serde_json::Value::Array(parts)) => parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => continue,
+        };
+        let lower = text.to_lowercase();
+        let denied = lower.contains("permission")
+            || lower.contains("requested permissions")
+            || lower.contains("has not been granted")
+            || lower.contains("not allowed");
+        if !denied {
+            continue;
+        }
+        // The tool name, when the wording carries one, so it can be pasted into the allow list
+        // rather than worked out.
+        let tool = text
+            .split_whitespace()
+            .find(|w| w.starts_with("Bash(") || matches!(*w, "Write" | "Read" | "Edit"))
+            .unwrap_or("a tool")
+            .trim_end_matches([',', '.'])
+            .to_string();
+        return Some(Chunk::Refused { tool, why: text });
+    }
+    None
 }
 
 #[cfg(test)]
@@ -234,5 +297,52 @@ mod tests {
     fn an_error_envelope_produces_no_chunk_rather_than_a_false_answer() {
         let line = r#"{"type":"result","is_error":true,"result":"session not found"}"#;
         assert_eq!(chunk_of(line), None);
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    /// The line JJ never saw. Taken from what the CLI actually emits when a tool is not
+    /// permitted, rather than from a guess at its wording.
+    #[test]
+    fn a_refused_tool_comes_out_of_the_stream() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","is_error":true,"content":"Claude requested permissions to use Bash(python3:*), but you have not granted it yet."}]}}"#;
+        match chunk_of(line) {
+            Some(Chunk::Refused { tool, why }) => {
+                assert_eq!(tool, "Bash(python3:*)", "the name has to be pasteable");
+                assert!(why.contains("permissions"));
+            }
+            other => panic!("a refusal was not recognised: {other:?}"),
+        }
+    }
+
+    /// A command that ran and failed is Carl's problem, not a permission JJ has to widen, and
+    /// telling him to edit permissions.json would send him to fix the wrong thing.
+    #[test]
+    fn a_command_that_merely_failed_is_not_a_refusal() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","is_error":true,"content":"python3: can't open file 'missing.py': No such file or directory"}]}}"#;
+        assert!(
+            chunk_of(line).is_none(),
+            "an ordinary failure is not a refusal"
+        );
+    }
+
+    #[test]
+    fn a_successful_tool_result_says_nothing() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","content":"42"}]}}"#;
+        assert!(chunk_of(line).is_none());
+    }
+
+    #[test]
+    fn the_refusal_names_what_to_add_and_where() {
+        let line = crate::claude::refusal_line("Bash(python3:*)", "not granted");
+        assert!(line.contains("Bash(python3:*)"), "{line}");
+        assert!(line.contains("permissions.json"), "{line}");
+        assert!(
+            line.contains("headless"),
+            "it has to say why nobody can approve: {line}"
+        );
     }
 }
