@@ -33,10 +33,16 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
-/// The four principal tabs. The editor and the terminal are not among them on purpose: they
+/// The five principal tabs. The editor and the terminal are not among them on purpose: they
 /// are tools opened from something, not places to go.
+///
+/// Overview was added in the redesign and is where the panel opens. The four that follow each
+/// answer one question in depth, and none of them could answer the question somebody actually
+/// has when they walk up to a screen, which is whether anything is wrong. Overview does only
+/// that, and every line on it is a way into one of the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
+    Overview,
     Carl,
     Agents,
     Diagnostics,
@@ -44,10 +50,17 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Carl, Tab::Agents, Tab::Diagnostics, Tab::Projects];
+    pub const ALL: [Tab; 5] = [
+        Tab::Overview,
+        Tab::Carl,
+        Tab::Agents,
+        Tab::Diagnostics,
+        Tab::Projects,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Tab::Overview => "OVERVIEW",
             Tab::Carl => "CARL",
             Tab::Agents => "AGENTS",
             Tab::Diagnostics => "DIAGNOSTICS",
@@ -58,6 +71,7 @@ impl Tab {
     /// One line under the name, so the sidebar says what each is for.
     pub fn caption(self) -> &'static str {
         match self {
+            Tab::Overview => "the whole army at once",
             Tab::Carl => "command",
             Tab::Agents => "who is doing what",
             Tab::Diagnostics => "health",
@@ -149,7 +163,7 @@ impl App {
             service: carl::providers::workspace::service::Workspace::new(),
             snapshot,
             link,
-            tab: Tab::Carl,
+            tab: Tab::Overview,
             agent: None,
             project: None,
             workspace: None,

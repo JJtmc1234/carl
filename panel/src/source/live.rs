@@ -53,6 +53,10 @@ pub struct LivePanelDataSource {
     link: Link,
     /// True while Carl is mid answer, so the end of the stream can close the turn.
     speaking: bool,
+    /// Said on this side and not by the backend: JJ's own words, and the caret that shows Carl
+    /// was asked. Queued rather than sent straight to the screen because `submit` is not the
+    /// place that draws.
+    echoed: Vec<PanelEvent>,
     /// The journal sequence the screen is caught up to.
     ///
     /// Advanced by army events and by a resync, and by nothing else. Telemetry carries no
@@ -84,6 +88,7 @@ impl LivePanelDataSource {
             orders,
             link: Link::Live,
             speaking: false,
+            echoed: Vec::new(),
             last_seq: first_seq,
         })
     }
@@ -105,6 +110,7 @@ impl LivePanelDataSource {
                 orders,
                 link: Link::Live,
                 speaking: false,
+                echoed: Vec::new(),
                 last_seq: 0,
             },
             tx,
@@ -177,7 +183,8 @@ impl PanelDataSource for LivePanelDataSource {
     }
 
     fn poll(&mut self) -> Vec<PanelEvent> {
-        let mut out = Vec::new();
+        // Anything said locally goes out first, so JJ's own line is above the answer to it.
+        let mut out: Vec<PanelEvent> = self.echoed.drain(..).collect();
         loop {
             match self.incoming.try_recv() {
                 Ok(FromBackend::Update(update)) => self.take(*update, &mut out),
@@ -225,6 +232,35 @@ impl PanelDataSource for LivePanelDataSource {
         if !self.link.is_live() {
             return Err(format!("not sent, {}", self.link.label().to_lowercase()));
         }
+
+        // What JJ typed goes on screen here, not when the backend gets round to mentioning it,
+        // because the backend never does: it answers, it does not echo. Without this the words
+        // leave the box and appear nowhere, which reads as the panel having dropped them.
+        //
+        // The empty streaming turn is the thinking state. Carl takes seconds to answer and the
+        // gap between sending and his first word was silent, so there was nothing to tell a
+        // person their message had been taken. It is replaced by his real first words.
+        match &command {
+            Command::SayToCarl(text) => {
+                self.echoed.push(PanelEvent::JjSaid(text.clone()));
+                self.echoed.push(PanelEvent::CarlSaid {
+                    text: String::new(),
+                    streaming: true,
+                });
+                self.speaking = true;
+            }
+            Command::SetObjective(goal) => {
+                self.echoed
+                    .push(PanelEvent::JjSaid(format!("New objective. {goal}")));
+                self.echoed.push(PanelEvent::CarlSaid {
+                    text: String::new(),
+                    streaming: true,
+                });
+                self.speaking = true;
+            }
+            _ => {}
+        }
+
         self.orders
             .send(command)
             .map_err(|_| "the panel client has stopped".to_string())

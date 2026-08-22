@@ -15,10 +15,17 @@ fn app() -> App {
     App::new(Box::new(MockPanelDataSource::new()))
 }
 
+/// Changed in the redesign. The panel used to open on the conversation, which answered the
+/// question "what did I last say to Carl" before it answered "is anything wrong". Overview
+/// answers the second one and every line on it is a way into the first.
 #[test]
-fn the_panel_opens_on_carl_with_a_real_snapshot() {
+fn the_panel_opens_on_the_overview_with_a_real_snapshot() {
     let a = app();
-    assert_eq!(a.tab, Tab::Carl, "the conversation is the front page");
+    assert_eq!(
+        a.tab,
+        Tab::Overview,
+        "the state of the army is the front page"
+    );
     assert!(!a.snapshot.agents.is_empty());
     assert!(!a.snapshot.conversation.is_empty());
     assert!(a.link.is_live());
@@ -40,7 +47,7 @@ fn every_tab_can_be_selected() {
         a.select_tab(tab);
         assert_eq!(a.tab, tab);
     }
-    assert_eq!(Tab::ALL.len(), 4, "exactly four principal tabs");
+    assert_eq!(Tab::ALL.len(), 5, "exactly five principal tabs");
 }
 
 /// The editor and the terminal are tools, not destinations. If either ever becomes a tab this
@@ -48,7 +55,10 @@ fn every_tab_can_be_selected() {
 #[test]
 fn the_editor_and_terminal_are_not_tabs() {
     let labels: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
-    assert_eq!(labels, vec!["CARL", "AGENTS", "DIAGNOSTICS", "PROJECTS"]);
+    assert_eq!(
+        labels,
+        vec!["OVERVIEW", "CARL", "AGENTS", "DIAGNOSTICS", "PROJECTS"]
+    );
 }
 
 /// Toggling away and back is not a restart. A panel that forgets where you were is one you
