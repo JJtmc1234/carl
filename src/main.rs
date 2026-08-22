@@ -151,6 +151,11 @@ enum Command {
         journal: Option<String>,
     },
 
+    /// The army itself, before anything is running.
+    Army {
+        #[command(subcommand)]
+        action: ArmyAction,
+    },
     /// Keep every agent's process running, and nothing else.
     ///
     /// The supervisor owns process existence. It starts an agent that is not running, resumes
@@ -182,6 +187,18 @@ enum Command {
         #[command(subcommand)]
         action: MemoryAction,
     },
+}
+
+#[derive(Subcommand)]
+enum ArmyAction {
+    /// Give every agent in the organisation a folder, an id and a memory folder.
+    ///
+    /// JJ's act, and recorded as his, because there is no chief with a folder yet who could
+    /// have authorised it. Refuses a home that already holds an army rather than merging into
+    /// one, so running it twice by accident cannot half rewrite what is there.
+    Found,
+    /// Who has a folder, and what each of them is holding.
+    Who,
 }
 
 #[derive(Subcommand)]
@@ -369,6 +386,35 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        Command::Army { action } => match action {
+            ArmyAction::Found => {
+                let army = carl::army::personnel::found(&home, now())?;
+                for name in army.names() {
+                    let id = army
+                        .identity(name)
+                        .map_or_else(|| "no id".to_string(), |i| i.id.to_string());
+                    println!("  {name:8} {id}");
+                }
+                println!("{} agents enlisted in {}", army.len(), home.display());
+                Ok(())
+            }
+            ArmyAction::Who => {
+                let army = carl::army::personnel::Personnel::open(&home)?;
+                if army.is_empty() {
+                    println!("no army has been founded in {}", home.display());
+                    return Ok(());
+                }
+                for name in army.names() {
+                    let holding = army
+                        .state(name)
+                        .and_then(|s| s.holding.as_ref())
+                        .map_or_else(|| "idle".to_string(), |t| format!("holding {t}"));
+                    println!("  {name:8} {holding}");
+                }
+                Ok(())
+            }
+        },
+
         Command::Supervise {
             once,
             every,
@@ -469,6 +515,14 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+/// Unix seconds, for the commands that write a time down.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
 }
 
 /// Expands a leading `~`, because a default of `~/.carl` is otherwise taken literally and
