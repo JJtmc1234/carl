@@ -34,7 +34,7 @@ pub fn draw(app: &mut App, ui: &mut Ui) {
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(theme::spaced(&view.name.to_uppercase()))
+                    theme::spaced(&view.name.to_uppercase())
                         .font(theme::big())
                         .color(theme::TEXT),
                 );
@@ -201,7 +201,7 @@ fn intervention(app: &mut App, ui: &mut Ui, agent: &str) {
         .inner_margin(eframe::egui::Margin::symmetric(12.0, 10.0))
         .show(ui, |ui| {
             ui.label(
-                RichText::new(theme::spaced("DIRECT JJ INTERVENTION"))
+                theme::spaced("DIRECT JJ INTERVENTION")
                     .font(theme::label())
                     .color(theme::INTERVENE),
             );

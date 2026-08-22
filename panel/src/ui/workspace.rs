@@ -43,7 +43,7 @@ pub fn draw(app: &mut App, ctx: &Context) {
 
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(theme::spaced("WORKSPACE"))
+                    theme::spaced("WORKSPACE")
                         .font(theme::label())
                         .color(theme::DIM),
                 );
@@ -215,7 +215,7 @@ fn editor(app: &mut App, ui: &mut eframe::egui::Ui) {
                 .inner_margin(eframe::egui::Margin::symmetric(8.0, 6.0))
                 .show(ui, |ui| {
                     ui.label(
-                        RichText::new(theme::spaced("NOT SAVED, THE FILE CHANGED UNDERNEATH"))
+                        theme::spaced("NOT SAVED, THE FILE CHANGED UNDERNEATH")
                             .font(theme::label())
                             .color(theme::WARN),
                     );
@@ -284,7 +284,7 @@ fn comparison(ui: &mut eframe::egui::Ui, outcome: &Comparison) {
         }
         Comparison::Unavailable(why) => {
             ui.label(
-                RichText::new(theme::spaced("COMPARISON UNAVAILABLE"))
+                theme::spaced("COMPARISON UNAVAILABLE")
                     .font(theme::label())
                     .color(theme::WARN),
             );

@@ -18,7 +18,7 @@
 //! here is an identifier, a figure or a state, and letter spacing on the small labels rather
 //! than making them smaller. Nothing is below 11px.
 
-use eframe::egui::{Color32, FontFamily, FontId, Rounding, Stroke, TextStyle};
+use eframe::egui::{Color32, FontFamily, FontId, RichText, Rounding, Stroke, TextStyle};
 
 /// The background ramp, darkest first. Depth comes from these rather than from shadows.
 pub const VOID: Color32 = Color32::from_rgb(6, 8, 11);
@@ -79,13 +79,21 @@ pub fn big() -> FontId {
     FontId::new(20.0, FontFamily::Monospace)
 }
 
+/// How far apart the letters of a small label sit, in pixels.
+///
+/// Real spacing, not injected characters. This used to put a space between every letter, which
+/// in a monospace font costs a whole cell each time, so a six letter label took eleven cells and
+/// read as gappy rather than deliberate. Sub character spacing is the thing that was actually
+/// wanted, and egui does it properly.
+const LETTER_SPACING: f32 = 1.5;
+
 /// Spreads a short label out, which reads as deliberate where a tiny font reads as cramped.
-pub fn spaced(text: &str) -> String {
-    text.chars()
-        .flat_map(|c| [c, ' '])
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+///
+/// Returns styled text rather than a string on purpose. The old version changed the string
+/// itself, so the spacing ended up in anything that read the label back: copied text came out
+/// with gaps in it, and a screen reader was given "C A R L" to say.
+pub fn spaced(text: &str) -> RichText {
+    RichText::new(text).extra_letter_spacing(LETTER_SPACING)
 }
 
 /// Applies the whole language to a context, once, at startup.
@@ -304,7 +312,9 @@ mod tests {
     /// Spacing a label rather than shrinking it is how the small type stays legible.
     #[test]
     fn a_label_is_spread_not_shrunk() {
-        assert_eq!(spaced("CARL"), "C A R L");
-        assert_eq!(spaced(""), "");
+        // The label keeps its own text now. The spacing is a style on top of it, so anything
+        // that reads the label back gets the word rather than the word with gaps in it.
+        assert_eq!(spaced("CARL").text(), "CARL");
+        assert_eq!(spaced("").text(), "");
     }
 }

@@ -44,13 +44,9 @@ fn rail(app: &mut App, ctx: &Context) {
                 .inner_margin(eframe::egui::Margin::symmetric(12.0, 14.0)),
         )
         .show(ctx, |ui| {
+            ui.label(theme::spaced("AOS").font(theme::big()).color(theme::TEXT));
             ui.label(
-                RichText::new(theme::spaced("AOS"))
-                    .font(theme::big())
-                    .color(theme::TEXT),
-            );
-            ui.label(
-                RichText::new(theme::spaced("COMMAND PANEL"))
+                theme::spaced("COMMAND PANEL")
                     .font(theme::label())
                     .color(theme::FAINT),
             );
@@ -62,7 +58,7 @@ fn rail(app: &mut App, ctx: &Context) {
                 let response = widgets::row(ui, 38.0, selected, false, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(theme::spaced(tab.label()))
+                            theme::spaced(tab.label())
                                 .font(theme::body())
                                 .color(if selected { theme::ACCENT } else { theme::TEXT }),
                         );
@@ -145,7 +141,7 @@ fn strip(app: &mut App, ctx: &Context) {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(theme::spaced(app.tab.label()))
+                    theme::spaced(app.tab.label())
                         .font(theme::body())
                         .color(theme::TEXT),
                 );
