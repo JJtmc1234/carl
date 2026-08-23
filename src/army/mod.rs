@@ -36,6 +36,8 @@ pub mod board;
 mod campaign;
 pub mod chain;
 pub mod event;
+/// Whether the army is getting better, folded out of the record.
+pub mod metrics;
 pub mod org;
 /// Per agent folders that survive a restart.
 pub mod personnel;
@@ -49,6 +51,7 @@ pub use board::Board;
 pub use campaign::{Departmental, JOBS_PER_HEAD, Outcome, parse_jobs, run_department};
 pub use chain::{Chain, Passage, brief_for as chain_brief, campaign, tools_for};
 pub use event::{Event, Journal, Record};
+pub use metrics::Metrics;
 pub use org::{Agent, Rank, check_delegation, check_may_implement, may_delegate};
 pub use report::{Report, Summary};
 pub use roster::{Role, Roster, brief_for, department, heads, roles};

@@ -213,6 +213,16 @@ enum ArmyAction {
         /// Which agents. With none, everybody in the table who has no folder.
         who: Vec<String>,
     },
+
+    /// Whether the army is getting better, folded out of the record.
+    ///
+    /// The nine measures in `docs/flagship-workflow.md`. Nothing is recorded for them
+    /// separately, so there is no second file that could come to disagree with the history.
+    Metrics {
+        /// How many of the most recent objectives the trend is taken over.
+        #[arg(long, default_value_t = 10)]
+        recent: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -431,6 +441,17 @@ fn main() -> Result<()> {
                 Ok(())
             }
 
+            ArmyAction::Metrics { recent } => {
+                let path = home.join("run").join("events.jsonl");
+                if !path.exists() {
+                    println!("nothing has been recorded in {}", home.display());
+                    return Ok(());
+                }
+                let m = carl::army::metrics::of(&carl::army::event::read(&path)?);
+                print_metrics(&m, recent);
+                Ok(())
+            }
+
             ArmyAction::Enlist { who } => {
                 use carl::army::personnel::{enlist, founding_config, founding_profile};
 
@@ -603,3 +624,88 @@ fn expand(path: &str) -> PathBuf {
     }
 }
 
+/// The nine measures, printed so a gap reads as a gap.
+///
+/// A rate over nothing is left blank rather than shown as zero or as a hundred percent. Both
+/// would be a score, and an army that has never been asked to do anything has not earned one.
+fn print_metrics(m: &carl::army::Metrics, recent: usize) {
+    fn rate(part: usize, whole: usize) -> String {
+        match whole {
+            0 => "  n/a".to_string(),
+            _ => format!("{:5.0}%", 100.0 * part as f64 / whole as f64),
+        }
+    }
+
+    let all = m.objectives.len();
+    println!("objectives          {all}");
+    println!(
+        "  accepted          {}  {}",
+        m.accepted(),
+        rate(m.accepted(), all)
+    );
+    println!(
+        "  without JJ        {}  {}",
+        m.unattended(),
+        rate(m.unattended(), all)
+    );
+    match m.interventions_each() {
+        Some(each) => println!("  interventions     {each:.2} each"),
+        None => println!("  interventions     n/a, nothing has been asked for yet"),
+    }
+
+    // The trend, which is the only thing a single figure cannot show. Printed only once there
+    // are two windows to compare, because the last ten against themselves says nothing.
+    let latest = m.latest(recent);
+    if all > latest.len() {
+        let earlier = &m.objectives[..all - latest.len()];
+        let per = |set: &[carl::army::metrics::Objective]| {
+            set.iter().map(|o| o.interventions).sum::<usize>() as f64 / set.len() as f64
+        };
+        println!(
+            "  trend             {:.2} each over the first {}, {:.2} over the last {}",
+            per(earlier),
+            earlier.len(),
+            per(latest),
+            latest.len()
+        );
+    }
+
+    let reviews = m.reviews.accepted + m.reviews.rejected;
+    println!("reviews             {reviews}");
+    println!(
+        "  rejected          {}  {}",
+        m.reviews.rejected,
+        rate(m.reviews.rejected, reviews)
+    );
+    println!("  escalations       {}", m.escalations);
+
+    println!("submissions         {}", m.retries.submissions);
+    println!(
+        "  repeats           {}  {}",
+        m.retries.repeats,
+        rate(m.retries.repeats, m.retries.submissions)
+    );
+
+    println!("crashes             {}", m.recovery.crashes);
+    println!(
+        "  recovered         {}  {}",
+        m.recovery.resumed,
+        rate(m.recovery.resumed, m.recovery.crashes)
+    );
+    println!("  gave up           {}", m.recovery.gave_up);
+    if m.recovery.outstanding > 0 {
+        println!(
+            "  unanswered        {}, which is somebody to go and look at",
+            m.recovery.outstanding
+        );
+    }
+
+    println!("continuity losses   {}", m.continuity_failures);
+    println!("refusals            {}", m.refusals);
+    if m.loose_interventions > 0 {
+        println!(
+            "loose interventions {}, naming no task",
+            m.loose_interventions
+        );
+    }
+}

@@ -302,6 +302,27 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
         .count();
     assert_eq!(reviews, 3, "one review per task and no more");
 
+    // And the same record answers whether the army is getting better, without a second file
+    // anybody had to remember to write. This is the measure the flagship is judged on, taken
+    // off the only walk in this repository that uses real processes.
+    let measured = carl::army::metrics::of(&slice.records());
+    assert_eq!(
+        measured.objectives.len(),
+        1,
+        "one objective, not three tasks"
+    );
+    assert_eq!(measured.objectives[0].goal, objective.goal);
+    assert!(measured.objectives[0].accepted());
+    assert!(
+        measured.objectives[0].unattended(),
+        "JJ opened it and never had to come back"
+    );
+    assert_eq!(measured.reviews.accepted, 3);
+    assert_eq!(measured.reviews.rejected, 0);
+    assert_eq!(measured.retries.repeats, 0, "nobody had to do it twice");
+    assert_eq!(measured.recovery.crashes, 0);
+    assert_eq!(measured.interventions_each(), Some(0.0));
+
     // The record reads as one ordered story rather than as two files that have to be lined up.
     let seqs: Vec<u64> = slice.records().iter().map(|r| r.seq).collect();
     assert_eq!(
