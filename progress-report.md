@@ -1,6 +1,23 @@
 # progress report
 
-Where Carl stands. Updated 2026 08 08.
+Where Carl stands. Updated 2026 08 23.
+
+## what Carl is, next to the other two
+
+Three projects keep being read as one, so this goes first.
+
+| | owns |
+|---|---|
+| **Carl** | work. What should happen, who does it, who reviews it, what reaches JJ |
+| **AOS** | execution. Which programs may start, what they may read and change, what is recorded |
+| **ME OS** | a computer. Boot, display, input. A separate project, not part of this one |
+
+Carl decides what work happens. AOS decides what a running agent is allowed to do. The rule is
+in the code and tested: the supervisor has no way to give an agent a task, and a test reads its
+own source and fails if the words `Task`, `Board`, `delegate` or `Status` appear in it.
+
+The one workflow this is aimed at over the next year is in
+[docs/flagship-workflow.md](docs/flagship-workflow.md).
 
 ## summary
 
@@ -119,9 +136,39 @@ interpreter inside a namespace with no home directory, no network, and one writa
 Verified it cannot read the Slack tokens, list the home directory, open a socket, or see the
 machine's processes.
 
+## the army
+
+Built after the section above, and it is what the flagship is made of.
+
+| part | status | notes |
+|---|---|---|
+| the organisation | ten agents, five departments under Carl | delegation rules refuse a shortcut and name the route |
+| tasks | assign, split, review, escalate | three rejections goes over the lead's head |
+| the journal | one file, one numbering, locked | refusals recorded as well as actions |
+| identity, memory, hours | per agent, on disk | a restart is not a new agent |
+| the runtime supervisor | one per home, enforced | restart policy, backoff, degraded state |
+| the Command Panel | v1 frozen and verified | event ordering proved against the real binaries |
+| the measures | `carl army metrics` | nine numbers, folded out of the journal |
+
+802 tests, fmt clean, clippy clean at deny warnings.
+
+Nothing is deployed. It runs on one personal machine, and there is no server, no host and
+nothing anybody outside can reach.
+
+## what the measures say today
+
+Almost nothing, and that is the honest answer. `carl army metrics` reads a real journal and
+reports correctly on it, and the only journal with objectives in it is the one
+`examples/seed_objectives.rs` writes. The first real number arrives when an actual ME objective
+goes through, which is gate 2 in the flagship document.
+
+Reporting a rate over no objectives as zero would have given an army that has never been asked
+to do anything the best possible score, so it reports nothing instead.
+
 ## next
 
-1. Hunter implements Alex's half of A2A and the two agents actually talk.
-2. Lingering, so Slack survives a logout.
-3. Whatever the first week of real use turns up. Every bug of consequence so far came from
-   running the thing, not from reading it.
+1. One real ME objective, intake to accepted result, with no manual step.
+2. A worker's write refused by AOS, from a grant Carl recorded, with the refusal in the log.
+   This is the half of the security boundary that is two correct pieces not yet joined.
+3. Hunter implements Alex's half of A2A and the two agents actually talk.
+4. Lingering, so Slack survives a logout.

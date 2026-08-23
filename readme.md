@@ -1,8 +1,74 @@
 # carl
 
-Docs: [brainstorm.md](brainstorm.md) for how this was arrived at, [planning.md](planning.md) for the chunks and what is next, [infrastructure.md](infrastructure.md) for how it fits together, [progress-report.md](progress-report.md) for where it stands, [docs/a2a.md](docs/a2a.md) for the agent to agent protocol.
+A helper that remembers, and the thing that organises the agents. Rust, driving the `claude`
+command line as a child process.
 
-A helper that remembers. Rust, driving the `claude` command line as a child process.
+## Carl, AOS and ME OS
+
+Three separate projects that keep being read as one.
+
+| | owns | does not own |
+|---|---|---|
+| **Carl** | work. What should happen, who does it, who reviews it, what reaches JJ | processes, and what a process may touch |
+| **AOS** | execution. Which programs may start, what they may read and change, what needs a commit first, and what gets recorded | any opinion about whether the work was worth doing |
+| **ME OS** | a computer. Boot, display, input | agents, and everything on this page |
+
+**Carl decides what work happens. AOS decides what a running agent is allowed to do. ME OS is a
+separate operating system project.**
+
+That split is not a description, it is enforced. The supervisor has no way to give an agent a
+task, and a test reads its own source and fails if the words `Task`, `Board`, `delegate` or
+`Status` appear in it. It matters because it is also the security design: if Carl is wrong or
+compromised, what an agent can reach does not change, because Carl was never the thing enforcing
+it.
+
+Nothing here is deployed. One personal machine, no server, no host, and nothing anybody outside
+can reach.
+
+## docs
+
+[docs/flagship-workflow.md](docs/flagship-workflow.md) for the one workflow this is aimed at
+over the next year, its nine measures and the security split.
+[docs/three-year-expansion-gate.md](docs/three-year-expansion-gate.md) for what has to be true
+before ME takes on a second area. [docs/army-runtime.md](docs/army-runtime.md) for how agent
+processes are kept alive. [brainstorm.md](brainstorm.md) for how this was arrived at,
+[planning.md](planning.md) for the chunks and what is next,
+[infrastructure.md](infrastructure.md) for how it fits together,
+[progress-report.md](progress-report.md) for where it stands, [docs/a2a.md](docs/a2a.md) for the
+agent to agent protocol.
+
+## the army, and whether it is getting better
+
+```sh
+./target/debug/carl army found      # a folder, an id and a memory folder each
+./target/debug/carl army who        # who exists and what each is holding
+./target/debug/carl army enlist     # a folder for anybody added to the table since
+./target/debug/carl army metrics    # whether any of it is working
+```
+
+`metrics` is nine numbers folded straight out of `run/events.jsonl`. Nothing records them
+separately, so there is no second file that could come to disagree with the history.
+
+```
+objectives          3
+  accepted          2     67%
+  without JJ        2     67%
+  interventions     0.33 each
+reviews             5
+  rejected          1     20%
+```
+
+Two of them are meant to look bad at first. Interventions per objective and the rejection rate
+both rise when the army starts doing work somebody cares about, because the alternative is JJ
+not watching and the leads not reading. A rate over no objectives is left blank rather than
+shown as zero, because an army that has never been asked to do anything has not earned a score.
+
+To see it against a real journal without waiting for one:
+
+```sh
+cargo run --example seed_objectives /tmp/demo
+./target/debug/carl --home /tmp/demo army metrics
+```
 
 ## how memory actually works
 
