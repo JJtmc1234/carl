@@ -81,7 +81,15 @@ fn the_snapshot_shows_the_real_organisation() {
     let snap = snapshot::build_from(&people, &[], &Facts::army_only()).unwrap();
 
     let names: Vec<&str> = snap.agents.iter().map(|a| a.name.as_str()).collect();
-    assert_eq!(names, vec!["carl", "adrian", "mason", "nora"]);
+    assert_eq!(
+        names,
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .map(|a| a.name)
+            .collect::<Vec<_>>(),
+        "every agent in the table, in the order the table gives them"
+    );
     assert!(
         !names.contains(&"jj"),
         "JJ is not an agent and has no folder"
@@ -410,7 +418,13 @@ fn a_panel_connects_and_gets_the_real_organisation_over_the_socket() {
     panel.send(Ask::Snapshot);
     match panel.next().body {
         Reply::Snapshot { snapshot } => {
-            assert_eq!(snapshot.agents.len(), 4);
+            assert_eq!(
+                snapshot.agents.len(),
+                crate::army::org::everyone()
+                    .iter()
+                    .filter(|a| a.rank != crate::army::org::Rank::Human)
+                    .count()
+            );
             // No project has been created in this home, so there are none. Empty because nothing
             // was written rather than because nothing was asked.
             assert!(snapshot.projects.is_empty(), "none were created");

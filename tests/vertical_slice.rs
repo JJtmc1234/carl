@@ -1,17 +1,18 @@
 //! One objective from Carl to a worker and back, against the real machinery.
 //!
 //! ```text
-//!   carl      turns what he was asked for into an objective
-//!    -> adrian    takes the department's half of it
+//!   jj        asks for something, and is the only authority that is not delegated
+//!    -> carl      turns it into an objective and decides whose department it is
 //!        -> mason     writes the concrete task, grants the workspace, reviews what comes back
 //!            -> nora      does exactly that and reports
 //! ```
 //!
-//! Four agents rather than three, because that is what the organisation actually is: a
-//! department lead and a sub department lead sit between Carl and a worker, and Carl cannot hand
-//! work to Nora however short the path looks. Building the three agent version would have meant
-//! inventing an organisation to test against, and then the test would prove something about the
-//! invention.
+//! Four actors rather than three, because that is what the organisation actually is. Factorio
+//! used to hang under engineering, which put a second lead in this path. It is its own
+//! department now, so the depth below Carl is one lead, and the fourth actor is JJ at the top
+//! where he always was. Carl still cannot hand work to Nora however short the path looks.
+//! Building a shorter version would have meant inventing an organisation to test against, and
+//! then the test would prove something about the invention.
 //!
 //! **No model anywhere in here.** The processes are the real ones the supervisor starts, and
 //! what they run is a checked in shell script that obeys one instruction. A test that called a
@@ -146,30 +147,31 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
         "only the sleeping one is left alone"
     );
 
-    // 2. Carl hands the department its objective. He cannot reach past Adrian and there is no
-    //    way here to try.
+    // 2. JJ asks Carl for something. This is the only step in the whole walk that starts
+    //    outside the army.
     let objective = task(
+        "jj",
         "carl",
-        "adrian",
         "the army can show it wrote something it was asked for",
         "a result file exists where the worker was allowed to write",
     );
-    slice.board.delegate("carl", &objective).unwrap();
+    slice.board.delegate("jj", &objective).unwrap();
     slice
         .board
-        .advance("adrian", &objective.id, Status::InHand)
+        .advance("carl", &objective.id, Status::InHand)
         .unwrap();
 
-    // 3. Adrian decides it is Mason's, and splits it rather than passing it on whole.
+    // 3. Carl decides it is Mason's department, and splits it rather than passing it on whole.
+    //    He cannot reach past Mason to Nora and there is no way here to try.
     let departmental = Task::split_from(
         &objective,
-        "adrian",
+        "carl",
         "mason",
         "have the factorio worker produce the result file",
         Verification::of(["result.txt is there and says done"]).unwrap(),
     )
     .unwrap();
-    slice.board.delegate("adrian", &departmental).unwrap();
+    slice.board.delegate("carl", &departmental).unwrap();
     slice
         .board
         .advance("mason", &departmental.id, Status::InHand)
@@ -261,19 +263,14 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
     slice.board.submit("mason", &departmental.id, 20).unwrap();
     slice
         .board
-        .review(
-            "adrian",
-            &departmental.id,
-            true,
-            "checked the worker's file",
-        )
+        .review("carl", &departmental.id, true, "checked the worker's file")
         .unwrap();
 
-    slice.board.submit("adrian", &objective.id, 20).unwrap();
+    slice.board.submit("carl", &objective.id, 20).unwrap();
     slice
         .board
         .review(
-            "carl",
+            "jj",
             &objective.id,
             true,
             "the department did what was asked",

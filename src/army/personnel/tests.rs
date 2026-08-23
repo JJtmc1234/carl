@@ -49,8 +49,19 @@ fn every_folder_survives_a_restart() {
         .collect();
 
     assert_eq!(read, written, "the folders came back exactly as written");
-    assert_eq!(after.len(), 4);
-    assert_eq!(after.names(), ["adrian", "carl", "mason", "nora"]);
+    // Counted from the table rather than written out, so adding a department does not mean
+    // remembering to change a number here. The property is one folder per agent who is not JJ.
+    let expected: Vec<&str> = {
+        let mut names: Vec<&str> = crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .map(|a| a.name)
+            .collect();
+        names.sort_unstable();
+        names
+    };
+    assert_eq!(after.len(), expected.len());
+    assert_eq!(after.names(), expected.as_slice());
 }
 
 #[test]
@@ -63,7 +74,7 @@ fn who_an_agent_is_comes_back_from_the_table_rather_than_the_folder() {
     assert_eq!(nora.agent.rank, crate::army::Rank::Worker);
     assert_eq!(nora.agent.reports_to, Some("mason"));
     assert_eq!(
-        after.profile("nora").unwrap().sub_department.as_deref(),
+        after.profile("nora").unwrap().department.as_deref(),
         Some("factorio"),
         "and the part the table does not hold came off disk"
     );
@@ -157,7 +168,15 @@ fn no_file_on_disk_holds_a_rank_or_a_reporting_line() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 12, "all four folders, all three files");
+    assert_eq!(
+        checked,
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .count()
+            * 3,
+        "every folder, all three files"
+    );
 }
 
 /// The escalation attempt, tried the way an agent could actually try it: by writing the one
@@ -287,7 +306,15 @@ fn an_agent_without_a_folder_is_reported_rather_than_fatal() {
     std::fs::remove_dir_all(d.path().join("army").join("mason")).unwrap();
 
     let army = reopen(d.path());
-    assert_eq!(army.len(), 3);
+    assert_eq!(
+        army.len(),
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .count()
+            - 1,
+        "one short, and it says which"
+    );
     assert_eq!(army.missing().len(), 1);
     assert_eq!(army.missing()[0].name, "mason");
     assert!(
@@ -309,7 +336,7 @@ fn the_readme_is_written_and_never_read_back() {
     assert!(text.contains("May hand work to: nobody"));
     assert!(text.contains("May change files: yes"));
     assert!(text.contains("May enlist: no"));
-    assert!(text.contains("factorio sub department"));
+    assert!(text.contains("factorio department"));
 
     let carl = std::fs::read_to_string(army.folder("carl").join("README.md")).unwrap();
     assert!(
@@ -327,7 +354,13 @@ fn the_readme_is_written_and_never_read_back() {
         crate::army::Rank::Worker
     );
     std::fs::remove_file(&readme).unwrap();
-    assert_eq!(reopen(d.path()).len(), 4);
+    assert_eq!(
+        reopen(d.path()).len(),
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .count()
+    );
 }
 
 #[test]
@@ -372,14 +405,30 @@ fn the_journal_carries_on_across_a_restart() {
             },
         )
         .unwrap();
-    assert_eq!(logged.seq, 5, "four enlistments came first");
+    assert_eq!(
+        logged.seq,
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .count() as u64
+            + 1,
+        "every enlistment came first"
+    );
     drop(journal);
 
     let all = event::read(&path).unwrap();
-    assert_eq!(all.len(), 5);
+    assert_eq!(
+        all.len(),
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .count()
+            + 1
+    );
     assert_eq!(event::about(&all, &task()).len(), 1);
     let seqs: Vec<u64> = all.iter().map(|r| r.seq).collect();
-    assert_eq!(seqs, [1, 2, 3, 4, 5], "numbered without a gap");
+    let expected: Vec<u64> = (1..=all.len() as u64).collect();
+    assert_eq!(seqs, expected, "numbered without a gap");
 }
 
 /// Founding and a restart together, which is the sequence a real run does.
@@ -504,7 +553,14 @@ fn a_folder_with_no_identity_still_loads_and_says_so() {
     let army = reopen(d.path());
     assert!(army.identity("nora").is_none(), "absent, and not invented");
     assert!(army.identity("mason").is_some(), "the others are untouched");
-    assert_eq!(army.len(), 4, "and the army still loads");
+    assert_eq!(
+        army.len(),
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .count(),
+        "and the army still loads"
+    );
 }
 
 /// Absent is a fact. Unreadable is a break, and loading past one would hand back an agent that

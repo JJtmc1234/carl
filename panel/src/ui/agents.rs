@@ -149,10 +149,22 @@ mod tests {
     fn the_tree_is_the_real_chain() {
         let walked = walk();
         let names: Vec<&str> = walked.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["jj", "carl", "adrian", "mason", "nora"]);
+        assert_eq!(
+            names,
+            vec![
+                "jj", "carl", "adrian", "evan", "iris", "mason", "nora", "olivia", "miles",
+                "rowan", "serena"
+            ]
+        );
 
+        // Five departments under Carl, each one lead deep. Serena and Rowan are drawn at lead
+        // depth with nobody beneath them, which is the true shape rather than a gap.
         let depths: Vec<usize> = walked.iter().map(|(_, d)| *d).collect();
-        assert_eq!(depths, vec![0, 1, 2, 3, 4], "one indent per level");
+        assert_eq!(
+            depths,
+            vec![0, 1, 2, 3, 3, 2, 3, 2, 3, 2, 2],
+            "one indent per level"
+        );
     }
 
     /// Everybody in the organisation appears exactly once, so nobody is invisible and nobody

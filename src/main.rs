@@ -199,6 +199,20 @@ enum ArmyAction {
     Found,
     /// Who has a folder, and what each of them is holding.
     Who,
+
+    /// Give a folder to somebody in the organisation who does not have one yet.
+    ///
+    /// What `found` cannot do, because `found` is for an empty home and refuses one that
+    /// already holds an army. This is how agents added to `army::org` join a home that is
+    /// already running, which is what happened when the organisation grew from four to ten.
+    ///
+    /// Recorded as Carl's act, because who exists and where they sit is the chief's, subject to
+    /// JJ. It invents nobody: an agent has to be in the table already, and adding a row there is
+    /// a change to compiled code on purpose.
+    Enlist {
+        /// Which agents. With none, everybody in the table who has no folder.
+        who: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -411,6 +425,58 @@ fn main() -> Result<()> {
                         .map_or_else(|| "idle".to_string(), |t| format!("holding {t}"));
                     println!("  {name:8} {holding}");
                 }
+                for missing in army.missing() {
+                    println!("  {:8} no folder yet", missing.name);
+                }
+                Ok(())
+            }
+
+            ArmyAction::Enlist { who } => {
+                use carl::army::personnel::{enlist, founding_config, founding_profile};
+
+                let mut army = carl::army::personnel::Personnel::open(&home)?;
+                let missing: Vec<String> =
+                    army.missing().iter().map(|a| a.name.to_string()).collect();
+
+                // Checked against the table before anything is written, so a typo names the
+                // agents that exist rather than half enlisting the ones spelled right.
+                let wanted: Vec<String> = if who.is_empty() {
+                    missing
+                } else {
+                    for name in &who {
+                        carl::army::org::require(name)?;
+                    }
+                    who
+                };
+                if wanted.is_empty() {
+                    println!("everybody in the organisation already has a folder");
+                    return Ok(());
+                }
+
+                let mut journal = carl::army::event::Journal::open(army.journal_path())?;
+                for name in wanted {
+                    if army.get(&name).is_some() {
+                        println!("  {name:8} already had one, left alone");
+                        continue;
+                    }
+                    // Hours come from the rank rather than the default, so somebody enlisted
+                    // into a running home gets the ordinary overnight window instead of
+                    // running all night because nobody said otherwise.
+                    let rank = carl::army::org::require(&name)?.rank;
+                    let logged = enlist(
+                        &mut army,
+                        &mut journal,
+                        "carl",
+                        &name,
+                        founding_profile(&name),
+                        founding_config(rank),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    )?;
+                    println!("  {name:8} enlisted, recorded at seq {}", logged.seq);
+                }
                 Ok(())
             }
         },
@@ -536,3 +602,4 @@ fn expand(path: &str) -> PathBuf {
         None => PathBuf::from(path),
     }
 }
+

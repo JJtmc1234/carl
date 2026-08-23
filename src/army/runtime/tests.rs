@@ -12,6 +12,18 @@
 use std::path::{Path, PathBuf};
 
 use super::*;
+
+/// How many agents a founded home holds.
+///
+/// Taken from the table rather than written out. These tests are about what the supervisor does
+/// to every agent, and the count is only ever incidental, so an organisation that grows should
+/// not mean editing a dozen numbers by hand.
+fn everybody() -> usize {
+    crate::army::org::everyone()
+        .iter()
+        .filter(|a| a.rank != crate::army::org::Rank::Human)
+        .count()
+}
 use crate::army::event::Event;
 use crate::army::personnel::{Personnel, found};
 use crate::army::runtime::Session as SessionContinuity;
@@ -85,12 +97,12 @@ fn a_first_tick_starts_every_agent_in_a_new_conversation() {
     let mut sup = supervisor(d.path(), &stays_up());
 
     let tick = sup.tick(&people, 1000).unwrap();
-    assert_eq!(tick.what.len(), 4, "carl, adrian, mason and nora");
+    assert_eq!(tick.what.len(), everybody(), "everybody in the table");
     assert_eq!(
         tick.count(|o| matches!(o, Outcome::Started(Start::Fresh))),
-        4
+        everybody()
     );
-    assert_eq!(sup.holding(), 4);
+    assert_eq!(sup.holding(), everybody());
 }
 
 #[test]
@@ -102,8 +114,12 @@ fn a_second_tick_leaves_running_agents_alone_rather_than_starting_more() {
     sup.tick(&people, 1000).unwrap();
     let again = sup.tick(&people, 1001).unwrap();
 
-    assert_eq!(again.count(|o| matches!(o, Outcome::Left)), 4);
-    assert_eq!(sup.holding(), 4, "and no second process for anybody");
+    assert_eq!(again.count(|o| matches!(o, Outcome::Left)), everybody());
+    assert_eq!(
+        sup.holding(),
+        everybody(),
+        "and no second process for anybody"
+    );
 }
 
 /// The property the whole layer exists for. The process is disposable, the conversation is not,
@@ -208,7 +224,7 @@ fn an_agent_in_backoff_is_not_started_again_on_the_next_pass() {
 
     assert_eq!(
         third.count(|o| matches!(o, Outcome::Waiting { .. })),
-        4,
+        everybody(),
         "every one of them is waiting rather than being hammered"
     );
 }
@@ -236,8 +252,8 @@ fn a_stopped_agent_is_not_started_and_the_reason_survives_a_restart() {
     assert!(why.contains("quiet"), "{why}");
     assert_eq!(
         tick.count(|o| matches!(o, Outcome::Started(_) | Outcome::Left)),
-        3,
-        "and the other three are untouched"
+        everybody() - 1,
+        "and everybody else is untouched"
     );
 }
 
@@ -258,7 +274,11 @@ fn an_agent_without_an_identity_is_skipped_and_says_why() {
         matches!(outcome, Outcome::Skipped { why } if why.contains("identity")),
         "{outcome:?}"
     );
-    assert_eq!(sup.holding(), 3, "and nothing was started for her");
+    assert_eq!(
+        sup.holding(),
+        everybody() - 1,
+        "and nothing was started for her"
+    );
 }
 
 /// A supervisor that cannot spawn at all must record that and count it, not carry on believing
@@ -272,7 +292,10 @@ fn a_claude_that_cannot_be_run_is_recorded_as_a_failed_start() {
     let mut sup = supervisor(d.path(), &d.path().join("no-such-binary"));
     let tick = sup.tick(&people, 1000).unwrap();
 
-    assert_eq!(tick.count(|o| matches!(o, Outcome::Failed { .. })), 4);
+    assert_eq!(
+        tick.count(|o| matches!(o, Outcome::Failed { .. })),
+        everybody()
+    );
     let record = sup.roll().get(&nora).unwrap();
     assert!(matches!(record.lifecycle, Lifecycle::Exited { .. }));
     assert_eq!(record.attempts, 1, "counted once, here rather than twice");
@@ -358,7 +381,7 @@ fn starting_an_agent_is_written_down_with_what_survived_into_it() {
         .iter()
         .filter(|r| r.event.kind() == "agent_started")
         .collect();
-    assert_eq!(started.len(), 4, "carl, adrian, mason and nora");
+    assert_eq!(started.len(), everybody(), "everybody in the table");
 
     let hers = started
         .iter()
@@ -607,10 +630,14 @@ fn an_army_inside_its_window_is_put_down_and_stays_down() {
     let night = at_local_hour(3);
 
     sup.tick(&people, night).unwrap();
-    assert_eq!(sup.holding(), 4, "up before the timetable is consulted");
+    assert_eq!(
+        sup.holding(),
+        everybody(),
+        "up before the timetable is consulted"
+    );
 
     let changed = sup.keep_hours(&people, night).unwrap();
-    assert_eq!(changed.len(), 4, "all four were put down");
+    assert_eq!(changed.len(), everybody(), "every one of them was put down");
     assert_eq!(sup.holding(), 0, "and their processes let go");
 
     // And the tick that follows leaves them alone rather than starting them again, which is the
@@ -618,7 +645,7 @@ fn an_army_inside_its_window_is_put_down_and_stays_down() {
     let tick = sup.tick(&people, night).unwrap();
     assert_eq!(
         tick.count(|o| matches!(o, Outcome::NotStarting { .. })),
-        4,
+        everybody(),
         "{:?}",
         tick.lines()
     );
@@ -653,12 +680,16 @@ fn the_window_ending_lets_an_agent_start_again_on_the_same_conversation() {
 
     let morning = at_local_hour(9);
     let changed = sup.keep_hours(&people, morning).unwrap();
-    assert_eq!(changed.len(), 4, "all four are allowed up again");
+    assert_eq!(
+        changed.len(),
+        everybody(),
+        "every one of them is allowed up again"
+    );
 
     let tick = sup.tick(&people, morning).unwrap();
     assert_eq!(
         tick.count(|o| matches!(o, Outcome::Started(Start::Resume))),
-        4,
+        everybody(),
         "resumed rather than started over: {:?}",
         tick.lines()
     );
@@ -684,7 +715,10 @@ fn a_night_costs_an_agent_no_attempts_and_no_backoff() {
     assert_eq!(record.attempts, 0, "a night is not a failure");
     // Started at once rather than sat in a backoff worked out from a fresh timestamp.
     let tick = sup.tick(&people, at_local_hour(8)).unwrap();
-    assert_eq!(tick.count(|o| matches!(o, Outcome::Started(_))), 4);
+    assert_eq!(
+        tick.count(|o| matches!(o, Outcome::Started(_))),
+        everybody()
+    );
 }
 
 /// The collision the design note flagged first. Somebody needs an agent at two in the morning,
@@ -824,7 +858,11 @@ fn an_agent_with_no_window_is_never_put_down() {
         !changed.iter().any(|(name, _)| name == "carl"),
         "carl has no window and was put down anyway: {changed:?}"
     );
-    assert_eq!(changed.len(), 3, "the other three do have one");
+    assert_eq!(
+        changed.len(),
+        everybody() - 1,
+        "everybody else does have one"
+    );
 }
 
 /// Sleeping is a thing that happened to an agent, and the record has to be able to tell it
@@ -842,7 +880,7 @@ fn going_to_sleep_is_recorded_as_its_own_event() {
         .iter()
         .filter(|r| r.event.kind() == "agent_slept")
         .collect();
-    assert_eq!(slept.len(), 4);
+    assert_eq!(slept.len(), everybody());
     assert!(
         !records.iter().any(|r| r.event.kind() == "agent_stopped"),
         "a night is not somebody deciding to stop an agent"

@@ -497,7 +497,7 @@ mod tests {
     /// A split task keeps a line back to what it came from, so a tree of work can be walked.
     #[test]
     fn a_split_task_remembers_its_parent() {
-        let big = Task::assign("adrian", "mason", "make JJtorio faster", verification()).unwrap();
+        let big = Task::assign("carl", "mason", "make JJtorio faster", verification()).unwrap();
         let small = Task::split_from(
             &big,
             "mason",
@@ -565,7 +565,7 @@ mod tests {
     /// Somebody else being busy says nothing about this worker.
     #[test]
     fn another_workers_task_does_not_block_you() {
-        let mut mine = Task::assign("adrian", "mason", "lead something", verification()).unwrap();
+        let mut mine = Task::assign("carl", "mason", "lead something", verification()).unwrap();
         mine.advance("mason", Status::InHand).unwrap();
 
         assert!(may_take_on("nora", std::slice::from_ref(&mine)).is_ok());

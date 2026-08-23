@@ -25,17 +25,9 @@ fn verification() -> Verification {
 #[test]
 fn work_reaches_the_worker_through_every_link() {
     let from_jj = Task::assign("jj", "carl", "make JJtorio start faster", verification()).unwrap();
-    let to_adrian = Task::split_from(
+    let to_mason = Task::split_from(
         &from_jj,
         "carl",
-        "adrian",
-        "the coding side of it",
-        verification(),
-    )
-    .unwrap();
-    let to_mason = Task::split_from(
-        &to_adrian,
-        "adrian",
         "mason",
         "the Factorio side of it",
         verification(),
@@ -55,18 +47,41 @@ fn work_reaches_the_worker_through_every_link() {
     assert_eq!(to_nora.parent.as_ref(), Some(&to_mason.id));
 
     // The line back up is walkable, which is what makes a tree of work possible later.
-    assert_eq!(to_mason.parent.as_ref(), Some(&to_adrian.id));
-    assert_eq!(to_adrian.parent.as_ref(), Some(&from_jj.id));
+    assert_eq!(to_mason.parent.as_ref(), Some(&from_jj.id));
     assert!(from_jj.parent.is_none());
+
+    // The engineering side of the same objective, which is now a sibling of Factorio rather
+    // than its parent. Two departments, one chief, and nobody standing in between for no
+    // reason anybody could state.
+    let to_adrian = Task::split_from(
+        &from_jj,
+        "carl",
+        "adrian",
+        "the coding side of it",
+        verification(),
+    )
+    .unwrap();
+    let to_evan = Task::split_from(
+        &to_adrian,
+        "adrian",
+        "evan",
+        "fix the issue Iris wrote",
+        verification(),
+    )
+    .unwrap();
+    assert_eq!(to_evan.parent.as_ref(), Some(&to_adrian.id));
 }
 
 /// Every shortcut somebody would reach for on a busy afternoon.
 #[test]
 fn no_link_in_the_chain_can_be_skipped() {
     for (from, to) in [
-        ("carl", "mason"),
         ("carl", "nora"),
+        ("carl", "evan"),
+        ("carl", "miles"),
         ("adrian", "nora"),
+        ("mason", "evan"),
+        ("adrian", "miles"),
         ("jj", "nora"),
         ("jj", "adrian"),
     ] {
@@ -110,11 +125,12 @@ fn three_rejections_and_it_goes_over_masons_head() {
     assert!(t.must_escalate());
     assert_eq!(t.attempts_left(), 0);
 
-    // Escalating is not a state change. Mason takes it to Adrian, which is a new task with the
-    // failed one as its parent, so the history of the original stays true.
+    // Escalating is not a state change. Mason takes it to Carl, who is his lead now, and it
+    // becomes a new task with the failed one as its parent, so the history of the original
+    // stays true.
     let upward = Task::split_from(
         &t,
-        "adrian",
+        "carl",
         "mason",
         "nora has been round three times on this, take it from here",
         verification(),

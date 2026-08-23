@@ -1,18 +1,35 @@
 //! Who exists, what rank they hold, and who they answer to.
 //!
-//! The first chain, exactly as JJ specified it:
+//! The organisation, as JJ settled it in Week 2 of the Protocol Z course:
 //!
 //! ```text
-//!   JJ        the human, and the only authority that is not delegated
+//!   JJ                          the human, and the only authority that is not delegated
 //!    |
-//!   Carl      chief executive, management only, never implements
+//!   Carl                        chief executive, management only, never implements
 //!    |
-//!   Adrian    coding department
+//!    +-- Adrian                 engineering
+//!    |     +-- Iris             writes the GitHub issues
+//!    |     +-- Evan             fixes them
 //!    |
-//!   Mason     Factorio sub department
+//!    +-- Mason                  Factorio
+//!    |     +-- Nora             JJtorio developer
 //!    |
-//!   Nora      JJtorio developer, owns the details inside her task
+//!    +-- Olivia                 operations
+//!    |     +-- Miles            email and communications
+//!    |
+//!    +-- Serena                 security, with no agents under her yet
+//!    |
+//!    +-- Rowan                  research, with no agents under him yet
 //! ```
+//!
+//! **Mason answers to Carl rather than to Adrian.** Factorio was a sub department of coding
+//! while coding was the only department. It is a department in its own right now, and leaving
+//! it nested would have put two leads between Carl and the person doing the work for no reason
+//! anybody could state.
+//!
+//! **Serena and Rowan lead nothing yet, and that is deliberate.** A department with no agents
+//! is a decision about where future work goes, recorded before there is any. Inventing workers
+//! to fill them would mean founding agents nobody has a job for.
 //!
 //! This is the authority on who exists. `roster.rs` is the older generic squad of unnamed
 //! roles and is kept because the campaign path uses it, but nothing new should be built on it.
@@ -135,11 +152,29 @@ static ORG: &[Agent] = &[
                 rather than writing code.",
     },
     Agent {
+        name: "iris",
+        display: "Iris",
+        rank: Rank::Worker,
+        reports_to: Some("adrian"),
+        remit: "Writes the GitHub issues. Reads the repositories and reports what is actually \
+                wrong, with the file, the mechanism and how she found it. Reports rather than \
+                repairs: she changes no code, which is what keeps her judgement worth having.",
+    },
+    Agent {
+        name: "evan",
+        display: "Evan",
+        rank: Rank::Worker,
+        reports_to: Some("adrian"),
+        remit: "Fixes the issues Iris writes, in the order Adrian gives them. Proves each fix \
+                with a test that fails without it. Deletes and edits nothing without asking \
+                JJ first.",
+    },
+    Agent {
         name: "mason",
         display: "Mason",
         rank: Rank::Lead,
-        reports_to: Some("adrian"),
-        remit: "Head of the Factorio sub department. Breaks Adrian's objective into tasks and \
+        reports_to: Some("carl"),
+        remit: "Head of the Factorio department. Breaks Carl's objective into tasks and \
                 assigns his developers one at a time. Reviews what comes back and decides \
                 whether it is done.",
     },
@@ -150,6 +185,40 @@ static ORG: &[Agent] = &[
         reports_to: Some("mason"),
         remit: "JJtorio developer. Owns every implementation detail inside the task she was \
                 given, and owns nothing outside it.",
+    },
+    Agent {
+        name: "olivia",
+        display: "Olivia",
+        rank: Rank::Lead,
+        reports_to: Some("carl"),
+        remit: "Head of operations. Owns what reaches JJ from outside: mail, messages and \
+                anything else that arrives without being asked for. Manages and reviews rather \
+                than writing the replies.",
+    },
+    Agent {
+        name: "miles",
+        display: "Miles",
+        rank: Rank::Worker,
+        reports_to: Some("olivia"),
+        remit: "Email and communications. Reads the inbox, says which messages matter and \
+                why, and drafts replies. Sends nothing and deletes nothing until JJ has said \
+                so.",
+    },
+    Agent {
+        name: "serena",
+        display: "Serena",
+        rank: Rank::Lead,
+        reports_to: Some("carl"),
+        remit: "Head of security. Leads nobody yet, and holds the department so that security \
+                work has somewhere to go rather than being spread across whoever noticed it.",
+    },
+    Agent {
+        name: "rowan",
+        display: "Rowan",
+        rank: Rank::Lead,
+        reports_to: Some("carl"),
+        remit: "Head of research. Leads nobody yet, and holds the department for the same \
+                reason Serena holds hers.",
     },
 ];
 
@@ -251,9 +320,32 @@ mod tests {
 
     /// The chain JJ specified, end to end.
     #[test]
-    fn the_first_chain_is_exactly_what_was_asked_for() {
+    fn every_chain_reaches_jj_through_its_own_lead() {
         let chain: Vec<&str> = chain_to_root("nora").iter().map(|a| a.name).collect();
-        assert_eq!(chain, vec!["nora", "mason", "adrian", "carl", "jj"]);
+        assert_eq!(chain, vec!["nora", "mason", "carl", "jj"]);
+
+        // Factorio used to hang under coding, which put two leads between Carl and the person
+        // doing the work. It is its own department now.
+        let chain: Vec<&str> = chain_to_root("evan").iter().map(|a| a.name).collect();
+        assert_eq!(chain, vec!["evan", "adrian", "carl", "jj"]);
+
+        let chain: Vec<&str> = chain_to_root("miles").iter().map(|a| a.name).collect();
+        assert_eq!(chain, vec!["miles", "olivia", "carl", "jj"]);
+    }
+
+    /// Every agent has to reach JJ, or somebody answers to nobody without being JJ.
+    #[test]
+    fn nobody_is_stranded_off_the_chain() {
+        for a in everyone() {
+            let chain = chain_to_root(a.name);
+            assert_eq!(
+                chain.last().map(|top| top.name),
+                Some("jj"),
+                "{} does not reach JJ: {:?}",
+                a.name,
+                chain.iter().map(|c| c.name).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
@@ -270,14 +362,23 @@ mod tests {
 
     /// The shortcut that looks harmless once and removes the point of having Adrian.
     #[test]
-    fn carl_cannot_reach_past_adrian() {
+    fn carl_cannot_reach_past_a_lead() {
         assert!(may_delegate("carl", "adrian"));
-        assert!(!may_delegate("carl", "mason"));
+        assert!(may_delegate("carl", "mason"), "mason is his own lead now");
+        assert!(may_delegate("carl", "olivia"));
         assert!(!may_delegate("carl", "nora"));
+        assert!(!may_delegate("carl", "evan"));
+        assert!(!may_delegate("carl", "miles"));
 
         let err = check_delegation("carl", "nora").unwrap_err().to_string();
         assert!(err.contains("cannot hand work straight to"), "{err}");
         assert!(err.contains("mason"), "and says who to ask instead: {err}");
+
+        let err = check_delegation("adrian", "miles").unwrap_err().to_string();
+        assert!(
+            err.contains("olivia"),
+            "one lead cannot take another's worker: {err}"
+        );
     }
 
     #[test]
@@ -332,9 +433,21 @@ mod tests {
                 .iter()
                 .map(|a| a.name)
                 .collect::<Vec<_>>(),
-            vec!["mason"]
+            vec!["iris", "evan"]
         );
-        assert!(reports_of("nora").is_empty(), "nora leads nobody yet");
+        assert_eq!(
+            reports_of("olivia")
+                .iter()
+                .map(|a| a.name)
+                .collect::<Vec<_>>(),
+            vec!["miles"]
+        );
+        assert!(reports_of("nora").is_empty(), "nora leads nobody");
+
+        // Held so that the work has somewhere to go, before there is any. A lead with nobody
+        // under them is a decision that has been recorded, not an oversight.
+        assert!(reports_of("serena").is_empty());
+        assert!(reports_of("rowan").is_empty());
     }
 
     /// Nothing anywhere may express administrator rights. Something that cannot be
