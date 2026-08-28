@@ -33,10 +33,16 @@ mod workspace;
 #[cfg(test)]
 mod tests;
 
-/// The four principal tabs. The editor and the terminal are not among them on purpose: they
+/// The five principal tabs. The editor and the terminal are not among them on purpose: they
 /// are tools opened from something, not places to go.
+///
+/// Overview was added in the redesign and is where the panel opens. The four that follow each
+/// answer one question in depth, and none of them could answer the question somebody actually
+/// has when they walk up to a screen, which is whether anything is wrong. Overview does only
+/// that, and every line on it is a way into one of the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
+    Overview,
     Carl,
     Agents,
     Diagnostics,
@@ -44,10 +50,17 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Carl, Tab::Agents, Tab::Diagnostics, Tab::Projects];
+    pub const ALL: [Tab; 5] = [
+        Tab::Overview,
+        Tab::Carl,
+        Tab::Agents,
+        Tab::Diagnostics,
+        Tab::Projects,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Tab::Overview => "OVERVIEW",
             Tab::Carl => "CARL",
             Tab::Agents => "AGENTS",
             Tab::Diagnostics => "DIAGNOSTICS",
@@ -58,6 +71,7 @@ impl Tab {
     /// One line under the name, so the sidebar says what each is for.
     pub fn caption(self) -> &'static str {
         match self {
+            Tab::Overview => "the whole army at once",
             Tab::Carl => "command",
             Tab::Agents => "who is doing what",
             Tab::Diagnostics => "health",
@@ -116,6 +130,12 @@ pub struct App {
     pub lit: Vec<(String, Instant)>,
     /// Set when a reconnect has just replaced the world, so the panel can say so.
     pub resynced_at: Option<Instant>,
+    /// Questions answered in the last few seconds, so the band can confirm the click.
+    ///
+    /// Without this a press only ever removed a row, and the army asks often enough that
+    /// another question usually took its place in the same second. Working and broken looked
+    /// exactly the same, which is why the button was reported dead when it was not.
+    pub just_settled: Vec<(String, bool, Instant)>,
     /// The journal sequence the screen is caught up to.
     ///
     /// Moved by an army event and by a resync, never by telemetry, which has no sequence.
@@ -149,7 +169,7 @@ impl App {
             service: carl::providers::workspace::service::Workspace::new(),
             snapshot,
             link,
-            tab: Tab::Carl,
+            tab: Tab::Overview,
             agent: None,
             project: None,
             workspace: None,
@@ -161,6 +181,7 @@ impl App {
             notice: None,
             lit: Vec::new(),
             resynced_at: None,
+            just_settled: Vec::new(),
             last_seq: 0,
             sampled_at: None,
         }
@@ -184,6 +205,9 @@ impl App {
         self.pump_workspace();
         self.sweep_workspace();
         self.lit.retain(|(_, at)| at.elapsed() < LIT_FOR);
+        // Long enough to read, short enough that it is gone before the next question.
+        self.just_settled
+            .retain(|(_, _, at)| at.elapsed() < std::time::Duration::from_secs(5));
     }
 
     /// Sends something, and records what came back. Applies nothing itself.
@@ -241,6 +265,43 @@ impl App {
             id: id.to_string(),
             answer: answer.trim().to_string(),
         });
+    }
+
+    /// Allows or refuses one tool call Carl is holding still.
+    ///
+    /// Taken off the screen when the backend confirms rather than on the click. A question that
+    /// vanished optimistically and then failed to send would leave JJ believing he had answered
+    /// something that is still sitting there.
+    pub fn answer_permission(&mut self, question: &str, allow: bool) {
+        // Off the screen on the press, not when the backend gets round to confirming.
+        //
+        // It used to wait for the confirmation, so that a row could never claim to be answered
+        // before anybody had answered it. That was the right worry and the wrong trade: the army
+        // asks often enough that another question takes the place of the one you just answered,
+        // so a press looked like it had done nothing at all. The honest version of the same care
+        // is to remove it now and say plainly if the answer turns out not to have landed, which
+        // the notice does.
+        let tool = self
+            .snapshot
+            .permissions
+            .iter()
+            .find(|p| p.id == question)
+            .map(|p| p.tool.clone());
+        self.snapshot.permissions.retain(|p| p.id != question);
+        if let Some(tool) = tool {
+            self.just_settled
+                .push((tool, allow, std::time::Instant::now()));
+        }
+
+        self.submit(Command::AnswerPermission {
+            question: question.to_string(),
+            allow,
+        });
+    }
+
+    /// What is waiting on JJ right now, oldest first.
+    pub fn permissions(&self) -> &[crate::model::Permission] {
+        &self.snapshot.permissions
     }
 
     pub fn select_tab(&mut self, tab: Tab) {

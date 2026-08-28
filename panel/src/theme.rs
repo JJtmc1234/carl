@@ -1,32 +1,40 @@
 //! The visual language, in one place, so there is only ever one of it.
 //!
-//! The brief is science fiction and disciplined, which pull against each other, and the way
-//! they are reconciled here is that the decoration budget is spent on very few things.
+//! The brief is a command centre for a live organisation, which is a different thing from a
+//! monitoring tool. A monitor is read by somebody who already knows what they are looking for.
+//! A command centre has to tell somebody who has just walked up to it what the state of the
+//! world is, and it has to do that at a glance, from across a desk.
 //!
 //! **One accent, used sparingly.** A cold amber against a near black. Accent means live, or
 //! selected, or needs you. If everything glowed, glowing would mean nothing, so most of the
 //! interface is grey on black and the eye goes to the few things that are not.
 //!
-//! **Colour carries state and nothing else.** Never decoration, never a category. Health and
-//! agent status are the only things that get a hue, so a coloured thing on this screen is
-//! always something you might have to act on.
+//! **Colour carries state and nothing else.** Never decoration, never a category. And colour
+//! is never the only carrier: every state also has a word and a mark, so the screen still
+//! works for somebody who cannot tell amber from green.
 //!
-//! **Depth by value, not by shadow.** Four background steps do the layering. No gradients, no
-//! glass, no bevels.
+//! **Depth by value and by edge.** Four background steps do the layering, and cards sit on
+//! them with a real one pixel border. The earlier rule of no boxes and no connector lines is
+//! cancelled: at this size an unbordered list of rows reads as terminal output, which is the
+//! defect this redesign exists to fix. No gradients, no glass, no bevels.
 //!
-//! **Type does the hierarchy.** A tight scale, monospace throughout because almost everything
-//! here is an identifier, a figure or a state, and letter spacing on the small labels rather
-//! than making them smaller. Nothing is below 11px.
+//! **Type does the hierarchy, and it is not small.** The old scale topped out at 20px, which
+//! on a 3840x2400 panel is why the thing read as a debug tool. Six roles now, from 13 to 34,
+//! and the family is chosen by what the text is rather than by habit: a name, an identifier,
+//! a figure or a state word is monospace because it is data and wants to line up. A sentence
+//! is proportional because it is prose and wants to be read.
 
-use eframe::egui::{Color32, FontFamily, FontId, RichText, Rounding, Stroke, TextStyle};
+use eframe::egui::{
+    Color32, FontFamily, FontId, Painter, Rect, RichText, Rounding, Stroke, TextStyle,
+};
 
-/// The background ramp, darkest first. Depth comes from these rather than from shadows.
+/// The background ramp, darkest first. Depth comes from these and from the card edges.
 pub const VOID: Color32 = Color32::from_rgb(6, 8, 11);
 pub const PANEL: Color32 = Color32::from_rgb(11, 14, 19);
 pub const RAISED: Color32 = Color32::from_rgb(17, 21, 28);
 pub const HOVER: Color32 = Color32::from_rgb(24, 30, 39);
 
-/// Hairlines. The interface is built from rules rather than boxes with edges.
+/// Hairlines and card edges.
 pub const RULE: Color32 = Color32::from_rgb(30, 37, 48);
 pub const RULE_BRIGHT: Color32 = Color32::from_rgb(48, 58, 74);
 
@@ -50,7 +58,14 @@ pub const UNKNOWN: Color32 = Color32::from_rgb(96, 106, 122);
 /// JJ acting directly. Used nowhere except intervention, so it never reads as ordinary.
 pub const INTERVENE: Color32 = Color32::from_rgb(214, 96, 168);
 
-pub const CORNER: Rounding = Rounding::same(3.0_f32);
+pub const CORNER: Rounding = Rounding::same(4.0_f32);
+/// Cards are rounded a touch more than controls, so a surface reads as a surface.
+pub const CARD_CORNER: Rounding = Rounding::same(6.0_f32);
+
+/// The gap between cards, and the padding inside one. Two numbers, used everywhere, so
+/// density is a decision made once rather than at three hundred call sites.
+pub const GAP: f32 = 12.0;
+pub const PAD: f32 = 14.0;
 
 pub fn hairline() -> Stroke {
     Stroke::new(1.0_f32, RULE)
@@ -60,23 +75,53 @@ pub fn edge(color: Color32) -> Stroke {
     Stroke::new(1.0_f32, color)
 }
 
-/// Text roles. Named for what they are for, so a size is never picked at a call site.
-pub fn heading() -> FontId {
-    FontId::new(15.0, FontFamily::Monospace)
+/// Which family a role belongs to.
+///
+/// Both were built and looked at before this was settled. Proportional at 15px for running
+/// prose fits about a third more words on a line and reads faster, which matters in the
+/// conversation and in the long one line descriptions. Monospace won everywhere a column has
+/// to line up, which is most of the rest of the panel.
+fn prose_family() -> FontFamily {
+    FontFamily::Proportional
 }
 
-pub fn body() -> FontId {
-    FontId::new(13.0, FontFamily::Monospace)
+fn data_family() -> FontFamily {
+    FontFamily::Monospace
 }
 
-/// Small caps style labels. 11px is the floor and letter spacing does the work instead of
-/// going smaller.
+/// Small caps labels, keys and state words. The floor, and it is 13 rather than 11.
 pub fn label() -> FontId {
-    FontId::new(11.0, FontFamily::Monospace)
+    FontId::new(13.0, data_family())
 }
 
-pub fn big() -> FontId {
-    FontId::new(20.0, FontFamily::Monospace)
+/// Names, identifiers, figures, anything that belongs in a column.
+pub fn body() -> FontId {
+    FontId::new(15.0, data_family())
+}
+
+/// Sentences. The same size as `body`, a different family, because it is not data.
+pub fn prose() -> FontId {
+    FontId::new(15.0, prose_family())
+}
+
+/// A card heading, or an agent's name where it is the subject of the card.
+pub fn heading() -> FontId {
+    FontId::new(19.0, data_family())
+}
+
+/// The name of the screen you are on, and the name of the thing in the inspector.
+pub fn title() -> FontId {
+    FontId::new(24.0, prose_family())
+}
+
+/// The one figure per screen that is allowed to be large.
+pub fn display() -> FontId {
+    FontId::new(34.0, data_family())
+}
+
+/// Every role, for the checks that must hold across all of them.
+pub fn every_role() -> [FontId; 6] {
+    [label(), body(), prose(), heading(), title(), display()]
 }
 
 /// How far apart the letters of a small label sit, in pixels.
@@ -94,6 +139,31 @@ const LETTER_SPACING: f32 = 1.5;
 /// with gaps in it, and a screen reader was given "C A R L" to say.
 pub fn spaced(text: &str) -> RichText {
     RichText::new(text).extra_letter_spacing(LETTER_SPACING)
+}
+
+/// A card surface: raised fill, a real edge, generous padding.
+pub fn card_frame() -> eframe::egui::Frame {
+    eframe::egui::Frame::none()
+        .fill(RAISED)
+        .stroke(hairline())
+        .rounding(CARD_CORNER)
+        .inner_margin(eframe::egui::Margin::same(PAD))
+}
+
+/// A halo around something that wants somebody, drawn as three fading strokes.
+///
+/// Restrained on purpose. This is the only glow in the interface and it exists so a blocked
+/// agent or a failed component is findable from across the room. Three strokes, each a third
+/// of the last, is a hint of light rather than a neon outline.
+pub fn glow(painter: &Painter, rect: Rect, color: Color32, rounding: Rounding) {
+    for (i, step) in [1.5_f32, 3.5, 6.0].iter().enumerate() {
+        let alpha = 70_u8 >> (i as u8 + 1);
+        painter.rect_stroke(
+            rect.expand(*step),
+            rounding,
+            Stroke::new(1.0_f32, color.linear_multiply(alpha as f32 / 255.0)),
+        );
+    }
 }
 
 /// Applies the whole language to a context, once, at startup.
@@ -121,6 +191,7 @@ pub fn install(ctx: &eframe::egui::Context) {
     visuals.widgets.inactive.bg_fill = RAISED;
     visuals.widgets.inactive.weak_bg_fill = RAISED;
     visuals.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
+    visuals.widgets.inactive.bg_stroke = hairline();
     visuals.widgets.inactive.rounding = CORNER;
     visuals.widgets.hovered.bg_fill = HOVER;
     visuals.widgets.hovered.weak_bg_fill = HOVER;
@@ -131,7 +202,7 @@ pub fn install(ctx: &eframe::egui::Context) {
     visuals.widgets.active.bg_stroke = edge(ACCENT);
     visuals.widgets.active.rounding = CORNER;
     visuals.window_stroke = hairline();
-    // No drop shadows anywhere. Depth is the background ramp.
+    // No drop shadows anywhere. Depth is the background ramp and the card edges.
     visuals.popup_shadow = eframe::egui::epaint::Shadow::NONE;
     visuals.window_shadow = eframe::egui::epaint::Shadow::NONE;
     ctx.set_visuals(visuals);
@@ -145,176 +216,12 @@ pub fn install(ctx: &eframe::egui::Context) {
         (TextStyle::Small, label()),
     ]
     .into();
-    style.spacing.item_spacing = eframe::egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = eframe::egui::vec2(9.0, 5.0);
-    style.spacing.menu_margin = eframe::egui::Margin::same(6.0);
+    style.spacing.item_spacing = eframe::egui::vec2(10.0, 7.0);
+    style.spacing.button_padding = eframe::egui::vec2(12.0, 7.0);
+    style.spacing.menu_margin = eframe::egui::Margin::same(8.0);
+    style.spacing.scroll.bar_width = 10.0;
     ctx.set_style(style);
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Nothing below 11px, whatever the density pressure. A panel somebody squints at is one
-    /// they stop using.
-    #[test]
-    fn no_text_role_is_too_small_to_read() {
-        for f in [heading(), body(), label(), big()] {
-            assert!(f.size >= 11.0, "{f:?} is too small");
-        }
-    }
-
-    /// Unknown must not look like a state worth acting on, so it carries no hue.
-    #[test]
-    fn unknown_is_colourless() {
-        let (r, g, b, _) = UNKNOWN.to_tuple();
-        let spread = r.max(g).max(b) - r.min(g).min(b);
-        assert!(spread < 32, "unknown should be near grey, got {r},{g},{b}");
-    }
-
-    /// The accent has to stand off the background hard enough to mean something, since it is
-    /// the only thing on screen that says look here.
-    #[test]
-    fn the_accent_stands_off_the_background() {
-        let lum = |c: Color32| {
-            let (r, g, b, _) = c.to_tuple();
-            0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
-        };
-        assert!(
-            lum(ACCENT) - lum(VOID) > 100.0,
-            "the accent is not separated from the background"
-        );
-        assert!(lum(TEXT) - lum(VOID) > 100.0, "body text is not readable");
-        assert!(
-            lum(DIM) - lum(VOID) > 40.0,
-            "secondary text has faded into the background"
-        );
-    }
-
-    /// The bug JJ saw. The desktop is in light mode, egui follows the desktop by default, and
-    /// every label that does not name its own colour came out black on near black.
-    ///
-    /// Checked against a real context rather than against the constants, because the constants
-    /// were always right. What was wrong was that something put a light theme back over them.
-    #[test]
-    fn the_installed_theme_is_dark_whatever_the_desktop_prefers() {
-        let ctx = eframe::egui::Context::default();
-        ctx.options_mut(|o| o.theme_preference = eframe::egui::ThemePreference::Light);
-
-        install(&ctx);
-
-        // The preference is the thing that was actually missing. egui reapplies it on every
-        // frame, so setting visuals once and leaving the preference on Light meant the desktop
-        // won a fraction of a second later. Asserting only on visuals would have passed against
-        // the broken build.
-        assert_eq!(
-            ctx.options(|o| o.theme_preference),
-            eframe::egui::ThemePreference::Dark,
-            "the panel must stop following the desktop, not just paint over it once"
-        );
-
-        let visuals = ctx.style().visuals.clone();
-        assert!(
-            visuals.dark_mode,
-            "the panel must not follow a light desktop"
-        );
-        assert_eq!(visuals.override_text_color, Some(TEXT));
-        assert_eq!(visuals.panel_fill, VOID);
-
-        // The thing that actually went wrong: text no lighter than its background.
-        let lum = |c: Color32| {
-            let (r, g, b, _) = c.to_tuple();
-            0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32
-        };
-        let text = visuals.override_text_color.expect("text colour");
-        assert!(
-            lum(text) - lum(visuals.panel_fill) > 100.0,
-            "text is not readable against the panel"
-        );
-        assert!(
-            lum(visuals.widgets.inactive.fg_stroke.color) > 120.0,
-            "unstyled widget text came out dark"
-        );
-    }
-
-    /// Installing twice must be the same as installing once, since it now runs every frame.
-    #[test]
-    fn installing_repeatedly_settles() {
-        let ctx = eframe::egui::Context::default();
-        install(&ctx);
-        let once = ctx.style().visuals.clone();
-        install(&ctx);
-        install(&ctx);
-        assert_eq!(
-            ctx.style().visuals.override_text_color,
-            once.override_text_color
-        );
-        assert_eq!(ctx.style().visuals.panel_fill, once.panel_fill);
-    }
-
-    /// The bug that cost three wrong diagnoses.
-    ///
-    /// `eframe` is declared with `default-features = false`, and `default_fonts` is one of the
-    /// defaults. Without it egui has no fonts at all: every shape still draws, so the panel
-    /// came up with correct colours, borders, status pips and hairlines and not one glyph. It
-    /// looked exactly like black text on a black background and was nothing of the sort.
-    ///
-    /// The earlier check inspected the colour each text shape asked for, which was always
-    /// right, and so never noticed there were no glyphs to paint in it. This measures the
-    /// glyphs instead.
-    #[test]
-    fn there_are_fonts_and_they_produce_actual_glyphs() {
-        let ctx = eframe::egui::Context::default();
-        install(&ctx);
-        // A frame, so the font atlas is built.
-        let _ = ctx.run(Default::default(), |_| {});
-
-        for font in [heading(), body(), label(), big()] {
-            let galley = ctx.fonts(|f| f.layout_no_wrap("CARL".to_string(), font.clone(), TEXT));
-            assert!(
-                galley.size().x > 1.0,
-                "{font:?} laid out no width, which means no font is loaded"
-            );
-            assert!(galley.size().y > 1.0, "{font:?} laid out no height");
-            let glyphs: usize = galley.rows.iter().map(|r| r.glyphs.len()).sum();
-            assert_eq!(
-                glyphs, 4,
-                "{font:?} produced {glyphs} glyphs for four letters"
-            );
-        }
-    }
-
-    /// Both families have to work, because the interface asks for monospace everywhere and a
-    /// missing monospace atlas would be invisible in a proportional check.
-    #[test]
-    fn both_font_families_are_present() {
-        use eframe::egui::{FontFamily, FontId};
-
-        let ctx = eframe::egui::Context::default();
-        install(&ctx);
-        let _ = ctx.run(Default::default(), |_| {});
-
-        for family in [FontFamily::Monospace, FontFamily::Proportional] {
-            let galley = ctx.fonts(|f| {
-                f.layout_no_wrap(
-                    "AGENTS".to_string(),
-                    FontId::new(13.0, family.clone()),
-                    TEXT,
-                )
-            });
-            assert!(
-                galley.size().x > 1.0,
-                "{family:?} is not loaded, so anything drawn in it is invisible"
-            );
-        }
-    }
-
-    /// Spacing a label rather than shrinking it is how the small type stays legible.
-    #[test]
-    fn a_label_is_spread_not_shrunk() {
-        // The label keeps its own text now. The spacing is a style on top of it, so anything
-        // that reads the label back gets the word rather than the word with gaps in it.
-        assert_eq!(spaced("CARL").text(), "CARL");
-        assert_eq!(spaced("").text(), "");
-    }
-}
+mod tests;

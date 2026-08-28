@@ -65,6 +65,17 @@ pub enum Event {
         /// Where the work may happen, when a lead said. Defaults, so an older line still reads.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace: Option<String>,
+        /// The sequence of the objective this answers, when it answers one.
+        ///
+        /// Points at the record rather than repeating its words, the same way `Notified` does,
+        /// so a delegation can never come to disagree with the objective it was raised for.
+        ///
+        /// `None` for work that came from somewhere other than an objective, which is most of
+        /// it: a lead splitting a task is not answering JJ. Without this there is no way to
+        /// tell an objective that has been taken up from one nobody has looked at, and the
+        /// panel would keep showing both as outstanding forever.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        objective: Option<u64>,
     },
     /// A task moved from one state to another.
     Moved {

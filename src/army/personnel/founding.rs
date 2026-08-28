@@ -22,7 +22,7 @@ use crate::army::Rank;
 ///
 /// By rank rather than by name, so a second lead added to `org.rs` gets the ordinary arrangement
 /// without anybody remembering to come back here.
-pub(super) fn founding_config(rank: Rank) -> Config {
+pub fn founding_config(rank: Rank) -> Config {
     Config {
         hours: match rank {
             Rank::Chief => None,
@@ -36,7 +36,7 @@ pub(super) fn founding_config(rank: Rank) -> Config {
 ///
 /// Only the part `org` does not already hold. Everything else about these four is in the
 /// table and is not repeated.
-pub(super) fn founding_profile(name: &str) -> Profile {
+pub fn founding_profile(name: &str) -> Profile {
     match name {
         "carl" => Profile::new(
             None,
@@ -48,7 +48,7 @@ pub(super) fn founding_profile(name: &str) -> Profile {
             ],
         ),
         "adrian" => Profile::new(
-            Some("coding"),
+            Some("engineering"),
             None,
             &[
                 "Writes code.",
@@ -56,9 +56,30 @@ pub(super) fn founding_profile(name: &str) -> Profile {
                 "Passes a disagreement upward that he could settle himself.",
             ],
         ),
+        "iris" => Profile::new(
+            Some("engineering"),
+            None,
+            &[
+                "Changes any code. She reports what is wrong and never repairs it.",
+                "Writes an issue for a file she has not read.",
+                "Raises something already covered by an open issue.",
+                "States a bug she cannot name the mechanism of, rather than saying she is \
+                 unsure.",
+            ],
+        ),
+        "evan" => Profile::new(
+            Some("engineering"),
+            None,
+            &[
+                "Deletes or edits anything without asking JJ first.",
+                "Calls a fix done without a test that fails without it.",
+                "Fixes something in a different order from the one Adrian gave.",
+                "Closes an issue he has not actually fixed.",
+            ],
+        ),
         "mason" => Profile::new(
-            Some("coding"),
             Some("factorio"),
+            None,
             &[
                 "Writes the implementation.",
                 "Gives his worker two tasks at once.",
@@ -66,12 +87,48 @@ pub(super) fn founding_profile(name: &str) -> Profile {
             ],
         ),
         "nora" => Profile::new(
-            Some("coding"),
             Some("factorio"),
+            None,
             &[
                 "Gives herself or anybody else the next task.",
                 "Reports to anybody except Mason.",
                 "Calls something blocked before she has read the code and tried to debug it.",
+            ],
+        ),
+        "olivia" => Profile::new(
+            Some("operations"),
+            None,
+            &[
+                "Writes the replies herself instead of reviewing them.",
+                "Lets anything be sent or deleted on her own authority.",
+                "Decides what matters to JJ without asking him.",
+            ],
+        ),
+        "miles" => Profile::new(
+            Some("operations"),
+            None,
+            &[
+                "Sends, deletes or archives anything before JJ has said so.",
+                "Writes a draft full of dashes and semicolons. JJ is graded on that.",
+                "Reports a message as important without saying why.",
+                "Reads anything outside the inbox he was given.",
+            ],
+        ),
+        "serena" => Profile::new(
+            Some("security"),
+            None,
+            &[
+                "Grants anybody a privilege. There is nowhere to write one down and there is \
+                 not meant to be.",
+                "Acts on a finding rather than reporting it.",
+            ],
+        ),
+        "rowan" => Profile::new(
+            Some("research"),
+            None,
+            &[
+                "Reports what he read as what he concluded.",
+                "Answers from memory where he could have gone and checked.",
             ],
         ),
         _ => Profile::default(),

@@ -114,6 +114,7 @@ fn a_real_delegation(journal: &mut Journal) -> TaskId {
                 must: t.verification.must.clone(),
                 project: None,
                 workspace: None,
+                objective: None,
             },
         )
         .unwrap();
@@ -262,7 +263,7 @@ fn the_live_panel_reconnects_after_the_backend_restarts_and_resumes_exactly() {
         match live.next_update() {
             Update::Event(e) => got.push((e.seq, e.kind.clone())),
             Update::Health(h) => healths.push(h),
-            Update::Telemetry { .. } => continue,
+            Update::Telemetry { .. } | Update::Asked(_) | Update::Answered { .. } => continue,
             Update::Resynced(_) => panic!("it could have resumed, so it should not have resynced"),
         }
     }
@@ -307,7 +308,10 @@ fn a_gap_becomes_a_fresh_snapshot_rather_than_a_guess() {
     let fresh = loop {
         match live.next_update() {
             Update::Resynced(s) => break s,
-            Update::Health(_) | Update::Telemetry { .. } => continue,
+            Update::Health(_)
+            | Update::Telemetry { .. }
+            | Update::Asked(_)
+            | Update::Answered { .. } => continue,
             Update::Event(e) => panic!("nothing should have been resumable: {}", e.seq),
         }
     };
@@ -492,4 +496,72 @@ fn a_clean_stop_and_a_restart_both_work() {
     }
     let mut client = PanelClient::connect(&backend.socket()).unwrap();
     client.ping().unwrap();
+}
+
+/// A permission request has to reach `LivePanel`, which is what the panel window reads.
+///
+/// JJ pressed Allow and nothing happened. The band, the app method, the wire command and the
+/// backend were each checked and each was fine, so this walks the one hop nothing had covered:
+/// a real backend, a real `LivePanel`, and a question asked by a real hook connection. If it
+/// never arrives here the band was never drawn and the button had nothing to answer.
+#[test]
+fn a_permission_request_reaches_the_live_panel_and_can_be_answered() {
+    use carl::panel::permission::{Request, Verdict};
+
+    let dir = tempfile::tempdir().unwrap();
+    let _people = army(dir.path());
+    let backend = Backend::start(dir.path());
+
+    let (mut live, _snapshot) = LivePanel::open(&backend.socket()).unwrap();
+
+    // A hook asks and parks, exactly as `carl permit-hook` does.
+    let at = backend.socket();
+    let asking = std::thread::spawn(move || {
+        carl::panel::PanelClient::connect(&at)
+            .unwrap()
+            .may_i(Request {
+                id: "q-live".into(),
+                tool: "Bash".into(),
+                detail: "cargo test".into(),
+                surface: "evan".into(),
+                at: 1,
+            })
+            .unwrap()
+    });
+
+    // The panel must be offered it.
+    let mut offered = None;
+    for _ in 0..40 {
+        match live.next_update() {
+            carl::panel::Update::Asked(request) => {
+                offered = Some(request);
+                break;
+            }
+            _ => continue,
+        }
+    }
+    let offered = offered.expect("the live panel was never offered the question");
+    assert_eq!(offered.id, "q-live");
+    assert_eq!(offered.tool, "Bash");
+
+    // And answering it, the way the Allow button does, has to reach the waiting hook.
+    live.answer(&offered.id, Verdict::Allow).unwrap();
+    assert_eq!(
+        asking.join().unwrap(),
+        Verdict::Allow,
+        "Allow was pressed and the tool call was not let through"
+    );
+
+    // The panel is also told it is over, so the row leaves the band.
+    let mut settled = false;
+    for _ in 0..40 {
+        if let carl::panel::Update::Answered { question, verdict } = live.next_update()
+            && question == "q-live"
+        {
+            assert_eq!(verdict, Verdict::Allow);
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "the band was never told the question was answered");
 }

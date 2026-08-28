@@ -58,7 +58,6 @@ pub struct Chain {
 #[derive(Debug, Clone)]
 pub struct Passage {
     pub request: String,
-    pub for_adrian: String,
     pub for_mason: String,
     pub for_nora: String,
     /// The three tasks, in their final state.
@@ -134,7 +133,14 @@ impl Chain {
             let session = SessionId::fresh()?;
             // The tool list is the rank. An empty one becomes no flag at all rather than an
             // empty flag, which some parsers read as allowing everything.
-            let runner = Runner::at(&self.program).allowing(tools_for(agent.rank));
+            let mut runner = Runner::at(&self.program).allowing(tools_for(agent.rank));
+            // An agent reaching past its rank asks JJ rather than being refused on the spot.
+            // Under its own name, because "Bash" with no idea who wanted it is a question
+            // nobody can answer. Only when there are folders: a chain running against a bare
+            // temporary directory has no panel behind it and nothing could answer.
+            if let Some(people) = &self.people {
+                runner = runner.asking_jj(people.home(), who);
+            }
             // Built before the session opens, so a folder rule that tries to grant authority
             // stops the agent starting rather than being spoken and then regretted.
             let brief = staffing::brief(agent, self.folder(who))?;
@@ -254,6 +260,7 @@ impl Chain {
                 parent: task.parent.clone(),
                 must: task.verification.must.clone(),
                 project: task.project.clone(),
+                objective: task.objective,
             },
         )?;
         self.now_holding(to, &task.id)?;

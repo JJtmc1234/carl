@@ -15,10 +15,17 @@ fn app() -> App {
     App::new(Box::new(MockPanelDataSource::new()))
 }
 
+/// Changed in the redesign. The panel used to open on the conversation, which answered the
+/// question "what did I last say to Carl" before it answered "is anything wrong". Overview
+/// answers the second one and every line on it is a way into the first.
 #[test]
-fn the_panel_opens_on_carl_with_a_real_snapshot() {
+fn the_panel_opens_on_the_overview_with_a_real_snapshot() {
     let a = app();
-    assert_eq!(a.tab, Tab::Carl, "the conversation is the front page");
+    assert_eq!(
+        a.tab,
+        Tab::Overview,
+        "the state of the army is the front page"
+    );
     assert!(!a.snapshot.agents.is_empty());
     assert!(!a.snapshot.conversation.is_empty());
     assert!(a.link.is_live());
@@ -40,7 +47,7 @@ fn every_tab_can_be_selected() {
         a.select_tab(tab);
         assert_eq!(a.tab, tab);
     }
-    assert_eq!(Tab::ALL.len(), 4, "exactly four principal tabs");
+    assert_eq!(Tab::ALL.len(), 5, "exactly five principal tabs");
 }
 
 /// The editor and the terminal are tools, not destinations. If either ever becomes a tab this
@@ -48,7 +55,10 @@ fn every_tab_can_be_selected() {
 #[test]
 fn the_editor_and_terminal_are_not_tabs() {
     let labels: Vec<&str> = Tab::ALL.iter().map(|t| t.label()).collect();
-    assert_eq!(labels, vec!["CARL", "AGENTS", "DIAGNOSTICS", "PROJECTS"]);
+    assert_eq!(
+        labels,
+        vec!["OVERVIEW", "CARL", "AGENTS", "DIAGNOSTICS", "PROJECTS"]
+    );
 }
 
 /// Toggling away and back is not a restart. A panel that forgets where you were is one you
@@ -988,4 +998,231 @@ fn sweeping_never_takes_away_the_pane_that_is_open() {
     a.close_workspace();
     a.sweep_workspace();
     assert_eq!(a.held(), (0, 0));
+}
+
+fn a_permission(id: &str, tool: &str) -> crate::model::Permission {
+    crate::model::Permission {
+        id: id.into(),
+        tool: tool.into(),
+        detail: "cargo test --lib".into(),
+        surface: "jj".into(),
+        asked_at: 10,
+    }
+}
+
+/// A tool call has to appear while it is held and go when it is decided.
+#[test]
+fn a_permission_request_appears_and_clears() {
+    let mut a = app();
+    assert!(a.permissions().is_empty());
+
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q1", "Bash",
+    ))));
+    assert_eq!(a.permissions().len(), 1);
+    assert_eq!(a.permissions()[0].tool, "Bash");
+
+    // A fresh subscriber is sent the backlog, so the same question can arrive twice.
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q1", "Bash",
+    ))));
+    assert_eq!(a.permissions().len(), 1, "not duplicated");
+
+    a.apply(PanelEvent::PermissionSettled {
+        id: "q1".into(),
+        allowed: true,
+    });
+    assert!(a.permissions().is_empty());
+}
+
+/// Nobody answered, the process gave up, and the button is now attached to nothing.
+#[test]
+fn a_question_that_timed_out_leaves_the_screen_too() {
+    let mut a = app();
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q2", "Write",
+    ))));
+    a.apply(PanelEvent::PermissionSettled {
+        id: "q2".into(),
+        allowed: false,
+    });
+    assert!(
+        a.permissions().is_empty(),
+        "a question nobody can answer any more is not a question"
+    );
+}
+
+/// Two questions at once are two rows, and answering one leaves the other.
+#[test]
+fn answering_one_question_does_not_clear_the_other() {
+    let mut a = app();
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q1", "Bash",
+    ))));
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q2", "Write",
+    ))));
+    assert_eq!(a.permissions().len(), 2);
+
+    a.apply(PanelEvent::PermissionSettled {
+        id: "q1".into(),
+        allowed: true,
+    });
+    let left: Vec<&str> = a.permissions().iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(left, vec!["q2"]);
+}
+
+/// A dropped socket must not delete what JJ said and what he watched happen.
+///
+/// The army half of the screen is replaced on reconnect, and should be: it predates the gap and
+/// nothing filled it. The conversation and the event list are not the army half. The backend
+/// keeps neither, so the snapshot that comes back has both empty, and assigning it wholesale
+/// wiped the Carl tab and the RECENT EVENTS list on every reconnect.
+#[test]
+fn a_reconnect_keeps_the_conversation_and_what_was_watched() {
+    let mut a = app();
+
+    a.apply(PanelEvent::JjSaid("what is nora doing".into()));
+    a.apply(PanelEvent::CarlSaid {
+        text: "she is on the belt rate".into(),
+        streaming: false,
+    });
+    let said = a.snapshot.conversation.len();
+    assert!(said >= 2, "the fixture has to have a conversation");
+
+    let watched = a.snapshot.events.len();
+
+    // Something from the army, which should not survive, so this is not just testing that
+    // nothing is replaced at all.
+    let mut ghost = AgentView::unknown("nora");
+    ghost.status = AgentStatus::Blocked;
+    ghost.blocker = Some("from before the link went".into());
+    a.apply(PanelEvent::AgentChanged(Box::new(ghost)));
+
+    a.apply(PanelEvent::LinkChanged(Link::Disconnected {
+        why: "backend closed".into(),
+    }));
+    a.apply(PanelEvent::LinkChanged(Link::Live));
+
+    assert_eq!(
+        a.snapshot.conversation.len(),
+        said,
+        "the conversation was thrown away by a dropped socket"
+    );
+    assert_eq!(
+        a.snapshot.events.len(),
+        watched,
+        "everything that was watched happen was thrown away"
+    );
+    assert!(
+        a.snapshot.agent("nora").unwrap().blocker.is_none(),
+        "and the army half is still replaced, which is the part a resync is for"
+    );
+}
+
+/// Pressing Allow answers that question and clears it from the band.
+///
+/// JJ pressed Allow and nothing happened. The button, the app method and the wire command were
+/// all correct: the question had already expired, because the window was ninety seconds and
+/// that is about how long it takes to notice a band, read it and decide. The window is ten
+/// minutes now. This checks the half that is testable without a clock.
+#[test]
+fn pressing_allow_answers_that_question_and_clears_it() {
+    let mut a = app();
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q-allow", "Bash",
+    ))));
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q-other", "Write",
+    ))));
+    assert_eq!(a.permissions().len(), 2);
+
+    a.answer_permission("q-allow", true);
+    assert!(
+        a.notice.as_ref().is_some_and(|(_, ok)| *ok),
+        "the press was not accepted: {:?}",
+        a.notice
+    );
+
+    // Gone on the press. It used to wait for the backend to confirm, so that a row could never
+    // claim to be answered before anybody had answered it. That was the right worry and the
+    // wrong trade: the army asks often enough that another question takes the place of the one
+    // just answered, so a press looked like it had done nothing. The care is kept by saying
+    // plainly when an answer did not land, rather than by leaving the row up.
+    let left: Vec<&str> = a.permissions().iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(left, vec!["q-other"], "the row did not clear on the press");
+    assert_eq!(a.just_settled.len(), 1, "and nothing confirms the press");
+
+    // The backend's confirmation arrives afterwards and must not disturb what is left.
+    a.apply(PanelEvent::PermissionSettled {
+        id: "q-allow".into(),
+        allowed: true,
+    });
+    let left: Vec<&str> = a.permissions().iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(
+        left,
+        vec!["q-other"],
+        "the confirmation cleared the wrong row"
+    );
+}
+
+/// Deny is a different answer, and it also has to clear only its own question.
+#[test]
+fn pressing_deny_refuses_that_question_only() {
+    let mut a = app();
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q-deny", "Bash",
+    ))));
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q-keep", "Write",
+    ))));
+
+    a.answer_permission("q-deny", false);
+    a.apply(PanelEvent::PermissionSettled {
+        id: "q-deny".into(),
+        allowed: false,
+    });
+
+    let left: Vec<&str> = a.permissions().iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(left, vec!["q-keep"]);
+}
+
+/// A press has to be visibly acknowledged, not only obeyed.
+///
+/// JJ reported the Allow button dead. It was not: the answer reached the backend and the tool
+/// call went through. What was missing was any sign of it. Pressing Allow removed the row, and
+/// the army asks often enough that a different question took its place in the same second, so
+/// working and broken looked identical on screen.
+#[test]
+fn answering_a_question_says_what_happened() {
+    let mut a = app();
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q1", "Bash",
+    ))));
+    a.apply(PanelEvent::PermissionSettled {
+        id: "q1".into(),
+        allowed: true,
+    });
+
+    let (text, ok) = a.notice.clone().expect("nothing was said about the press");
+    assert_eq!(text, "allowed Bash");
+    assert!(ok, "an allow read as a failure");
+    assert_eq!(
+        a.just_settled.len(),
+        1,
+        "the band has nothing to confirm the press with"
+    );
+    assert_eq!(a.just_settled[0].0, "Bash");
+
+    // A refusal reads differently, or the two are indistinguishable.
+    a.apply(PanelEvent::PermissionAsked(Box::new(a_permission(
+        "q2", "Write",
+    ))));
+    a.apply(PanelEvent::PermissionSettled {
+        id: "q2".into(),
+        allowed: false,
+    });
+    let (text, ok) = a.notice.clone().unwrap();
+    assert_eq!(text, "refused Write");
+    assert!(!ok);
 }

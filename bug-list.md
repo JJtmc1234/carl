@@ -157,3 +157,32 @@ behaviour, which beats better audio that silently is not.
 This is the third time the same shape has appeared in this project, after the microphone
 hearing the speakers and Carl reading his own Slack messages. It is the first time it got
 through a guard that was written specifically for it.
+
+## The overlap detector was reporting overlaps nobody could see
+
+The layout tests rest on `probe::collisions`, which finds text painted on top of other text.
+It compared the rectangles egui laid rows out into. That is not what reaches the screen. A
+scroll area lays out every row it holds and shows the few that fit, and egui records a paint
+command for the rest with a clip rectangle that throws them away. So the rows below the fold
+were compared against whatever was drawn down there, and reported as landing on it.
+
+The visible cost was a phantom defect. The rail's summary was said to run into its own footer
+at 1280x800. It never did. Four attempts to fix the rail failed, one after another, because
+there was nothing wrong with the rail, and the size was eventually excluded from the overlap
+check with a note in the report calling it a real defect that needed the rail rethinking.
+
+The hidden cost was worse. Excluding a size to get past a false positive is exactly how a real
+one stops being caught, and there was a real one behind it: `card::sized_card` called
+`ui.set_clip_rect(inner)`. That replaces the clip rather than narrowing it, so a card sitting
+half below the fold of a scroll area handed its contents a clip reaching past that area, and
+they painted over whatever was underneath. With the workspace open at 1280x800 the overview
+columns drew on top of the workspace header, and CLOSE landed on an agent's status chip.
+
+Two fixes, and the order matters. `collisions` now intersects each row with its own clip and
+skips what is left with nothing, so it reports what a person can see. Both clip overrides now
+intersect with the parent clip instead of replacing it. Then the excluded size went back into
+the overlap check, the empty state check and the workspace check, and they pass.
+
+`text_the_clip_threw_away_is_not_reported_as_an_overlap` asserts that both rows were recorded
+and stacked before asserting that no collision is reported, because a test that could pass by
+never painting the second row would prove nothing.

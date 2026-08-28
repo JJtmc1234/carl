@@ -346,16 +346,38 @@ fn every_brief_says_who_it_may_talk_to_and_keeps_the_house_style() {
     }
 }
 
-/// A brief names the direct reports and nobody else, so an agent cannot address somebody it
-/// has no business addressing because its own prompt introduced them.
+/// A brief names exactly the agents it may hand work to, and separately names everybody.
+///
+/// This used to assert that Carl was never told Nora exists, on the grounds that an agent
+/// cannot address somebody its own prompt never introduced. That protected the delegation rule
+/// by keeping Carl ignorant, and ignorance turned out to have its own cost: asked how Miles was
+/// getting on, Carl said he had never heard of him, when Miles is in the table working for
+/// Olivia. So the chart is given to everybody and the delegation sentence stays exact.
 #[test]
-fn a_brief_names_only_the_agents_directly_below() {
+fn a_brief_names_the_agents_it_may_hand_work_to() {
     let carl = brief_for(org::find("carl").unwrap());
-    assert!(carl.contains("adrian"));
-    assert!(
-        !carl.contains("nora"),
-        "carl is never told nora exists: {carl}"
-    );
+
+    // The sentence that grants delegation names the leads and nobody else.
+    let grant = carl
+        .lines()
+        .find(|l| l.contains("only ones you may hand work to"))
+        .expect("carl is not told who he may hand work to");
+    for lead in ["adrian", "mason", "olivia", "serena", "rowan"] {
+        assert!(
+            grant.contains(lead),
+            "{lead} is missing from the grant: {grant}"
+        );
+    }
+    for worker in ["nora", "iris", "evan", "miles"] {
+        assert!(
+            !grant.contains(worker),
+            "{worker} appears in the sentence that grants delegation: {grant}"
+        );
+    }
+
+    // And the chart is there so he can say whose somebody is rather than denying they exist.
+    assert!(carl.contains("nora"), "carl cannot name nora at all");
+    assert!(carl.contains("miles"), "carl cannot name miles at all");
 
     let nora = brief_for(org::find("nora").unwrap());
     assert!(nora.contains("hand work to nobody"), "{nora}");
@@ -414,4 +436,53 @@ fn a_verdict_line_with_non_ascii_does_not_panic() {
 
     let (v, _) = read_verdict("ACCEPT the numbers agree with the wiki");
     assert_eq!(v, Verdict::Accept);
+}
+
+/// JJ asked Carl how Miles was getting on and Carl said he had never heard of him.
+///
+/// That was true of what Carl had been told: the brief listed his direct reports and nothing
+/// else. Miles is in the compiled table working for Olivia, so the right answer was "he is
+/// Olivia's, ask her". An agent who cannot name the organisation dead ends every question about
+/// somebody else's department.
+#[test]
+fn carl_can_name_everybody_even_the_agents_he_may_not_reach() {
+    let carl = crate::army::org::require("carl").unwrap();
+    let brief = brief_for(carl);
+
+    for name in [
+        "adrian", "mason", "olivia", "serena", "rowan", "iris", "evan", "nora", "miles",
+    ] {
+        assert!(brief.contains(name), "carl was never told {name} exists");
+    }
+    assert!(
+        brief.contains("Olivia") || brief.contains("olivia"),
+        "and who Miles belongs to"
+    );
+}
+
+/// Handing somebody the whole chart must not turn into permission to use it.
+#[test]
+fn knowing_the_chart_is_not_permission_to_reach_across_it() {
+    let carl = crate::army::org::require("carl").unwrap();
+    let brief = brief_for(carl);
+    assert!(
+        brief.contains("Knowing this is not permission to use it"),
+        "the chart was handed over without the rule that goes with it"
+    );
+    assert!(
+        brief.contains("only to the agents"),
+        "the delegation rule is not restated alongside the chart"
+    );
+}
+
+/// A worker sees it too, so they can say who to ask rather than guessing.
+#[test]
+fn a_worker_is_told_the_organisation_as_well() {
+    let miles = crate::army::org::require("miles").unwrap();
+    let brief = brief_for(miles);
+    assert!(
+        brief.contains("olivia"),
+        "miles was not told who he reports to"
+    );
+    assert!(brief.contains("carl"), "nor that Carl exists");
 }

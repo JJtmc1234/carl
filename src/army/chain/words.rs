@@ -14,33 +14,23 @@
 //! review that buries its verdict in a paragraph is a review nothing downstream can act on.
 
 /// Asked of anybody handing work down, so the task has something checkable on it.
-const CONDITIONS: &str = "\
+pub const CONDITIONS: &str = "\
 Then, on a line of its own, write DONE WHEN and under it one line per thing that must be true \
 before this counts as finished. Each one has to be something a person could check rather than \
 an opinion. Write at least one.";
 
 pub fn carl_hands_down(request: &str) -> String {
     format!(
-        "JJ has asked for this:\n\n{request}\n\nHand Adrian, who leads the coding department, \
-         one coding objective. Say what must be true when it is done and why JJ wants it. Do \
-         not say how to build it, do not name files, and do not write any code.\n\n\
-         {CONDITIONS}\n\nAnswer with the objective and nothing else. No preamble."
-    )
-}
-
-pub fn adrian_hands_down(objective: &str) -> String {
-    format!(
-        "Carl has given you this objective:\n\n{objective}\n\nThis is Factorio work, so it \
-         belongs to Mason, who leads the Factorio sub department. Write the objective for \
-         Mason. Say what must be true when it is done and any constraint he has to respect. \
-         Leave how it is done to him.\n\n{CONDITIONS}\n\nAnswer with the objective and nothing \
-         else. No preamble."
+        "JJ has asked for this:\n\n{request}\n\nThis is Factorio work, so hand Mason, who \
+         leads the Factorio department, one objective. Say what must be true when it is done \
+         and why JJ wants it. Do not say how to build it, do not name files, and do not write \
+         any code.\n\n{CONDITIONS}\n\nAnswer with the objective and nothing else. No preamble."
     )
 }
 
 pub fn mason_writes_task(objective: &str, workdir: &str) -> String {
     format!(
-        "Adrian has given you this objective:\n\n{objective}\n\nYou and Nora are working in \
+        "Carl has given you this objective:\n\n{objective}\n\nYou and Nora are working in \
          {workdir}. Turn this into exactly one concrete task for Nora. Give her the context she \
          needs so she does not have to guess, and say what verification she must run. She owns \
          how it is implemented, so do not write the implementation for her.\n\n{CONDITIONS}\n\n\
@@ -81,6 +71,25 @@ pub fn nora_again(why: &str, attempts: u32, limit: u32) -> String {
     )
 }
 
+/// Asking whoever created a task to review what came back.
+///
+/// Named for the act rather than for two particular agents, because any lead reviews its own
+/// people and Carl reviews his leads. `mason_reviews` is the same shape written for one pair,
+/// kept because the campaign path still uses it.
+///
+/// The verdict has to be the first word. A review that buries its decision in a paragraph is
+/// one nothing downstream can act on, and an unreadable answer is read as a reject rather than
+/// as approval: somebody who could not say yes has not said yes.
+pub fn review_asked(goal: &str, task: &str) -> String {
+    format!(
+        "You asked for this and it has come back as done:\n\n{goal}\n\nThe task is {task}. \
+         Check it yourself rather than believing the report. Read what was changed and rerun \
+         whatever was supposed to prove it. If you cannot confirm something, that is a \
+         reject.\n\nAnswer with ACCEPT or REJECT as the very first word on the first line, then \
+         the reason on the next line. If you reject, say exactly what has to be fixed."
+    )
+}
+
 pub fn mason_reviews(summary: &str, must: &[String]) -> String {
     format!(
         "Nora has submitted the task you gave her:\n\n{summary}\n\nIt is done only when all of \
@@ -116,22 +125,9 @@ pub fn mason_reports_up(accepted: bool, attempts: u32, last: &str, history: &str
     )
 }
 
-pub fn adrian_reports_up(accepted: bool, from_mason: &str) -> String {
-    let ask = if accepted {
-        "Report up to Carl. Say what the department delivered and whether it was verified."
-    } else {
-        "Mason could not accept this and it has come to you. Decide what happens next and say \
-         why. Then report up to Carl, including your decision."
-    };
+pub fn carl_answers_jj(request: &str, from_mason: &str) -> String {
     format!(
-        "Mason reports:\n\n{from_mason}\n\n{ask} Be brief.\n\nAnswer with the report and \
-         nothing else."
-    )
-}
-
-pub fn carl_answers_jj(request: &str, from_adrian: &str) -> String {
-    format!(
-        "JJ asked for this:\n\n{request}\n\nAdrian reports:\n\n{from_adrian}\n\nTell JJ what \
+        "JJ asked for this:\n\n{request}\n\nMason reports:\n\n{from_mason}\n\nTell JJ what \
          happened, in two or three sentences. Say plainly whether he got what he asked for. Do \
          not restate the work and do not add anything the report did not say."
     )

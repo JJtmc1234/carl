@@ -260,10 +260,29 @@ fn an_unreadable_home_still_produces_every_component() {
         expected,
         "a missing home must not delete rows, only make them unknown"
     );
-    assert!(
-        taken.overall() != Health::Healthy,
-        "and it is not pretending to be fine"
-    );
+    // The rows that depend on the home say so, rather than reporting a number nobody measured.
+    //
+    // This used to assert that `overall()` was not healthy. That only held by accident: on this
+    // machine `carl-aec` had restarted once and was therefore degraded for ever, so the roll up
+    // was never healthy whatever the home did. Fixing the restart rule removed the prop and
+    // showed the test had never been checking the home at all.
+    //
+    // `overall()` is deliberately not the thing to assert here. `Health::worst` refuses to let
+    // unknown win, on the grounds that one unreadable file should not turn a whole panel grey,
+    // so a missing home genuinely does leave the roll up healthy. What must hold is that every
+    // row which needed the home admits it could not read it.
+    for id in ["army.personnel", "army.journal"] {
+        let row = taken
+            .all()
+            .into_iter()
+            .find(|d| d.component == id)
+            .unwrap_or_else(|| panic!("{id} is missing entirely"));
+        assert_eq!(
+            row.health,
+            Health::Unknown,
+            "{id} claimed to know something about a home it cannot read"
+        );
+    }
 }
 
 #[test]

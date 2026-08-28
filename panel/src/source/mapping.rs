@@ -34,6 +34,9 @@ pub fn snapshot(wire: PanelSnapshot) -> Snapshot {
         .collect::<Vec<_>>();
 
     Snapshot {
+        // Never from a snapshot. A question lives only as long as the process waiting on it,
+        // and rebuilding one from a snapshot would put a settled question back on screen.
+        permissions: Vec::new(),
         agents,
         // Both are Process 3's canonical types on the wire and on the screen, so there is
         // nothing to map. The panel used to convert them and lost a distinction each time.

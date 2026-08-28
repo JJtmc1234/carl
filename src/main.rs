@@ -151,6 +151,27 @@ enum Command {
         journal: Option<String>,
     },
 
+    /// Decide one tool call by asking the panel. Run by Claude Code, not by a person.
+    ///
+    /// Reads a PreToolUse payload on stdin and prints the decision. Denies whenever it cannot
+    /// get an answer, including when no panel is running, and always exits zero, because a hook
+    /// that exits non zero is ignored rather than obeyed.
+    PermitHook {
+        /// Who is asking, as the panel should show it. `jj` or an agent's name.
+        ///
+        /// Passed rather than worked out from the working directory. Two agents can share a
+        /// directory, and a guess would put one agent's name on another's question.
+        #[arg(long = "as", default_value = "jj")]
+        surface: String,
+
+        /// Print the settings that install this hook, instead of deciding a call.
+        ///
+        /// For putting the hook somewhere other than a Carl run, and for checking what is
+        /// actually being installed rather than guessing from the source.
+        #[arg(long)]
+        settings: bool,
+    },
+
     /// The army itself, before anything is running.
     Army {
         #[command(subcommand)]
@@ -199,6 +220,43 @@ enum ArmyAction {
     Found,
     /// Who has a folder, and what each of them is holding.
     Who,
+
+    /// Give a folder to somebody in the organisation who does not have one yet.
+    ///
+    /// What `found` cannot do, because `found` is for an empty home and refuses one that
+    /// already holds an army. This is how agents added to `army::org` join a home that is
+    /// already running, which is what happened when the organisation grew from four to ten.
+    ///
+    /// Recorded as Carl's act, because who exists and where they sit is the chief's, subject to
+    /// JJ. It invents nobody: an agent has to be in the table already, and adding a row there is
+    /// a change to compiled code on purpose.
+    Enlist {
+        /// Which agents. With none, everybody in the table who has no folder.
+        who: Vec<String>,
+    },
+    /// Move whatever the chain is sitting on, one step.
+    ///
+    /// A lead holding work that it has not handed on is a stalled chain, and this is what
+    /// unsticks it: the lead is asked which of its own people should do the thing, and the
+    /// answer is checked against the organisation before anything is written.
+    ///
+    /// One step per task on purpose. Driving a whole campaign in one call cannot be
+    /// interrupted, cannot be watched, and spends money in a shape nobody chose.
+    Work {
+        /// Say what would move without asking anybody or writing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Whether the army is getting better, folded out of the record.
+    ///
+    /// The nine measures in `docs/flagship-workflow.md`. Nothing is recorded for them
+    /// separately, so there is no second file that could come to disagree with the history.
+    Metrics {
+        /// How many of the most recent objectives the trend is taken over.
+        #[arg(long, default_value_t = 10)]
+        recent: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -411,6 +469,175 @@ fn main() -> Result<()> {
                         .map_or_else(|| "idle".to_string(), |t| format!("holding {t}"));
                     println!("  {name:8} {holding}");
                 }
+                for missing in army.missing() {
+                    println!("  {:8} no folder yet", missing.name);
+                }
+                Ok(())
+            }
+
+            ArmyAction::Enlist { who } => {
+                use carl::army::personnel::{enlist, founding_config, founding_profile};
+
+                let mut army = carl::army::personnel::Personnel::open(&home)?;
+                let missing: Vec<String> =
+                    army.missing().iter().map(|a| a.name.to_string()).collect();
+
+                // Checked against the table before anything is written, so a typo names the
+                // agents that exist rather than half enlisting the ones spelled right.
+                let wanted: Vec<String> = if who.is_empty() {
+                    missing
+                } else {
+                    for name in &who {
+                        carl::army::org::require(name)?;
+                    }
+                    who
+                };
+                if wanted.is_empty() {
+                    // Nothing to enlist, but the generated files can still be describing an
+                    // older organisation, so this is the pass that makes them agree with it.
+                    for agent in carl::army::org::everyone() {
+                        if agent.rank != carl::army::org::Rank::Human {
+                            army.write_readme(agent.name)?;
+                        }
+                    }
+                    println!("everybody in the organisation already has a folder");
+                    println!("READMEs rewritten from the table, nothing else touched");
+                    return Ok(());
+                }
+
+                let mut journal = carl::army::event::Journal::open(army.journal_path())?;
+                for name in wanted {
+                    if army.get(&name).is_some() {
+                        // The folder stays exactly as it is and no event is written, so running
+                        // this again is free. The README is the one exception: it is generated
+                        // from the table and never read back, so rewriting it is how a folder
+                        // founded under an older organisation stops describing a reporting line
+                        // that no longer exists.
+                        army.write_readme(&name)?;
+                        println!("  {name:8} already had one, README refreshed");
+                        continue;
+                    }
+                    // Hours come from the rank rather than the default, so somebody enlisted
+                    // into a running home gets the ordinary overnight window instead of
+                    // running all night because nobody said otherwise.
+                    let rank = carl::army::org::require(&name)?.rank;
+                    let logged = enlist(
+                        &mut army,
+                        &mut journal,
+                        "carl",
+                        &name,
+                        founding_profile(&name),
+                        founding_config(rank),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    )?;
+                    println!("  {name:8} enlisted, recorded at seq {}", logged.seq);
+                }
+                Ok(())
+            }
+
+            ArmyAction::Metrics { recent } => {
+                let path = home.join("run").join("events.jsonl");
+                if !path.exists() {
+                    println!("nothing has been recorded in {}", home.display());
+                    return Ok(());
+                }
+                let m = carl::army::metrics::of(&carl::army::event::read(&path)?);
+                print_metrics(&m, recent);
+                Ok(())
+            }
+            ArmyAction::Work { dry_run } => {
+                use carl::army::board::Board;
+                use carl::army::chain::work;
+
+                let board = Board::open(&home)?;
+                let stuck = work::waiting_on_a_lead(&board)?;
+                let to_review = work::waiting_on_review(&board)?;
+
+                if stuck.is_empty() && to_review.is_empty() {
+                    println!(
+                        "nothing to do. Nobody is sitting on work and nothing is waiting on a review."
+                    );
+                    return Ok(());
+                }
+                for task in &stuck {
+                    println!("  down: {:8} holds {}  {}", task.owner, task.id, task.goal);
+                }
+                for task in &to_review {
+                    println!(
+                        "  up:   {:8} submitted {}, {} reviews",
+                        task.owner, task.id, task.created_by
+                    );
+                }
+                if dry_run {
+                    println!("\nnothing was asked and nothing was written.");
+                    return Ok(());
+                }
+
+                // One at a time, and the leads are asked in the order the board holds them, so
+                // a run that is interrupted has done a whole number of handovers rather than
+                // half of one.
+                let mut board = Board::open(&home)?;
+                // The folders too, so an agent given work reads as busy on screen rather than
+                // holding a task in the record and idle in the panel.
+                let mut people = carl::army::personnel::Personnel::open(&home)?;
+
+                // Up before down. Accepting finished work frees the agent who did it, so doing
+                // this first means the pass can hand them something else rather than finding
+                // them still busy with a task that was done before it started.
+                for task in to_review {
+                    let asked =
+                        carl::army::chain::words::review_asked(&task.goal, task.id.as_str());
+                    let said = match ask_one_agent(&home, &task.created_by, &asked) {
+                        Ok(text) => text,
+                        Err(e) => {
+                            println!("  {:8} did not review: {e}", task.created_by);
+                            continue;
+                        }
+                    };
+                    match work::review_one(&mut board, Some(&mut people), &task, &said) {
+                        Ok((true, why)) => {
+                            println!("  {:8} accepted {}. {why}", task.created_by, task.id)
+                        }
+                        Ok((false, why)) => {
+                            println!("  {:8} sent {} back. {why}", task.created_by, task.id)
+                        }
+                        Err(e) => println!("  {:8} {e}", task.created_by),
+                    }
+                }
+                for task in stuck {
+                    let asked =
+                        match carl::army::chain::assign::ask_which_agent(&task.owner, &task.goal) {
+                            Ok(q) => q,
+                            Err(e) => {
+                                println!("  {:8} {e}", task.owner);
+                                continue;
+                            }
+                        };
+                    let said = match ask_one_agent(&home, &task.owner, &asked) {
+                        Ok(text) => text,
+                        Err(e) => {
+                            println!("  {:8} did not answer: {e}", task.owner);
+                            continue;
+                        }
+                    };
+                    match work::hand_on_one(
+                        &mut board,
+                        Some(&mut people),
+                        &task.owner,
+                        &task,
+                        &said,
+                    ) {
+                        Ok((agent, made)) => {
+                            println!("  {:8} -> {:8} {}", task.owner, agent, made.goal)
+                        }
+                        // Said out loud rather than swallowed. A lead that keeps naming
+                        // somebody else's agent is a thing JJ needs to know about.
+                        Err(e) => println!("  {:8} {e}", task.owner),
+                    }
+                }
                 Ok(())
             }
         },
@@ -470,7 +697,6 @@ fn main() -> Result<()> {
             let passage = carl::army::campaign(&mut chain, &asked)?;
 
             println!("\n--- what each agent was handed ---");
-            println!("\ncarl to adrian:\n{}", passage.for_adrian);
             println!("\nadrian to mason:\n{}", passage.for_mason);
             println!("\nmason to nora:\n{}", passage.for_nora);
 
@@ -490,6 +716,19 @@ fn main() -> Result<()> {
                     passage.attempts
                 );
             }
+            Ok(())
+        }
+
+        Command::PermitHook { surface, settings } => {
+            if settings {
+                let me = std::env::current_exe()?;
+                println!("{}", carl::claude::asking::settings(&me, &home, &surface));
+                return Ok(());
+            }
+            print!(
+                "{}",
+                carl::panel::hook::run(&home, &surface, &mut std::io::stdin())
+            );
             Ok(())
         }
 
@@ -535,4 +774,124 @@ fn expand(path: &str) -> PathBuf {
         },
         None => PathBuf::from(path),
     }
+}
+
+/// The nine measures, printed so a gap reads as a gap.
+///
+/// A rate over nothing is left blank rather than shown as zero or as a hundred percent. Both
+/// would be a score, and an army that has never been asked to do anything has not earned one.
+fn print_metrics(m: &carl::army::Metrics, recent: usize) {
+    fn rate(part: usize, whole: usize) -> String {
+        match whole {
+            0 => "  n/a".to_string(),
+            _ => format!("{:5.0}%", 100.0 * part as f64 / whole as f64),
+        }
+    }
+
+    let all = m.objectives.len();
+    println!("objectives          {all}");
+    println!(
+        "  accepted          {}  {}",
+        m.accepted(),
+        rate(m.accepted(), all)
+    );
+    println!(
+        "  without JJ        {}  {}",
+        m.unattended(),
+        rate(m.unattended(), all)
+    );
+    match m.interventions_each() {
+        Some(each) => println!("  interventions     {each:.2} each"),
+        None => println!("  interventions     n/a, nothing has been asked for yet"),
+    }
+
+    // The trend, which is the only thing a single figure cannot show. Printed only once there
+    // are two windows to compare, because the last ten against themselves says nothing.
+    let latest = m.latest(recent);
+    if all > latest.len() {
+        let earlier = &m.objectives[..all - latest.len()];
+        let per = |set: &[carl::army::metrics::Objective]| {
+            set.iter().map(|o| o.interventions).sum::<usize>() as f64 / set.len() as f64
+        };
+        println!(
+            "  trend             {:.2} each over the first {}, {:.2} over the last {}",
+            per(earlier),
+            earlier.len(),
+            per(latest),
+            latest.len()
+        );
+    }
+
+    let reviews = m.reviews.accepted + m.reviews.rejected;
+    println!("reviews             {reviews}");
+    println!(
+        "  rejected          {}  {}",
+        m.reviews.rejected,
+        rate(m.reviews.rejected, reviews)
+    );
+    println!("  escalations       {}", m.escalations);
+
+    println!("submissions         {}", m.retries.submissions);
+    println!(
+        "  repeats           {}  {}",
+        m.retries.repeats,
+        rate(m.retries.repeats, m.retries.submissions)
+    );
+
+    println!("crashes             {}", m.recovery.crashes);
+    println!(
+        "  recovered         {}  {}",
+        m.recovery.resumed,
+        rate(m.recovery.resumed, m.recovery.crashes)
+    );
+    println!("  gave up           {}", m.recovery.gave_up);
+    if m.recovery.outstanding > 0 {
+        println!(
+            "  unanswered        {}, which is somebody to go and look at",
+            m.recovery.outstanding
+        );
+    }
+
+    println!("continuity losses   {}", m.continuity_failures);
+    println!("refusals            {}", m.refusals);
+    if m.loose_interventions > 0 {
+        println!(
+            "loose interventions {}, naming no task",
+            m.loose_interventions
+        );
+    }
+}
+
+/// Puts one question to one agent and hands back what it said.
+///
+/// Its own process with its own brief, rather than asking Carl to relay. Carl hands work to
+/// leads and does not see inside their departments, so a relayed answer would be Carl guessing
+/// on somebody else's behalf.
+fn ask_one_agent(home: &std::path::Path, agent: &str, question: &str) -> Result<String> {
+    let who = carl::army::org::require(agent)?;
+    let people = carl::army::personnel::Personnel::open(home)?;
+
+    let mut brief = carl::army::chain::brief_for(who);
+    let summary = people.folder(agent).join("memory").join("summary.md");
+    if let Ok(extra) = std::fs::read_to_string(&summary) {
+        brief.push_str("\n\nWhat you keep between conversations:\n");
+        brief.push_str(&extra);
+    }
+
+    let out = std::process::Command::new("claude")
+        .arg("-p")
+        .arg("--append-system-prompt")
+        .arg(&brief)
+        .arg(question)
+        .output()?;
+
+    let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if said.is_empty() {
+        let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        anyhow::bail!(match why.is_empty() {
+            true => "said nothing at all".to_string(),
+            false => why,
+        });
+    }
+    Ok(said)
 }

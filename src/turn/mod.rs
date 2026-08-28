@@ -15,6 +15,43 @@ mod exchange;
 use exchange::Exchange;
 
 /// The full form, where what gets recorded and what gets sent can differ.
+/// The runner a surface should use, built from what JJ wrote down for it.
+///
+/// **Every surface has to come through here.** Building a `Runner::default()` instead is how the
+/// terminal, the microphone and Slack ended up ignoring `permissions.json` completely. JJ had
+/// written an allow list with `python3`, `Write` and `Edit` in it and raised the mode, and Carl
+/// went on refusing all of it, because the default is the sandboxed python alone at mode `Ask`.
+/// Nothing reported this: a refusal looks the same whether the rule said no or nobody read the
+/// rule.
+///
+/// The asking hook is installed as well, so `Ask` means Carl puts the call to JJ in the panel
+/// rather than refusing it where nobody sees. With no panel running the hook denies, which is
+/// exactly what `Ask` did before it existed, so the worst case is the old behaviour.
+pub fn runner_for(home: &Path, surface: crate::claude::permits::Surface) -> Result<Runner> {
+    let book = crate::claude::permits::Book::load(home)?;
+    let named = match surface {
+        crate::claude::permits::Surface::Jj => "jj",
+        crate::claude::permits::Surface::Shared => "slack",
+    };
+    let permits = book.for_surface(surface);
+
+    // Whoever JJ is talking to on these surfaces is Carl, and Carl is the chief. The chief holds
+    // no tools, in the chain and everywhere else. Without this he had two sets of powers: none
+    // when a lead handed him work, and Write and Edit when JJ typed at him, so the agent who is
+    // never meant to implement anything was writing code.
+    let narrowed = crate::claude::permits::Permits {
+        mode: permits.mode,
+        allow: crate::claude::permits::narrow_to_rank(
+            &permits.allow,
+            crate::army::org::Rank::Chief,
+        ),
+    };
+
+    Ok(Runner::default()
+        .permitted_by(&narrowed)
+        .asking_jj(home, named))
+}
+
 pub fn respond_full(
     runner: &Runner,
     home: &Path,
@@ -55,7 +92,10 @@ pub fn stream(
     extra: Option<&str>,
     on_text: &mut dyn FnMut(&str) -> Flow,
 ) -> Result<Answer> {
-    let runner = Runner::default();
+    // The panel and the terminal are JJ's own surfaces, reached through a socket in a 0700
+    // directory or through his own keyboard. They read the `jj` permits. Slack reads `shared`,
+    // because who can send to it is a different set of people.
+    let runner = runner_for(home, crate::claude::permits::Surface::Jj)?;
     Exchange {
         home,
         thread,
@@ -276,6 +316,166 @@ mod tests {
         assert!(
             entries.iter().any(|e| e.text == "streamed question"),
             "{entries:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+    use crate::claude::permits::Surface;
+
+    fn home_with(permissions: &str) -> tempfile::TempDir {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("permissions.json"), permissions).unwrap();
+        d
+    }
+
+    /// The bug this exists to stop coming back.
+    ///
+    /// Every surface used to build a `Runner::default()`, so `permissions.json` reached none of
+    /// them. JJ had written `python3`, `Write` and `Edit` into the `jj` list and raised the mode,
+    /// and Carl went on refusing all three. Nothing reported it, because a refusal looks the same
+    /// whether the rule said no or nobody read the rule.
+    #[test]
+    fn a_surface_runner_carries_what_jj_wrote_down() {
+        let d = home_with(
+            r#"{
+                "jj": {"mode": "acceptEdits", "allow": ["Bash(python3:*)", "Write", "Edit"]},
+                "shared": {"mode": "ask", "allow": ["Bash(carl-python:*)"]}
+            }"#,
+        );
+
+        let session = crate::SessionId::fresh().unwrap();
+        let turn = Turn {
+            session: &session,
+            resume: false,
+            prompt: "hi",
+            extra_system: None,
+            workdir: std::path::Path::new("/tmp"),
+        };
+
+        // The jj surface is Carl, and Carl is the chief, so rank empties the list however
+        // generous `permissions.json` is. This test used to assert the opposite, because it was
+        // written before rank narrowed anything, and it was the reason Carl could write code.
+        let jj = runner_for(d.path(), Surface::Jj).unwrap().args_for(&turn);
+        for tool in ["Write", "Edit", "Bash(python3:*)"] {
+            assert!(
+                !jj.contains(&tool.to_string()),
+                "the chief was handed {tool}: {jj:?}"
+            );
+        }
+        assert!(
+            !jj.contains(&"--allowedTools".to_string()),
+            "an empty list must be no flag at all, since some parsers read one as allow \
+             everything: {jj:?}"
+        );
+        assert!(
+            jj.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "acceptEdits"),
+            "the mode JJ set did not reach the CLI: {jj:?}"
+        );
+
+        // And the narrower surface stays narrow, so this is not just passing everything through.
+        let shared = runner_for(d.path(), Surface::Shared)
+            .unwrap()
+            .args_for(&turn);
+        assert!(
+            !shared.contains(&"Write".to_string()),
+            "Slack was given writing, which is not in its list: {shared:?}"
+        );
+    }
+
+    /// `Ask` used to mean refuse where nobody saw it. Now it means put it to JJ.
+    #[test]
+    fn an_asking_surface_installs_the_hook_that_asks() {
+        let d = home_with(r#"{"shared": {"mode": "ask", "allow": []}}"#);
+        let session = crate::SessionId::fresh().unwrap();
+        let args = runner_for(d.path(), Surface::Shared)
+            .unwrap()
+            .args_for(&Turn {
+                session: &session,
+                resume: false,
+                prompt: "hi",
+                extra_system: None,
+                workdir: std::path::Path::new("/tmp"),
+            });
+
+        let at = args.iter().position(|a| a == "--settings");
+        let settings = at.and_then(|i| args.get(i + 1)).expect("a hook: {args:?}");
+        assert!(settings.contains("permit-hook"), "{settings}");
+        assert!(
+            settings.contains("--as slack"),
+            "the panel has to be told who is asking: {settings}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod rank_tests {
+    use crate::army::org::Rank;
+    use crate::claude::permits::narrow_to_rank;
+
+    /// The bug JJ reported: Carl was writing code.
+    ///
+    /// He is the chief. In the chain `tools_for` gives a chief nothing, which is the whole point
+    /// of having one. Reached through the panel he was built from `permissions.json` instead and
+    /// got `Write` and `Edit`, so the same agent had two sets of powers and the permissive one
+    /// was the one JJ talked to.
+    #[test]
+    fn the_chief_holds_no_tools_however_he_is_reached() {
+        let generous = vec![
+            "Bash(python3:*)".to_string(),
+            "Write".to_string(),
+            "Edit".to_string(),
+            "Read".to_string(),
+        ];
+        assert!(
+            narrow_to_rank(&generous, Rank::Chief).is_empty(),
+            "the chief was left holding tools"
+        );
+    }
+
+    /// Narrowing has to keep what the rank does allow, or a worker cannot work.
+    #[test]
+    fn a_worker_keeps_what_jj_wrote_down() {
+        let allow = vec![
+            "Bash(python3:*)".to_string(),
+            "Write".to_string(),
+            "Edit".to_string(),
+            "Read".to_string(),
+        ];
+        let kept = narrow_to_rank(&allow, Rank::Worker);
+        for wanted in ["Write", "Edit", "Read", "Bash(python3:*)"] {
+            assert!(
+                kept.contains(&wanted.to_string()),
+                "{wanted} was dropped: {kept:?}"
+            );
+        }
+    }
+
+    /// A lead manages and reviews, so it may read and run things but never write them.
+    #[test]
+    fn a_lead_may_look_but_not_write() {
+        let allow = vec!["Read".to_string(), "Write".to_string(), "Edit".to_string()];
+        let kept = narrow_to_rank(&allow, Rank::Lead);
+        assert!(kept.contains(&"Read".to_string()));
+        assert!(
+            !kept.contains(&"Write".to_string()),
+            "a lead was given Write: {kept:?}"
+        );
+        assert!(!kept.contains(&"Edit".to_string()));
+    }
+
+    /// Rank narrows and never widens: a tool the rank allows but JJ did not grant stays absent.
+    #[test]
+    fn rank_never_grants_what_jj_withheld() {
+        let allow = vec!["Read".to_string()];
+        let kept = narrow_to_rank(&allow, Rank::Worker);
+        assert_eq!(
+            kept,
+            vec!["Read".to_string()],
+            "narrowing added something: {kept:?}"
         );
     }
 }

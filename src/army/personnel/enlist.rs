@@ -187,7 +187,14 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let army = found(d.path(), 100).unwrap();
 
-        assert_eq!(army.len(), 4, "carl, adrian, mason and nora");
+        assert_eq!(
+            army.len(),
+            crate::army::org::everyone()
+                .iter()
+                .filter(|a| a.rank != crate::army::org::Rank::Human)
+                .count(),
+            "one folder for everybody except JJ"
+        );
         assert!(army.get("jj").is_none(), "JJ is not an agent");
         assert!(!d.path().join("army").join("jj").exists());
         assert!(
@@ -202,7 +209,13 @@ mod tests {
         let army = found(d.path(), 100).unwrap();
 
         let all = event::read(army.journal_path()).unwrap();
-        assert_eq!(all.len(), 4);
+        assert_eq!(
+            all.len(),
+            crate::army::org::everyone()
+                .iter()
+                .filter(|a| a.rank != crate::army::org::Rank::Human)
+                .count()
+        );
         assert!(all.iter().all(|r| r.actor == "jj"), "founding is JJ's act");
         assert!(
             all.iter()
@@ -223,7 +236,13 @@ mod tests {
     #[test]
     fn only_the_chief_may_enlist() {
         assert!(may_enlist("carl").is_ok());
-        for other in ["adrian", "mason", "nora"] {
+        // Every rank that is not the chief, from the table, so a department added later is
+        // covered without anybody remembering to add its lead to a list here.
+        for other in crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Chief)
+        {
+            let other = other.name;
             let err = may_enlist(other).unwrap_err().to_string();
             assert!(err.contains("may not enlist"), "{other}: {err}");
         }
@@ -250,7 +269,10 @@ mod tests {
         assert!(err.contains("may not enlist"), "{err}");
         assert_eq!(
             event::read(army.journal_path()).unwrap().len(),
-            4,
+            crate::army::org::everyone()
+                .iter()
+                .filter(|a| a.rank != crate::army::org::Rank::Human)
+                .count(),
             "nothing announced"
         );
     }
@@ -322,12 +344,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(logged.actor, "carl");
-        assert_eq!(logged.seq, 5, "the journal carried on from founding");
+        assert_eq!(
+            logged.seq,
+            crate::army::org::everyone()
+                .iter()
+                .filter(|a| a.rank != crate::army::org::Rank::Human)
+                .count() as u64
+                + 1,
+            "the journal carried on from founding"
+        );
         let Event::Decided { what, .. } = &logged.event else {
             panic!("wrong event");
         };
         assert!(what.contains("nora"));
-        assert!(what.contains("factorio sub department"));
+        assert!(what.contains("factorio department"), "{what}");
         assert!(what.contains("answering to mason"), "{what}");
         assert!(army.missing().is_empty());
     }

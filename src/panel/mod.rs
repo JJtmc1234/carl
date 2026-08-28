@@ -37,12 +37,15 @@
 pub mod client;
 pub mod command;
 pub mod facts;
+pub mod hook;
 pub mod listen;
 pub mod live;
+pub mod permission;
 pub mod serve;
 pub mod snapshot;
 pub mod tasks;
 pub mod view;
+pub mod waiting;
 pub mod wire;
 
 #[cfg(test)]

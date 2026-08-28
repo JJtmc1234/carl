@@ -156,6 +156,26 @@ pub struct Decision {
     pub options: Vec<String>,
 }
 
+/// A tool call Carl is holding still, waiting for JJ.
+///
+/// Its own type rather than a `Decision`, even though both are questions with two buttons. A
+/// decision is identified by the journal sequence that raised it and is answered by writing to
+/// the journal. This is identified by a string the hook minted, is answered over a different
+/// channel, and is not a thing that happened to the army until JJ says so. Sharing a type would
+/// mean sharing an id field, and the decision path parses that id as a number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Permission {
+    /// Minted by the hook. Opaque, and never parsed.
+    pub id: String,
+    /// As the CLI names it: `Bash`, `Write`, `Read`.
+    pub tool: String,
+    /// The part worth reading before deciding: the command, or the path.
+    pub detail: String,
+    /// Which surface asked, so JJ can see whether this came from him or from Slack.
+    pub surface: String,
+    pub asked_at: u64,
+}
+
 /// One turn in the conversation with Carl.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Turn {
@@ -199,6 +219,12 @@ pub struct Snapshot {
     pub diagnostics: Vec<Diagnostic>,
     pub conversation: Vec<Turn>,
     pub decisions: Vec<Decision>,
+    /// Tool calls waiting on JJ right now.
+    ///
+    /// Not part of the backend snapshot and deliberately so. A question exists only while a
+    /// process is holding still for it, so it is pushed and withdrawn on the live stream rather
+    /// than being a thing a snapshot could resurrect after it had already timed out.
+    pub permissions: Vec<Permission>,
     pub delegations: Vec<Delegation>,
     pub events: Vec<carl::army::event::Record>,
     /// Unix seconds the snapshot was taken.

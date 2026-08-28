@@ -15,7 +15,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use carl::aec::Devices;
 use carl::audio::Mic;
-use carl::claude::{Pool, Runner};
+use carl::claude::Pool;
 use carl::{Heard, ThreadId, Tier, Voice, Whisper, heard};
 
 mod mouth;
@@ -90,8 +90,10 @@ impl Ear {
         // once and never closed, which is what removes the 0.8 seconds of startup and the cold
         // model from every single thing said out loud.
         let mut running = Running {
+            // The microphone is JJ's, and only JJ's, so it reads the same permits his terminal
+            // does rather than the defaults.
             pool: Pool::new(
-                Runner::default(),
+                carl::turn::runner_for(home, carl::claude::permits::Surface::Jj)?,
                 home.join("workspace"),
                 carl::brief::spoken(),
             ),

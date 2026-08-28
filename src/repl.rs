@@ -16,7 +16,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 use anyhow::Result;
-use carl::claude::{Flow, Pool, Runner};
+use carl::claude::{Flow, Pool};
 use carl::turn;
 
 /// Words that end the conversation, on their own on a line.
@@ -30,8 +30,10 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
 
     // One process for the whole session, opened on the first question rather than now, so
     // starting the terminal and never typing anything costs nothing.
+    // JJ's own terminal, so it reads the `jj` permits rather than the defaults. It used to take
+    // `Runner::default()`, which is why nothing JJ wrote in permissions.json ever reached here.
     let mut pool = Pool::new(
-        Runner::default(),
+        carl::turn::runner_for(home, carl::claude::permits::Surface::Jj)?,
         home.join("workspace"),
         carl::brief::IDENTITY,
     );

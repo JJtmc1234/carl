@@ -12,6 +12,8 @@ use serde::Deserialize;
 
 use crate::{Error, Result, SessionId};
 
+pub mod asking;
+pub mod permits;
 mod pool;
 mod session;
 mod stream;
@@ -68,6 +70,14 @@ pub struct Runner {
     /// Headless has nobody to ask, so a tool that is not listed here is simply refused and
     /// Carl explains that he cannot do the thing rather than doing it.
     allowed: Vec<String>,
+    /// How much Claude decides for itself about the rest. `Ask` in headless means refuse, which
+    /// is why this is worth setting per surface rather than leaving at the default everywhere.
+    mode: permits::Mode,
+    /// Where the panel socket is, when Carl is allowed to put a question to JJ.
+    ///
+    /// `None` means he is not, and `Ask` then keeps its old headless meaning of refuse. The
+    /// hook is only worth installing where there is a panel that could answer it.
+    ask_through: Option<(PathBuf, String)>,
 }
 
 /// Running python, which is what makes Carl able to work something out rather than guess.
@@ -81,6 +91,35 @@ pub struct Runner {
 /// file the user could read, and anybody able to message Carl in Slack could ask it to.
 pub const PYTHON: &str = "Bash(carl-python:*)";
 
+/// How a refusal reads when it is put in front of a person.
+///
+/// Names the tool in the CLI's own syntax, because the fix is to paste that into the allow list
+/// in `permissions.json`, and a message that describes the tool without naming it makes somebody
+/// go and look it up.
+/// How a tool Carl has picked up reads on screen.
+///
+/// One short line, marked so it is obviously not part of the answer. It exists so a person can
+/// tell a long answer from a wedged one: between the question and the first word there was only
+/// a caret, and reading forty files looked identical to having stopped.
+pub fn doing_line(tool: &str, detail: &str) -> String {
+    const MOST: usize = 70;
+    let detail: String = detail.split_whitespace().collect::<Vec<_>>().join(" ");
+    let detail = match detail.char_indices().nth(MOST) {
+        Some((at, _)) => format!("{}...", &detail[..at]),
+        None => detail,
+    };
+    match detail.is_empty() {
+        true => format!("\n  ... {tool}\n"),
+        false => format!("\n  ... {tool}: {detail}\n"),
+    }
+}
+
+pub fn refusal_line(tool: &str, why: &str) -> String {
+    format!(
+        "\n[refused: {tool}] {why}\nNobody can approve this while Carl runs headless. Add          {tool:?} to permissions.json, or raise the mode for this surface.\n"
+    )
+}
+
 /// Where the sandboxed interpreter lives, relative to the repository.
 pub const PYTHON_SCRIPT: &str = "etc/carl-python";
 
@@ -89,6 +128,8 @@ impl Default for Runner {
         Self {
             program: PathBuf::from("claude"),
             allowed: vec![PYTHON.to_string()],
+            mode: permits::Mode::Ask,
+            ask_through: None,
         }
     }
 }
@@ -98,12 +139,34 @@ impl Runner {
         Self {
             program: program.into(),
             allowed: vec![PYTHON.to_string()],
+            mode: permits::Mode::Ask,
+            ask_through: None,
         }
+    }
+
+    /// Lets Carl put a tool call to JJ in the panel instead of being refused for it.
+    ///
+    /// Installs a `PreToolUse` hook that asks over this home's panel socket. Only meaningful
+    /// under `Ask`: the other two modes decide for themselves, and asking anyway would put a
+    /// question on screen for something already settled.
+    ///
+    /// This adds a hook rather than replacing the ones JJ has. `guard.sh` still runs on every
+    /// Bash call, and a deny from either is a deny.
+    pub fn asking_jj(mut self, home: impl Into<PathBuf>, surface: impl Into<String>) -> Self {
+        self.ask_through = Some((home.into(), surface.into()));
+        self
     }
 
     /// Replaces the allowed tool list. An empty list means Carl may use no tools at all.
     pub fn allowing(mut self, tools: Vec<String>) -> Self {
         self.allowed = tools;
+        self
+    }
+
+    /// Takes both the list and the mode from what JJ wrote down for this surface.
+    pub fn permitted_by(mut self, permits: &permits::Permits) -> Self {
+        self.allowed = permits.allow.clone();
+        self.mode = permits.mode;
         self
     }
 
@@ -138,6 +201,23 @@ impl Runner {
         if !self.allowed.is_empty() {
             args.push("--allowedTools".into());
             args.extend(self.allowed.iter().cloned());
+        }
+
+        // Only when it is not the default. Passing the default explicitly would be a second
+        // place that has to agree with the CLI about what the default is.
+        if let Some(mode) = self.mode.flag() {
+            args.push("--permission-mode".into());
+            args.push(mode.to_string());
+        }
+
+        // Under `Ask` only. The other modes have already decided, and a hook that asked anyway
+        // would put a question on screen about something nobody needed to answer.
+        if self.mode == permits::Mode::Ask
+            && let Some((home, surface)) = &self.ask_through
+            && let Some(settings) = asking::for_this_build(home, surface)
+        {
+            args.push("--settings".into());
+            args.push(settings);
         }
 
         // --session-id pins a new conversation to an id we chose. --resume continues one that
@@ -405,5 +485,63 @@ mod tests {
     fn an_empty_answer_is_an_error_rather_than_an_empty_reply() {
         assert!(parse("").is_err());
         assert!(parse(r#"{"type":"result"}"#).is_err(), "no result field");
+    }
+
+    fn a_turn<'a>(s: &'a SessionId) -> Turn<'a> {
+        Turn {
+            session: s,
+            resume: false,
+            prompt: "hi",
+            extra_system: None,
+            workdir: Path::new("/tmp"),
+        }
+    }
+
+    /// What comes after `--settings`, if anything does.
+    fn installed(args: &[String]) -> Option<serde_json::Value> {
+        let at = args.iter().position(|a| a == "--settings")?;
+        serde_json::from_str(args.get(at + 1)?).ok()
+    }
+
+    #[test]
+    fn asking_jj_installs_a_hook_that_runs_against_that_home() {
+        let s = session();
+        let args = Runner::default()
+            .asking_jj("/home/jj_tmc/.carl", "jj")
+            .args_for(&a_turn(&s));
+
+        let settings = installed(&args).expect("a settings argument: {args:?}");
+        let command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(command.contains("permit-hook"), "{command}");
+        assert!(command.contains("/home/jj_tmc/.carl"), "{command}");
+    }
+
+    /// The old behaviour has to stay reachable. A surface with no panel behind it must not
+    /// install a hook that asks something nobody can answer.
+    #[test]
+    fn without_it_nothing_is_installed_and_the_old_refusal_stands() {
+        let s = session();
+        let args = Runner::default().args_for(&a_turn(&s));
+        assert!(installed(&args).is_none(), "{args:?}");
+    }
+
+    /// A mode that has already decided must not put a question on screen about it.
+    #[test]
+    fn a_mode_that_decides_for_itself_does_not_ask() {
+        let s = session();
+        let args = Runner::default()
+            .permitted_by(&permits::Permits {
+                mode: permits::Mode::BypassPermissions,
+                allow: Vec::new(),
+            })
+            .asking_jj("/home/jj_tmc/.carl", "jj")
+            .args_for(&a_turn(&s));
+
+        assert!(
+            installed(&args).is_none(),
+            "bypass already answered every question: {args:?}"
+        );
     }
 }

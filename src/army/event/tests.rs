@@ -31,6 +31,7 @@ fn what_is_written_can_be_read_back() {
             must: vec!["it works".into()],
             project: None,
             workspace: None,
+            objective: None,
         },
     )
     .unwrap();

@@ -87,6 +87,7 @@ fn one_army_event(journal: &mut Journal, goal: &str) -> u64 {
                 must: t.verification.must.clone(),
                 project: None,
                 workspace: None,
+                objective: None,
             },
         )
         .unwrap()
@@ -241,7 +242,14 @@ fn observing_an_unfounded_army_does_not_bring_one_into_existence() {
 
     // The organisation is compiled in, so it is still fully described. What is absent is any
     // claim that these agents have state, which is the honest answer.
-    assert_eq!(snapshot.agents.len(), 4, "the table is still the table");
+    assert_eq!(
+        snapshot.agents.len(),
+        carl::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != carl::army::org::Rank::Human)
+            .count(),
+        "the table is still the table"
+    );
     assert!(
         snapshot.agents.iter().all(|a| !a.enlisted),
         "and none of them has a folder"

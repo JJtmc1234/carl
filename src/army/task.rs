@@ -217,6 +217,12 @@ pub struct Task {
     /// Carried now and filled later, so adding worktrees does not change this type and every
     /// caller with it.
     pub workspace: Option<String>,
+    /// The objective this answers, by the journal sequence that recorded it.
+    ///
+    /// Only ever set on the first handover, from Carl to a lead. Work split off further down is
+    /// answering its parent task rather than answering JJ, and saying otherwise would make every
+    /// subtask look like a separate reply to the same request.
+    pub objective: Option<u64>,
 }
 
 impl Task {
@@ -243,6 +249,7 @@ impl Task {
             id: TaskId::fresh()?,
             goal,
             verification,
+            objective: None,
             status: Status::Assigned,
             owner: owner.to_string(),
             created_by: created_by.to_string(),
@@ -291,6 +298,15 @@ impl Task {
     /// is already holding and move it into a different project.
     pub fn for_project(mut self, project: ProjectId) -> Self {
         self.project = Some(project);
+        self
+    }
+
+    /// Says which objective this task was raised to answer.
+    ///
+    /// The sequence rather than the words, so the task and the objective cannot drift apart.
+    /// Only at creation, for the same reason as `for_project`.
+    pub fn answering(mut self, objective: u64) -> Self {
+        self.objective = Some(objective);
         self
     }
 
@@ -497,7 +513,7 @@ mod tests {
     /// A split task keeps a line back to what it came from, so a tree of work can be walked.
     #[test]
     fn a_split_task_remembers_its_parent() {
-        let big = Task::assign("adrian", "mason", "make JJtorio faster", verification()).unwrap();
+        let big = Task::assign("carl", "mason", "make JJtorio faster", verification()).unwrap();
         let small = Task::split_from(
             &big,
             "mason",
@@ -565,7 +581,7 @@ mod tests {
     /// Somebody else being busy says nothing about this worker.
     #[test]
     fn another_workers_task_does_not_block_you() {
-        let mut mine = Task::assign("adrian", "mason", "lead something", verification()).unwrap();
+        let mut mine = Task::assign("carl", "mason", "lead something", verification()).unwrap();
         mine.advance("mason", Status::InHand).unwrap();
 
         assert!(may_take_on("nora", std::slice::from_ref(&mine)).is_ok());

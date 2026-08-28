@@ -15,6 +15,12 @@ pub enum Command {
     SetObjective(String),
     /// An answer to something Carl asked.
     AnswerDecision { id: String, answer: String },
+    /// Allow or refuse one tool call Carl is holding still.
+    ///
+    /// Its own command rather than an `AnswerDecision`, because it does not travel the same way.
+    /// A decision is answered by writing to the journal. This is answered on a channel of its
+    /// own, and the id is a string the hook minted rather than a sequence number.
+    AnswerPermission { question: String, allow: bool },
     /// JJ going straight to an agent, around the chain. Never ordinary traffic.
     Intervene(Intervention),
     /// Open something in the contextual workspace. Process 3 does the work.

@@ -102,6 +102,7 @@ impl Board {
         let parent = task.parent.clone();
         let project = task.project.clone();
         let workspace = task.workspace.clone();
+        let objective = task.objective;
         let by = by.to_string();
 
         if by != task.created_by {
@@ -136,6 +137,7 @@ impl Board {
                     must,
                     project,
                     workspace,
+                    objective,
                 },
             )))
         })?;
@@ -343,6 +345,7 @@ pub fn rebuild(records: &[Record]) -> Vec<Task> {
                 must,
                 project,
                 workspace,
+                objective,
             } => {
                 // Already there means a repeated line, and the first one is the one that
                 // happened. Overwriting would reset the status of a task that has since moved.
@@ -366,6 +369,7 @@ pub fn rebuild(records: &[Record]) -> Vec<Task> {
                         attempts: 0,
                         project: project.clone(),
                         workspace: workspace.clone(),
+                        objective: *objective,
                     },
                 );
             }

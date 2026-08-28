@@ -77,6 +77,19 @@ pub enum PanelEvent {
     /// JJ's own message, echoed back once the backend has it.
     JjSaid(String),
     DecisionRaised(Box<crate::model::Decision>),
+    /// Carl is asking whether he may do something, and a tool call is held still for it.
+    ///
+    /// Carries no sequence. Being asked is not something that happened to the army, and putting
+    /// one on the event timeline would number a thing the journal never issued.
+    PermissionAsked(Box<crate::model::Permission>),
+    /// A question is over, whoever ended it, including nobody.
+    ///
+    /// Arrives on every panel and not only the one that answered, so a question does not sit on
+    /// a second screen after it has been decided on the first.
+    PermissionSettled {
+        id: String,
+        allowed: bool,
+    },
     DecisionSettled {
         id: String,
     },

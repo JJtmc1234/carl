@@ -123,6 +123,7 @@ fn a_working_home(dir: &Path) -> Task {
                 must: t.verification.must.clone(),
                 project: t.project.clone(),
                 workspace: None,
+                objective: None,
             },
         )
         .unwrap();
@@ -197,6 +198,7 @@ fn an_unlinked_task_does_not_join_a_project_over_the_wire() {
                 must: t.verification.must.clone(),
                 project: None,
                 workspace: None,
+                objective: None,
             },
         )
         .unwrap();
@@ -382,7 +384,10 @@ fn a_resynced_snapshot_replaces_provider_state_rather_than_merging_it() {
     let fresh = loop {
         match live.next_update() {
             Update::Resynced(s) => break s,
-            Update::Health(_) | Update::Telemetry { .. } => continue,
+            Update::Health(_)
+            | Update::Telemetry { .. }
+            | Update::Asked(_)
+            | Update::Answered { .. } => continue,
             Update::Event(e) => panic!("nothing was resumable: {}", e.seq),
         }
     };

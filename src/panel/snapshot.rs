@@ -166,14 +166,30 @@ fn asks_jj(what: &str) -> bool {
     t.starts_with("for jj:") || t.starts_with("jj:")
 }
 
-/// What JJ has asked for that nothing has closed yet.
+/// What JJ has asked for that nobody has taken up yet.
+///
+/// Taken up means a delegation naming that objective's sequence exists. Matched on the sequence
+/// rather than on the words, so two objectives worded alike stay two objectives, and one that
+/// was handed down cannot be un-handed by somebody rewording it.
+///
+/// This used to list every objective ever set. The comment said it listed the open ones and the
+/// code never filtered, so the panel showed a growing pile that nothing could ever remove and
+/// JJ had no way to see which of them had actually moved.
 fn objectives(records: &[Record]) -> Vec<String> {
+    let taken_up: std::collections::BTreeSet<u64> = records
+        .iter()
+        .filter_map(|r| match &r.event {
+            Event::Delegated { objective, .. } => *objective,
+            _ => None,
+        })
+        .collect();
+
     records
         .iter()
         .filter_map(|r| match &r.event {
             Event::Intervened {
                 what: crate::army::event::Intervention::Objective { what },
-            } => Some(what.clone()),
+            } if !taken_up.contains(&r.seq) => Some(what.clone()),
             _ => None,
         })
         .collect()

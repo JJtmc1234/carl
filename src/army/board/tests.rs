@@ -283,6 +283,7 @@ fn a_handover_with_nothing_to_check_is_not_rebuilt_into_a_task() {
                 must: Vec::new(),
                 project: None,
                 workspace: None,
+                objective: None,
             },
         )
         .unwrap();

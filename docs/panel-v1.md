@@ -55,6 +55,8 @@ field an older panel ignores.
 {"v":1,"id":"<your id>","ask":"snapshot"}
 {"v":1,"id":"<your id>","ask":"subscribe","since":0}
 {"v":1,"id":"<your id>","ask":"command","command":{"kind":"say","text":"hello"}}
+{"v":1,"id":"<your id>","ask":"may_i","request":{"id":"...","tool":"Bash","detail":"cargo test","surface":"jj","at":1787431007}}
+{"v":1,"id":"<your id>","ask":"answered","question":"...","verdict":"allow"}
 ```
 
 `id` is yours. It comes back on the reply so several requests in flight can be told apart.
@@ -62,10 +64,52 @@ field an older panel ignores.
 ## Backend to panel
 
 `reply` is one of `pong`, `snapshot`, `event`, `live`, `telemetry`, `gap`, `done`, `speaking`,
-`refused`.
+`refused`, `permission`, `settled`.
 
 Replies to a request carry your `id`. **Stream frames have no `id`**, because nothing asked for
 them. Do not treat one as a late answer to a request you made.
+
+## Asking before acting
+
+Claude Code runs headless here, so there is nobody at the terminal to answer a permission prompt
+and anything outside the allow list is refused before a person sees it. A `PreToolUse` hook is
+the one place a decision can reach the CLI from outside, so that is where this sits.
+
+```text
+  claude wants to run something
+    -> carl permit-hook --as jj          the hook, holding the tool call still
+       -> ask may_i                       over this socket, on its own connection
+          -> reply permission             pushed to every subscribed panel
+             JJ presses Allow
+          -> ask answered                 on a different connection
+       <- reply settled                   back to the hook
+    <- permissionDecision allow           what the CLI obeys
+```
+
+**The default is deny and every failure path takes it.** No backend running, no answer inside
+ninety seconds, a socket that will not open, a reply that will not parse. A design that allowed
+on failure would grant everything the moment nobody was watching, which is worse than having no
+permission system, because it would look like there was one.
+
+**The hook always exits zero.** A hook that exits non zero is treated as having failed and is
+ignored rather than obeyed, so a refusal has to be a successful print.
+
+**`question` is not `id`.** The frame's `id` correlates a reply with the request that caused it.
+`question` names the thing being decided. Both are flattened into one JSON object, so sharing a
+name is a collision rather than a style question.
+
+**`permission` and `settled` are stream frames and carry no sequence.** Being asked is not
+something that happened to the army. A subscriber is sent everything currently outstanding when
+it connects, because a panel opened after the question was asked is exactly the panel that needs
+to see it, and is sent `settled` when a question ends however it ended, including when nobody
+answered and it timed out. A question left on a second screen after it was decided on the first
+is a button attached to nothing.
+
+**This adds a hook, it does not replace the ones already installed.** `--settings` loads
+additional settings, so `guard.sh` still runs on every Bash call. Two hooks run and either can
+refuse.
+
+`carl permit-hook --as <who> --settings` prints exactly what gets installed.
 
 ## The four calls
 
@@ -532,3 +576,38 @@ snapshot at seq 0: 4 agents, 0 tasks
 Sequences 3 and 4 were written while nothing was watching, and arrived in order after the
 reconnect with nothing repeated and nothing skipped. No refresh was asked for at any point. The
 socket was gone from the filesystem between the kill and the restart.
+
+The permission loop, with a real `claude` process, a real backend and the hook as installed:
+
+```text
+$ carl --home /tmp/carlhk1 permit-hook --as jj --settings
+{"hooks":{"PreToolUse":[{"hooks":[{"command":"...carl --home /tmp/carlhk1 permit-hook --as jj",
+ "statusMessage":"Asking JJ...","timeout":120,"type":"command"}],"matcher":"*"}]}}
+
+$ claude --print --settings "$S" "Use the Bash tool to run exactly: echo PROOF_OF_HOOK"
+It printed:
+PROOF_OF_HOOK
+
+  watching /tmp/carlhk1/panel/panel.sock, answering allow
+    asked  Bash by jj: echo PROOF_OF_HOOK
+    said   allow
+    settled dff3060e-...:Bash:1787431007 allow
+```
+
+And the half that matters more, against a backend answering deny:
+
+```text
+$ claude --print --settings "$S" "Use the Bash tool to run exactly: echo SHOULD_NOT_RUN > leaked.txt"
+The command was blocked before it ran. The guard hook returned: "Bash was not allowed."
+
+$ ls -l /tmp/carlhk2/work/
+total 0
+
+  watching /tmp/carlhk2/panel/panel.sock, answering deny
+    asked  Bash by jj: echo SHOULD_NOT_RUN > /tmp/carlhk2/work/leaked.txt
+    said   deny
+    settled 4d5b4ba7-...:Bash:1787431041 deny
+```
+
+The file does not exist. The model was told no by a decision made outside it, over a socket, by
+something that was not the model.

@@ -103,6 +103,43 @@ impl App {
                 self.snapshot.decisions.retain(|d| d.id != id);
             }
 
+            // Replaced rather than pushed, so the backlog a fresh subscriber is sent cannot put
+            // the same question on screen twice.
+            PanelEvent::PermissionAsked(request) => {
+                let id = request.id.clone();
+                self.snapshot.permissions.retain(|p| p.id != id);
+                self.snapshot.permissions.push(*request);
+            }
+
+            // Off the screen whoever ended it, including when nobody did and it timed out. A
+            // question left showing after the process behind it gave up is a button that does
+            // nothing, which is worse than no button.
+            // Off the screen, and say so.
+            //
+            // Removing the row silently is why the button read as broken. JJ pressed Allow, the
+            // answer landed, the tool call went through, and the band still had a question in
+            // it because the army had asked another one in the meantime. Nothing on screen
+            // distinguished "your click worked" from "your click did nothing", so the working
+            // case and the broken case looked identical.
+            PanelEvent::PermissionSettled { id, allowed } => {
+                let tool = self
+                    .snapshot
+                    .permissions
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.tool.clone());
+                self.snapshot.permissions.retain(|p| p.id != id);
+                if let Some(tool) = tool {
+                    self.notice = Some((
+                        format!("{} {tool}", if allowed { "allowed" } else { "refused" }),
+                        allowed,
+                    ));
+                    // And in the band itself, which is where JJ was looking when he pressed it.
+                    self.just_settled
+                        .push((tool, allowed, std::time::Instant::now()));
+                }
+            }
+
             PanelEvent::Delegated(delegation) => {
                 self.snapshot.delegations.push(*delegation);
                 let len = self.snapshot.delegations.len();
@@ -157,9 +194,20 @@ impl App {
         self.link = link;
 
         if now_live && !was_live {
-            // Back after a gap. Everything on screen predates the gap and nothing filled it,
-            // so it is replaced rather than continued.
+            // Back after a gap. The army half of the screen predates the gap and nothing filled
+            // it, so it is replaced rather than continued.
+            //
+            // The conversation and the event list are not the army half. The backend keeps
+            // neither: a snapshot carries no turns and no records, so what comes back has both
+            // empty, and assigning it wholesale wipes them. They are this session's own history,
+            // built from frames as they arrived, and there is nowhere to fetch them from again.
+            // Blanking them would punish JJ for a dropped socket by deleting what he just said
+            // and everything he had watched happen.
+            let talking = std::mem::take(&mut self.snapshot.conversation);
+            let watched = std::mem::take(&mut self.snapshot.events);
             self.snapshot = self.source.snapshot();
+            self.snapshot.conversation = talking;
+            self.snapshot.events = watched;
             self.resynced_at = Some(Instant::now());
             self.lit.clear();
         }

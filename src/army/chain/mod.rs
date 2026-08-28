@@ -24,11 +24,14 @@
 //! it would like to do. `org::check_may_implement` says the same thing and says it first, but
 //! a rule that only exists as a check is a rule that holds until somebody forgets to call it.
 
+pub mod assign;
 mod drive;
 mod handback;
+pub mod objective;
 mod run;
 mod staffing;
-mod words;
+pub mod words;
+pub mod work;
 
 pub use drive::campaign;
 pub use handback::{Handback, Verdict, read_handback, read_must, read_verdict};
@@ -132,9 +135,40 @@ pub fn brief_for(agent: &Agent) -> String {
     }
 
     format!(
-        "You are {}. {}\n\n{position}\n\n{rank}\n\n{STANDING}",
-        agent.display, agent.remit
+        "You are {}. {}\n\n{position}\n\n{}\n\n{rank}\n\n{STANDING}",
+        agent.display,
+        agent.remit,
+        the_organisation()
     )
+}
+
+/// The whole chart, given to everybody.
+///
+/// Knowing who exists and being allowed to hand them work are different things, and until now
+/// an agent was only told the second. Carl was asked how Miles was getting on and answered "I
+/// do not know a Miles", which was true of what he had been told and useless to JJ: Miles is in
+/// the compiled table, working for Olivia. An agent that cannot name the organisation cannot
+/// point at the person who would know, so every question about somebody else's department dead
+/// ends instead of being redirected.
+///
+/// The delegation rule is unchanged and is repeated here, because the risk of handing somebody
+/// the whole chart is that they start reaching across it.
+fn the_organisation() -> String {
+    let mut lines = vec!["The whole organisation, so you can say who somebody is:".to_string()];
+    for a in crate::army::org::everyone() {
+        let under = match a.reports_to {
+            Some(boss) => format!(" under {boss}"),
+            None => String::new(),
+        };
+        lines.push(format!("  {} ({}{}): {}", a.name, a.rank, under, a.remit));
+    }
+    lines.push(
+        "Knowing this is not permission to use it. You still hand work only to the agents \
+         directly below you. If somebody asks about an agent who is not yours, say whose they \
+         are and point at their lead rather than saying you have never heard of them."
+            .to_string(),
+    );
+    lines.join("\n")
 }
 
 #[cfg(test)]

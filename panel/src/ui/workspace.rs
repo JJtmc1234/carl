@@ -16,24 +16,29 @@ use super::widgets;
 
 /// How tall the pane sits. Enough for a shell to be useful, little enough that the tab above
 /// is still the thing you are working in.
-pub const HEIGHT: f32 = 260.0;
+pub const HEIGHT: f32 = 330.0;
 
 /// Roughly how many rows and columns that is, for telling the pty how big it is.
-const ROWS: u16 = 14;
-const COLS: u16 = 110;
+const ROWS: u16 = 15;
+const COLS: u16 = 120;
 
 pub fn draw(app: &mut App, ctx: &Context) {
     if app.workspace.is_none() {
         return;
     }
 
+    // Never more than half the window. A fixed height is fine on a large screen and squeezes
+    // the screen above it off a small one, and egui does not refuse: it overlaps them, so the
+    // workspace header lands on top of whatever the tab drew there. The probe caught CLOSE
+    // sitting on a card at 1280x800.
+    let room = (ctx.screen_rect().height() * 0.5).max(180.0);
     TopBottomPanel::bottom("workspace")
-        .exact_height(HEIGHT)
+        .exact_height(HEIGHT.min(room))
         .frame(
             eframe::egui::Frame::none()
                 .fill(theme::PANEL)
-                .stroke(theme::hairline())
-                .inner_margin(eframe::egui::Margin::symmetric(12.0, 10.0)),
+                .stroke(theme::edge(theme::RULE_BRIGHT))
+                .inner_margin(eframe::egui::Margin::symmetric(16.0, 12.0)),
         )
         .show(ctx, |ui| {
             let (title, trouble) = {
@@ -50,7 +55,7 @@ pub fn draw(app: &mut App, ctx: &Context) {
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(title)
-                        .font(theme::body())
+                        .font(theme::heading())
                         .color(theme::ACCENT),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -69,7 +74,7 @@ pub fn draw(app: &mut App, ctx: &Context) {
             // The facade could not do it. Said here, in the pane that was opened, rather than
             // by nothing happening.
             if let Some(why) = trouble {
-                ui.label(RichText::new(why).font(theme::body()).color(theme::BAD));
+                ui.label(RichText::new(why).font(theme::prose()).color(theme::BAD));
                 return;
             }
 
@@ -115,7 +120,7 @@ fn terminal(app: &mut App, ui: &mut eframe::egui::Ui) {
     ScrollArea::vertical()
         .id_salt("terminal-out")
         .stick_to_bottom(true)
-        .max_height(HEIGHT - 116.0)
+        .max_height(HEIGHT - 150.0)
         .show(ui, |ui| {
             ui.label(
                 RichText::new(&output)
@@ -175,7 +180,7 @@ fn editor(app: &mut App, ui: &mut eframe::egui::Ui) {
                 .color(theme::FAINT),
         );
         if read_only {
-            widgets::chip(ui, "READ ONLY", theme::WARN);
+            widgets::state_chip(ui, widgets::Mark::Barred, "READ ONLY", theme::WARN);
         }
         // Somebody else has touched it. Said before a save is attempted rather than after.
         if changed {
@@ -237,14 +242,14 @@ fn editor(app: &mut App, ui: &mut eframe::egui::Ui) {
 
     ScrollArea::vertical()
         .id_salt("editor-buffer")
-        .max_height(HEIGHT - 108.0)
+        .max_height(HEIGHT - 142.0)
         .show(ui, |ui| {
             let Some(Pane::Editor { buffer, .. }) = app.workspace.as_mut().map(|w| &mut w.pane)
             else {
                 return;
             };
             ui.add_sized(
-                [ui.available_width(), HEIGHT - 116.0],
+                [ui.available_width(), HEIGHT - 150.0],
                 TextEdit::multiline(buffer).font(theme::body()),
             );
         });
@@ -304,22 +309,23 @@ fn investigation(
     found: &carl::providers::workspace::service::Investigation,
 ) {
     ui.horizontal(|ui| {
-        widgets::pip(ui, widgets::health_color(found.health), true);
         ui.label(
             RichText::new(&found.component)
-                .font(theme::body())
+                .font(theme::heading())
                 .color(theme::TEXT),
         );
-        ui.label(
-            RichText::new(widgets::health_label(found.health))
-                .font(theme::label())
-                .color(widgets::health_color(found.health)),
+        ui.add_space(10.0);
+        widgets::state_chip(
+            ui,
+            widgets::health_mark(found.health),
+            widgets::health_label(found.health),
+            widgets::health_color(found.health),
         );
     });
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     ui.label(
         RichText::new(&found.summary)
-            .font(theme::body())
+            .font(theme::prose())
             .color(theme::DIM),
     );
     ui.add_space(8.0);
@@ -339,7 +345,7 @@ fn investigation(
 fn scroll(ui: &mut eframe::egui::Ui, id: &str, text: &str, color: eframe::egui::Color32) {
     ScrollArea::vertical()
         .id_salt(id)
-        .max_height(HEIGHT - 70.0)
+        .max_height(HEIGHT - 96.0)
         .show(ui, |ui| {
             ui.label(RichText::new(text).font(theme::body()).color(color));
         });

@@ -615,3 +615,102 @@ fn wire_snapshot(seq: u64) -> carl::panel::view::PanelSnapshot {
         diagnostics: Vec::new(),
     }
 }
+
+/// A task that did not exist when the panel took its snapshot has to join the list.
+///
+/// It never did. `delegated` pushed a delegation for the RECENT DELEGATIONS column and stopped,
+/// and both `moved` and `submitted` are guarded on finding the task, so every later frame about
+/// it fell through and emitted nothing. The agent kept showing as idle on a link the panel said
+/// was live, and because a fresh snapshot is only taken on reconnect, nothing corrected it.
+#[test]
+fn a_task_delegated_while_the_panel_is_watching_joins_the_list_and_keeps_moving() {
+    let mut held = Snapshot::default();
+    let mut out = Vec::new();
+
+    translate::from_event(
+        &frame_at(
+            6,
+            "delegated",
+            "mason",
+            JournalEvent::Delegated {
+                task: carl::army::task::TaskId::quoted("t9"),
+                to: "nora".into(),
+                goal: "raise the belt rate".into(),
+                parent: None,
+                must: vec!["the throughput test passes".into()],
+                project: carl::ProjectId::new("jjtorio").ok(),
+                workspace: None,
+                objective: None,
+            },
+        ),
+        &mut held,
+        &mut out,
+    );
+
+    let fresh = held.task("t9").expect("the task joined the list");
+    assert_eq!(fresh.owner, "nora");
+    assert_eq!(fresh.goal, "raise the belt rate");
+    assert_eq!(fresh.assigner, "mason", "and who has to review it");
+    assert_eq!(fresh.status, "assigned");
+    assert_eq!(
+        fresh.must,
+        vec!["the throughput test passes".to_string()],
+        "with the conditions the record carried, not an empty list"
+    );
+    assert!(
+        out.iter().any(|e| matches!(e, PanelEvent::TaskChanged(_))),
+        "and the screen was told, rather than the model changing under it"
+    );
+
+    // The part that made it permanent. This arm only does anything if the task is there.
+    out.clear();
+    translate::from_event(
+        &frame_at(
+            7,
+            "moved",
+            "nora",
+            JournalEvent::Moved {
+                task: carl::army::task::TaskId::quoted("t9"),
+                from: "assigned".into(),
+                to: "in hand".into(),
+            },
+        ),
+        &mut held,
+        &mut out,
+    );
+    assert_eq!(
+        held.task("t9").unwrap().status,
+        "in hand",
+        "a task that never joined the list can never move either"
+    );
+}
+
+/// The same delegation arriving twice must not become two tasks.
+#[test]
+fn a_delegation_replayed_after_a_reconnect_is_still_one_task() {
+    let mut held = Snapshot::default();
+    let mut out = Vec::new();
+    let event = || JournalEvent::Delegated {
+        task: carl::army::task::TaskId::quoted("t9"),
+        to: "nora".into(),
+        goal: "raise the belt rate".into(),
+        parent: None,
+        must: vec![],
+        project: None,
+        workspace: None,
+        objective: None,
+    };
+
+    translate::from_event(
+        &frame_at(6, "delegated", "mason", event()),
+        &mut held,
+        &mut out,
+    );
+    translate::from_event(
+        &frame_at(6, "delegated", "mason", event()),
+        &mut held,
+        &mut out,
+    );
+
+    assert_eq!(held.tasks.len(), 1, "{:?}", held.tasks);
+}

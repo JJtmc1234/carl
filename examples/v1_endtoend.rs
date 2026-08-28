@@ -50,6 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 healths.push(h);
             }
             Update::Resynced(s) => println!("  RESYNC  to seq {}", s.seq),
+            Update::Asked(r) => println!("  ASKED   {} {}", r.tool, r.detail),
+            Update::Answered { question, verdict } => {
+                println!("  SETTLED {question} {}", verdict.word())
+            }
         }
         if events.len() >= 2 && healths.contains(&Health::Connected) && telemetry > 2 {
             break;

@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use super::client::{Done, Events, Incoming, PanelClient};
 use super::command::PanelCommand;
+use super::permission;
 use super::view::PanelSnapshot;
 use super::wire::PanelEvent;
 use crate::Result;
@@ -61,6 +62,19 @@ pub enum Update {
     Telemetry {
         at: u64,
         diagnostics: Vec<crate::providers::health::Diagnostic>,
+    },
+    /// Carl is asking whether he may do something, and a process is holding still for the answer.
+    ///
+    /// Outside the sequence, like telemetry, because being asked is not something that happened
+    /// to the army. Show it, and send the answer back with `answer`.
+    Asked(Box<permission::Request>),
+    /// A question has stopped being one. Take it off the screen.
+    ///
+    /// Arrives whoever ended it, including when this panel was the one to answer and including
+    /// when nobody did and it ran out of time.
+    Answered {
+        question: String,
+        verdict: permission::Verdict,
     },
     /// Nothing happened except that the honest description of the connection changed.
     Health(Health),
@@ -160,6 +174,17 @@ impl LivePanel {
         Ok(done)
     }
 
+    /// Says what JJ decided about one outstanding question.
+    ///
+    /// On its own connection, because this one is busy carrying the stream, and the answer has to
+    /// get through while the stream is mid replay.
+    pub fn answer(&mut self, question: &str, verdict: permission::Verdict) -> Result<Done> {
+        let mut client = PanelClient::connect(&self.socket)?;
+        let done = client.answer(question, verdict)?;
+        self.confirm();
+        Ok(done)
+    }
+
     /// The next thing worth telling the screen. Blocks until there is one.
     ///
     /// Also reachable as an `Iterator`, which never ends: a panel that cannot reach its backend
@@ -200,6 +225,24 @@ impl LivePanel {
                     }
                     self.pending
                         .push_back(Update::Telemetry { at, diagnostics });
+                }
+                // Neither moves `last`. A question is not a journal record, and letting one
+                // move the resume point would make a reconnect ask to continue from a number
+                // the journal never issued.
+                Ok(Incoming::Asked(request)) => {
+                    self.confirm();
+                    if let Some(update) = self.became(Health::Connected) {
+                        self.pending.push_back(update);
+                    }
+                    self.pending.push_back(Update::Asked(request));
+                }
+                Ok(Incoming::Answered { question, verdict }) => {
+                    self.confirm();
+                    if let Some(update) = self.became(Health::Connected) {
+                        self.pending.push_back(update);
+                    }
+                    self.pending
+                        .push_back(Update::Answered { question, verdict });
                 }
                 Ok(Incoming::CaughtUp { seq }) => {
                     self.last = self.last.max(seq);

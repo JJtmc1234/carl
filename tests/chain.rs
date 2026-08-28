@@ -22,20 +22,16 @@ fn verification() -> Verification {
 }
 
 /// JJ wants something, and it reaches Nora through everybody in between.
+///
+/// Three layers below JJ, not four. Factorio used to be a sub department of coding, so this ran
+/// through Adrian on the way to Mason. Mason leads his own department now, so the route is one
+/// step shorter and Adrian is not on it. Adrian leads engineering, which is Iris and Evan.
 #[test]
 fn work_reaches_the_worker_through_every_link() {
     let from_jj = Task::assign("jj", "carl", "make JJtorio start faster", verification()).unwrap();
-    let to_adrian = Task::split_from(
+    let to_mason = Task::split_from(
         &from_jj,
         "carl",
-        "adrian",
-        "the coding side of it",
-        verification(),
-    )
-    .unwrap();
-    let to_mason = Task::split_from(
-        &to_adrian,
-        "adrian",
         "mason",
         "the Factorio side of it",
         verification(),
@@ -55,20 +51,59 @@ fn work_reaches_the_worker_through_every_link() {
     assert_eq!(to_nora.parent.as_ref(), Some(&to_mason.id));
 
     // The line back up is walkable, which is what makes a tree of work possible later.
-    assert_eq!(to_mason.parent.as_ref(), Some(&to_adrian.id));
-    assert_eq!(to_adrian.parent.as_ref(), Some(&from_jj.id));
+    assert_eq!(to_mason.parent.as_ref(), Some(&from_jj.id));
     assert!(from_jj.parent.is_none());
+}
+
+/// The engineering side of the same rule, which is the half that gained agents.
+#[test]
+fn engineering_work_reaches_iris_and_evan_through_adrian() {
+    let from_jj = Task::assign(
+        "jj",
+        "carl",
+        "the repositories are drifting",
+        verification(),
+    )
+    .unwrap();
+    let to_adrian = Task::split_from(
+        &from_jj,
+        "carl",
+        "adrian",
+        "get the issues under control",
+        verification(),
+    )
+    .unwrap();
+
+    for who in ["iris", "evan"] {
+        let onward =
+            Task::split_from(&to_adrian, "adrian", who, "your part of it", verification()).unwrap();
+        assert_eq!(onward.owner, who);
+        assert_eq!(onward.created_by, "adrian");
+        assert_eq!(onward.parent.as_ref(), Some(&to_adrian.id));
+    }
 }
 
 /// Every shortcut somebody would reach for on a busy afternoon.
 #[test]
 fn no_link_in_the_chain_can_be_skipped() {
     for (from, to) in [
-        ("carl", "mason"),
+        // Carl reaching past a lead to that lead's agent.
         ("carl", "nora"),
+        ("carl", "iris"),
+        ("carl", "evan"),
+        ("carl", "miles"),
+        // A lead taking somebody else's agent.
         ("adrian", "nora"),
+        ("mason", "iris"),
+        ("olivia", "evan"),
+        ("adrian", "miles"),
+        // JJ reaching into the army rather than talking to Carl.
         ("jj", "nora"),
         ("jj", "adrian"),
+        ("jj", "mason"),
+        // A lead handing work to another lead, which is Carl's to do.
+        ("adrian", "mason"),
+        ("olivia", "serena"),
     ] {
         let attempt = Task::assign(from, to, "just this once", verification());
         assert!(
@@ -110,11 +145,12 @@ fn three_rejections_and_it_goes_over_masons_head() {
     assert!(t.must_escalate());
     assert_eq!(t.attempts_left(), 0);
 
-    // Escalating is not a state change. Mason takes it to Adrian, which is a new task with the
-    // failed one as its parent, so the history of the original stays true.
+    // Escalating is not a state change. Mason takes it to Carl, who is who he answers to now,
+    // and it is a new task with the failed one as its parent so the history of the original
+    // stays true.
     let upward = Task::split_from(
         &t,
-        "adrian",
+        "carl",
         "mason",
         "nora has been round three times on this, take it from here",
         verification(),
@@ -168,6 +204,7 @@ fn the_record_can_say_who_did_what_to_which_task() {
                 must: vec!["it works".into()],
                 project: None,
                 workspace: None,
+                objective: None,
             },
         )
         .unwrap();

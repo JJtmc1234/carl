@@ -49,6 +49,7 @@ fn a_real_run(journal: &mut Journal) -> Task {
                 must: t.verification.must.clone(),
                 project: None,
                 workspace: None,
+                objective: None,
             },
         )
         .unwrap();
@@ -81,7 +82,15 @@ fn the_snapshot_shows_the_real_organisation() {
     let snap = snapshot::build_from(&people, &[], &Facts::army_only()).unwrap();
 
     let names: Vec<&str> = snap.agents.iter().map(|a| a.name.as_str()).collect();
-    assert_eq!(names, vec!["carl", "adrian", "mason", "nora"]);
+    assert_eq!(
+        names,
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .map(|a| a.name)
+            .collect::<Vec<_>>(),
+        "every agent in the table, in the order the table gives them"
+    );
     assert!(
         !names.contains(&"jj"),
         "JJ is not an agent and has no folder"
@@ -383,12 +392,20 @@ impl Panel {
 
 /// Starts a real backend on a real socket and hands back its home.
 fn backend() -> (tempfile::TempDir, Personnel) {
+    backend_with_patience(super::permission::WAIT)
+}
+
+/// The same, but a question refuses itself sooner.
+///
+/// Only the number changes. The path a timeout takes is the production one, which is the part
+/// worth proving, and no test should sit for the real ninety seconds to prove it.
+fn backend_with_patience(patience: std::time::Duration) -> (tempfile::TempDir, Personnel) {
     let dir = tempfile::tempdir().unwrap();
     let people = army(dir.path());
     let held = listen::hold(&listen::socket_path(dir.path())).unwrap();
     let home = dir.path().to_path_buf();
     std::thread::spawn(move || {
-        let _ = serve::Server::new(&home).run(held);
+        let _ = serve::Server::new(&home).patience(patience).run(held);
     });
     (dir, people)
 }
@@ -410,7 +427,13 @@ fn a_panel_connects_and_gets_the_real_organisation_over_the_socket() {
     panel.send(Ask::Snapshot);
     match panel.next().body {
         Reply::Snapshot { snapshot } => {
-            assert_eq!(snapshot.agents.len(), 4);
+            assert_eq!(
+                snapshot.agents.len(),
+                crate::army::org::everyone()
+                    .iter()
+                    .filter(|a| a.rank != crate::army::org::Rank::Human)
+                    .count()
+            );
             // No project has been created in this home, so there are none. Empty because nothing
             // was written rather than because nothing was asked.
             assert!(snapshot.projects.is_empty(), "none were created");
@@ -666,5 +689,287 @@ fn a_frame_is_filed_under_who_it_is_about_not_who_acted() {
             ("notified".into(), "mason".into()),
         ],
         "the actor is jj throughout, and none of these belong on jj's row"
+    );
+}
+
+// The permission loop, end to end. A hook holding a tool call still, a panel showing the
+// question, and an answer travelling back down a different connection than the one that asked.
+//
+// Every one of these goes over a real socket to a real backend. The interesting failures here
+// are all about two connections that have to agree about one question, and a test that called
+// the functions directly would have only one connection and would prove nothing.
+
+use super::client::{Incoming, PanelClient};
+use super::permission::{Request as Permission, Verdict};
+
+fn a_question(id: &str) -> Permission {
+    Permission {
+        id: id.into(),
+        tool: "Bash".into(),
+        detail: "cargo test".into(),
+        surface: "jj".into(),
+        at: event::now(),
+    }
+}
+
+/// What a hook prints, decoded back to the word the CLI reads.
+fn hook_says(home: &std::path::Path, payload: &str) -> String {
+    let printed = super::hook::run(home, "jj", &mut payload.as_bytes());
+    let v: serde_json::Value = serde_json::from_str(&printed).expect("valid JSON");
+    v["hookSpecificOutput"]["permissionDecision"]
+        .as_str()
+        .expect("a decision")
+        .to_string()
+}
+
+#[test]
+fn a_question_asked_on_one_connection_is_answered_on_another() {
+    let (dir, _people) = backend();
+    let at = listen::socket_path(dir.path());
+
+    // The hook, on its own thread, because it blocks a real tool call until somebody answers.
+    let asking = {
+        let at = at.clone();
+        std::thread::spawn(move || {
+            PanelClient::connect(&at)
+                .unwrap()
+                .may_i(a_question("q-1"))
+                .unwrap()
+        })
+    };
+
+    // The panel, which finds out because it is subscribed and not because it asked.
+    let mut events = PanelClient::connect(&at).unwrap().subscribe(0).unwrap();
+    let asked = loop {
+        match events.recv().unwrap() {
+            Incoming::Asked(request) => break request,
+            _ => continue,
+        }
+    };
+    assert_eq!(asked.tool, "Bash");
+    assert_eq!(asked.detail, "cargo test", "and it says what it would do");
+
+    PanelClient::connect(&at)
+        .unwrap()
+        .answer(&asked.id, Verdict::Allow)
+        .unwrap();
+
+    assert_eq!(
+        asking.join().unwrap(),
+        Verdict::Allow,
+        "the answer reached the connection that was holding the tool call"
+    );
+}
+
+/// The whole reason this exists. A question nobody gets to must not become consent.
+#[test]
+fn a_question_nobody_answers_is_refused_rather_than_granted() {
+    let (dir, _people) = backend_with_patience(std::time::Duration::from_millis(200));
+    let at = listen::socket_path(dir.path());
+
+    let verdict = PanelClient::connect(&at)
+        .unwrap()
+        .may_i(a_question("q-lonely"))
+        .unwrap();
+    assert_eq!(verdict, Verdict::Deny);
+}
+
+/// A question answered on one screen must not sit there on the other.
+#[test]
+fn every_panel_is_told_a_question_is_over_and_not_only_the_one_that_answered_it() {
+    let (dir, _people) = backend();
+    let at = listen::socket_path(dir.path());
+
+    let watching = {
+        let at = at.clone();
+        std::thread::spawn(move || {
+            let mut events = PanelClient::connect(&at).unwrap().subscribe(0).unwrap();
+            let mut saw_question = false;
+            loop {
+                match events.recv().unwrap() {
+                    Incoming::Asked(_) => saw_question = true,
+                    Incoming::Answered { question, verdict } => {
+                        return (saw_question, question, verdict);
+                    }
+                    _ => continue,
+                }
+            }
+        })
+    };
+
+    // Given a moment to be subscribed before the question exists, so this is testing the live
+    // push rather than the backlog a fresh subscriber is sent.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+
+    let asking = {
+        let at = at.clone();
+        std::thread::spawn(move || {
+            PanelClient::connect(&at)
+                .unwrap()
+                .may_i(a_question("q-2"))
+                .unwrap()
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    PanelClient::connect(&at)
+        .unwrap()
+        .answer("q-2", Verdict::Deny)
+        .unwrap();
+
+    let (saw_question, id, verdict) = watching.join().unwrap();
+    assert!(saw_question, "it was shown the question first");
+    assert_eq!(id, "q-2");
+    assert_eq!(verdict, Verdict::Deny, "and told what was actually decided");
+    assert_eq!(asking.join().unwrap(), Verdict::Deny);
+}
+
+/// A panel opened after the question was asked is exactly the panel that needs to see it.
+#[test]
+fn a_panel_that_connects_late_still_sees_what_is_already_waiting() {
+    let (dir, _people) = backend();
+    let at = listen::socket_path(dir.path());
+
+    let asking = {
+        let at = at.clone();
+        std::thread::spawn(move || {
+            PanelClient::connect(&at)
+                .unwrap()
+                .may_i(a_question("q-3"))
+                .unwrap()
+        })
+    };
+    std::thread::sleep(std::time::Duration::from_millis(120));
+
+    let mut events = PanelClient::connect(&at).unwrap().subscribe(0).unwrap();
+    let asked = loop {
+        match events.recv().unwrap() {
+            Incoming::Asked(request) => break request,
+            _ => continue,
+        }
+    };
+    assert_eq!(asked.id, "q-3");
+
+    PanelClient::connect(&at)
+        .unwrap()
+        .answer("q-3", Verdict::Allow)
+        .unwrap();
+    assert_eq!(asking.join().unwrap(), Verdict::Allow);
+}
+
+/// The real hook binary path, from a payload the CLI would actually send.
+#[test]
+fn the_hook_carries_a_real_tool_call_to_the_panel_and_the_answer_back() {
+    let (dir, _people) = backend();
+    let home = dir.path().to_path_buf();
+    let at = listen::socket_path(dir.path());
+
+    let hooking = std::thread::spawn(move || {
+        hook_says(
+            &home,
+            r#"{"session_id":"s1","cwd":"/home/jj_tmc/Projects/carl",
+                "tool_name":"Write","tool_input":{"file_path":"/tmp/x","content":"hi"}}"#,
+        )
+    });
+
+    let mut events = PanelClient::connect(&at).unwrap().subscribe(0).unwrap();
+    let asked = loop {
+        match events.recv().unwrap() {
+            Incoming::Asked(request) => break request,
+            _ => continue,
+        }
+    };
+    assert_eq!(asked.tool, "Write");
+    assert!(
+        asked.detail.contains("/tmp/x"),
+        "the panel is shown the path, not just the word Write: {}",
+        asked.detail
+    );
+
+    PanelClient::connect(&at)
+        .unwrap()
+        .answer(&asked.id, Verdict::Allow)
+        .unwrap();
+    assert_eq!(hooking.join().unwrap(), "allow");
+}
+
+/// An objective that a lead has been given is no longer something waiting on nobody.
+///
+/// The panel used to list every objective ever set, forever, because the filter the comment
+/// described was never written. A list that only grows is a list nobody reads.
+#[test]
+fn an_objective_stops_being_outstanding_once_a_lead_has_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let people = army(dir.path());
+    let mut journal = Journal::open(people.journal_path()).unwrap();
+
+    let first = journal
+        .append(
+            "jj",
+            Event::Intervened {
+                what: Intervention::Objective {
+                    what: "expand the agent fleet".into(),
+                },
+            },
+        )
+        .unwrap();
+    let second = journal
+        .append(
+            "jj",
+            Event::Intervened {
+                what: Intervention::Objective {
+                    what: "make the factorio players less stupid".into(),
+                },
+            },
+        )
+        .unwrap();
+
+    let open = |j: &Journal| {
+        let records = event::read(j.path()).unwrap();
+        snapshot::build_from(&people, &records, &Facts::army_only())
+            .unwrap()
+            .carl
+            .objectives
+    };
+    assert_eq!(open(&journal).len(), 2, "neither has been taken up");
+
+    let chosen = crate::army::chain::objective::HandedDown {
+        lead: "mason".into(),
+        goal: "make the factorio players play like people".into(),
+        must: vec!["a watcher cannot tell it is a bot in one minute".into()],
+    };
+    crate::army::chain::objective::hand_down(&mut journal, second.seq, &chosen).unwrap();
+
+    let left = open(&journal);
+    assert_eq!(
+        left,
+        vec!["expand the agent fleet".to_string()],
+        "the one Mason was given is gone and the other is not"
+    );
+
+    // Matched on the sequence, so a second objective worded the same is still its own thing.
+    let again = journal
+        .append(
+            "jj",
+            Event::Intervened {
+                what: Intervention::Objective {
+                    what: "make the factorio players less stupid".into(),
+                },
+            },
+        )
+        .unwrap();
+    assert_ne!(again.seq, second.seq);
+    assert_eq!(
+        open(&journal).len(),
+        2,
+        "asking for the same thing again is a new objective, not the old one reopened"
+    );
+    assert_eq!(
+        first.seq,
+        crate::army::org::everyone()
+            .iter()
+            .filter(|a| a.rank != crate::army::org::Rank::Human)
+            .count() as u64
+            + 1,
+        "the founding records came first"
     );
 }

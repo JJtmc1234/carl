@@ -51,6 +51,9 @@ pub fn to_wire(command: &Command) -> Option<PanelCommand> {
         // The workspace is the panel's own container. Process 3 fills it, and nothing about
         // opening a pane belongs on the army's command channel.
         Command::Workspace(_) => return None,
+        // Not a `PanelCommand` at all. Answering a permission does not write to the journal and
+        // has its own frame, so the commander handles it before it gets here.
+        Command::AnswerPermission { .. } => return None,
     })
 }
 
@@ -97,7 +100,27 @@ pub fn from_event(wire: &WireEvent, snapshot: &mut Snapshot, out: &mut Vec<Panel
                 out.push(PanelEvent::TaskChanged(Box::new(held.clone())));
             }
         }
-        JournalEvent::Delegated { task, to, goal, .. } => {
+        // The one record that does say what the world looks like afterwards, because a task
+        // does not exist anywhere until this creates it. It carries the id, the owner, the goal
+        // and the conditions, which is everything a task view needs.
+        //
+        // Without the insert the task never joins the list at all, and it never recovers,
+        // because the two arms above are guarded on finding it: every later `moved` and
+        // `submitted` for that task falls through and emits nothing. The panel only takes a
+        // fresh snapshot on reconnect, so on a link that stays up the correction never comes.
+        //
+        // Built the same way `carl::panel::tasks::fold` builds it from the journal, so a task
+        // that arrived live and the same task after a resync are the same task rather than two
+        // that happen to share an id.
+        JournalEvent::Delegated {
+            task,
+            to,
+            goal,
+            parent,
+            must,
+            project,
+            ..
+        } => {
             out.push(PanelEvent::Delegated(Box::new(crate::model::Delegation {
                 at: wire.at,
                 from: wire.record.actor.clone(),
@@ -105,6 +128,28 @@ pub fn from_event(wire: &WireEvent, snapshot: &mut Snapshot, out: &mut Vec<Panel
                 goal: goal.clone(),
                 task: Some(task.to_string()),
             })));
+
+            let fresh = carl::panel::view::TaskView {
+                id: task.to_string(),
+                goal: goal.clone(),
+                owner: to.clone(),
+                assigner: wire.record.actor.clone(),
+                parent: parent.as_ref().map(|p| p.to_string()),
+                project: project.clone(),
+                // Assigned the moment it is handed over. Anything else comes from a later
+                // `moved`, which can now find it.
+                status: "assigned".to_string(),
+                attempts: 0,
+                must: must.clone(),
+                review: carl::panel::Maybe::Unknown,
+                delegated_at: wire.at,
+                updated_at: wire.at,
+            };
+            match snapshot.tasks.iter_mut().find(|t| t.id == fresh.id) {
+                Some(slot) => *slot = fresh.clone(),
+                None => snapshot.tasks.push(fresh.clone()),
+            }
+            out.push(PanelEvent::TaskChanged(Box::new(fresh)));
         }
         // Everything else is recorded and shown in the event list. Nothing further is derived,
         // because the record does not say what the world looks like afterwards and the next

@@ -22,6 +22,29 @@ pub enum Chunk {
     Text(String),
     /// The final envelope, which carries the session id and the cost.
     Final(Box<Answer>),
+    /// A tool call that was refused for want of permission.
+    ///
+    /// Headless has nobody to ask, so this is not a prompt somebody missed, it is a decision
+    /// already taken. Carried out of the stream because otherwise the only party who knows is
+    /// Carl, who then spends a turn explaining that he could not do the thing. The person who
+    /// can actually fix it, by widening `permissions.json`, never hears about it at all.
+    Refused {
+        /// The tool as the CLI named it, so it can be pasted into the allow list.
+        tool: String,
+        why: String,
+    },
+    /// A tool Carl has just picked up.
+    ///
+    /// Carried so a person watching can tell a long answer from a stuck one. Without it the
+    /// only thing on screen between the question and the first word is a caret, and a Carl
+    /// reading forty files looks exactly like a Carl that has wedged. What he is doing is the
+    /// difference, and he already says it: it was being thrown away here.
+    Doing {
+        /// `Bash`, `Read`, `Grep`, as the CLI names it.
+        tool: String,
+        /// The part worth reading: the command, or the path. Empty when the call carries none.
+        detail: String,
+    },
 }
 
 /// What the listener wants to happen next.
@@ -97,6 +120,21 @@ impl Runner {
 
         for chunk in &rx {
             match chunk {
+                // Put in front of whoever is watching, for the same reason as in a session: the
+                // only person who can widen the allow list is the one reading the answer.
+                Chunk::Refused { tool, why } => {
+                    let line = crate::claude::refusal_line(&tool, &why);
+                    if on_text(&line) == Flow::Stop {
+                        break;
+                    }
+                }
+                // Shown, never kept. A note about working is not part of the answer.
+                Chunk::Doing { tool, detail } => {
+                    let line = crate::claude::doing_line(&tool, &detail);
+                    if on_text(&line) == Flow::Stop {
+                        break;
+                    }
+                }
                 Chunk::Text(t) => {
                     said.push_str(&t);
                     if on_text(&t) == Flow::Stop {
@@ -166,8 +204,91 @@ pub fn chunk_of(line: &str) -> Option<Chunk> {
             }
             Some(Chunk::Text(delta.get("text")?.as_str()?.to_owned()))
         }
+        // What Carl has picked up. The assistant line repeats the whole answer so far, which is
+        // why its text is deliberately ignored, but its tool calls are new each time and are
+        // the only sign of progress there is while he works.
+        "assistant" => doing(&v),
+        // A refusal arrives as the result of a tool call rather than as an event of its own,
+        // which is why nothing here saw it before: this branch did not exist and the line was
+        // one of "the many lines Carl does not care about".
+        "user" => refusal(&v),
         _ => None,
     }
+}
+
+/// The tool Carl has just picked up, if this line carries one.
+///
+/// The first `tool_use` block only. A line can carry several, and listing them all turns a
+/// progress note into a wall, which is the thing it exists to be an alternative to.
+fn doing(v: &serde_json::Value) -> Option<Chunk> {
+    let content = v.get("message")?.get("content")?.as_array()?;
+    for block in content {
+        if block.get("type")?.as_str()? != "tool_use" {
+            continue;
+        }
+        let tool = block.get("name")?.as_str()?.to_owned();
+        let input = block.get("input");
+        // The one field worth reading, by the name each tool actually uses for it.
+        let detail = input
+            .and_then(|i| {
+                for key in [
+                    "command",
+                    "file_path",
+                    "pattern",
+                    "path",
+                    "prompt",
+                    "description",
+                ] {
+                    if let Some(v) = i.get(key).and_then(|v| v.as_str()) {
+                        return Some(v.to_owned());
+                    }
+                }
+                None
+            })
+            .unwrap_or_default();
+        return Some(Chunk::Doing { tool, detail });
+    }
+    None
+}
+
+/// A tool result that says the call was refused, if that is what this is.
+///
+/// Matched on the wording the CLI uses rather than on a flag, because `is_error` is also set by
+/// a command that ran and failed, and those are Carl's problem rather than JJ's.
+fn refusal(v: &serde_json::Value) -> Option<Chunk> {
+    let content = v.get("message")?.get("content")?.as_array()?;
+    for block in content {
+        if block.get("type")?.as_str()? != "tool_result" {
+            continue;
+        }
+        let text = match block.get("content") {
+            Some(serde_json::Value::String(t)) => t.clone(),
+            Some(serde_json::Value::Array(parts)) => parts
+                .iter()
+                .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => continue,
+        };
+        let lower = text.to_lowercase();
+        let denied = lower.contains("permission")
+            || lower.contains("requested permissions")
+            || lower.contains("has not been granted")
+            || lower.contains("not allowed");
+        if !denied {
+            continue;
+        }
+        // The tool name, when the wording carries one, so it can be pasted into the allow list
+        // rather than worked out.
+        let tool = text
+            .split_whitespace()
+            .find(|w| w.starts_with("Bash(") || matches!(*w, "Write" | "Read" | "Edit"))
+            .unwrap_or("a tool")
+            .trim_end_matches([',', '.'])
+            .to_string();
+        return Some(Chunk::Refused { tool, why: text });
+    }
+    None
 }
 
 #[cfg(test)]
@@ -234,5 +355,114 @@ mod tests {
     fn an_error_envelope_produces_no_chunk_rather_than_a_false_answer() {
         let line = r#"{"type":"result","is_error":true,"result":"session not found"}"#;
         assert_eq!(chunk_of(line), None);
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    /// The line JJ never saw. Taken from what the CLI actually emits when a tool is not
+    /// permitted, rather than from a guess at its wording.
+    #[test]
+    fn a_refused_tool_comes_out_of_the_stream() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","is_error":true,"content":"Claude requested permissions to use Bash(python3:*), but you have not granted it yet."}]}}"#;
+        match chunk_of(line) {
+            Some(Chunk::Refused { tool, why }) => {
+                assert_eq!(tool, "Bash(python3:*)", "the name has to be pasteable");
+                assert!(why.contains("permissions"));
+            }
+            other => panic!("a refusal was not recognised: {other:?}"),
+        }
+    }
+
+    /// A command that ran and failed is Carl's problem, not a permission JJ has to widen, and
+    /// telling him to edit permissions.json would send him to fix the wrong thing.
+    #[test]
+    fn a_command_that_merely_failed_is_not_a_refusal() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","is_error":true,"content":"python3: can't open file 'missing.py': No such file or directory"}]}}"#;
+        assert!(
+            chunk_of(line).is_none(),
+            "an ordinary failure is not a refusal"
+        );
+    }
+
+    #[test]
+    fn a_successful_tool_result_says_nothing() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","content":"42"}]}}"#;
+        assert!(chunk_of(line).is_none());
+    }
+
+    #[test]
+    fn the_refusal_names_what_to_add_and_where() {
+        let line = crate::claude::refusal_line("Bash(python3:*)", "not granted");
+        assert!(line.contains("Bash(python3:*)"), "{line}");
+        assert!(line.contains("permissions.json"), "{line}");
+        assert!(
+            line.contains("headless"),
+            "it has to say why nobody can approve: {line}"
+        );
+    }
+
+    /// JJ asked to see what Carl is doing while he thinks.
+    ///
+    /// Between the question and the first word there was only a caret, so a Carl reading forty
+    /// files looked exactly like a Carl that had wedged. He already says which tool he picked
+    /// up on every assistant line, and it was being thrown away.
+    #[test]
+    fn a_tool_carl_picks_up_is_carried_out_of_the_stream() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cargo test --lib"}}]}}"#;
+        match chunk_of(line) {
+            Some(Chunk::Doing { tool, detail }) => {
+                assert_eq!(tool, "Bash");
+                assert_eq!(detail, "cargo test --lib");
+            }
+            other => panic!("expected a Doing, got {other:?}"),
+        }
+    }
+
+    /// Each tool names its interesting field differently, and a note with no detail is useless.
+    #[test]
+    fn the_detail_is_taken_from_whichever_field_the_tool_uses() {
+        let read = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/x.rs"}}]}}"#;
+        match chunk_of(read) {
+            Some(Chunk::Doing { tool, detail }) => {
+                assert_eq!(tool, "Read");
+                assert_eq!(detail, "/tmp/x.rs");
+            }
+            other => panic!("expected a Doing, got {other:?}"),
+        }
+
+        let grep = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"fn main"}}]}}"#;
+        match chunk_of(grep) {
+            Some(Chunk::Doing { detail, .. }) => assert_eq!(detail, "fn main"),
+            other => panic!("expected a Doing, got {other:?}"),
+        }
+    }
+
+    /// An assistant line with no tool in it is still not spoken again.
+    #[test]
+    fn an_assistant_line_of_plain_text_carries_nothing() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"the whole answer so far"}]}}"#;
+        assert!(
+            chunk_of(line).is_none(),
+            "the repeated answer was carried out as a chunk"
+        );
+    }
+
+    /// A long command must not push the answer off the screen.
+    #[test]
+    fn a_long_detail_is_cut_rather_than_wrapped() {
+        let long = "a".repeat(300);
+        let line = crate::claude::doing_line("Bash", &long);
+        assert!(line.len() < 120, "not cut: {} chars", line.len());
+        assert!(line.contains("..."), "and it does not say it was cut");
+    }
+
+    /// A tool with nothing worth reading still says which tool.
+    #[test]
+    fn a_call_with_no_detail_still_names_the_tool() {
+        let line = crate::claude::doing_line("Glob", "");
+        assert!(line.contains("Glob"), "{line:?}");
     }
 }

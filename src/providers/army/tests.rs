@@ -63,9 +63,21 @@ fn a_founded_army_reports_its_agents() {
         .find(|d| d.component == "army.personnel")
         .unwrap();
     assert_eq!(people.health, Health::Healthy);
-    assert!(people.summary.contains("4 agents"), "{}", people.summary);
+    assert!(
+        people.summary.contains(&format!(
+            "{} agents",
+            crate::army::org::everyone()
+                .iter()
+                .filter(|a| a.rank != crate::army::org::Rank::Human)
+                .count()
+        )),
+        "{}",
+        people.summary
+    );
 
-    for who in ["carl", "adrian", "mason", "nora"] {
+    for who in [
+        "carl", "adrian", "iris", "evan", "mason", "nora", "olivia", "miles",
+    ] {
         let agent = taken
             .iter()
             .find(|d| d.component == format!("army.agent.{who}"))
@@ -146,7 +158,17 @@ fn the_founding_journal_is_read_back() {
         .unwrap();
 
     assert_eq!(j.health, Health::Healthy);
-    assert!(j.summary.contains("4 events"), "{}", j.summary);
+    assert!(
+        j.summary.contains(&format!(
+            "{} events",
+            crate::army::org::everyone()
+                .iter()
+                .filter(|a| a.rank != crate::army::org::Rank::Human)
+                .count()
+        )),
+        "{}",
+        j.summary
+    );
 }
 
 /// Nothing in hand is not the same as nothing measurable, so latency is unknown while tasks
@@ -193,6 +215,7 @@ fn a_blocked_task_turns_the_task_diagnostic_blocked() {
             must: vec!["it works".into()],
             project: None,
             workspace: None,
+            objective: None,
         },
     )
     .unwrap();
@@ -434,7 +457,9 @@ fn an_empty_army_directory_reads_as_an_army_with_nobody_in_it() {
     // Founded, so it loads. Nobody has a folder, so every agent is missing.
     assert_eq!(people.health, Health::Degraded, "{}", people.summary);
     assert!(people.summary.contains("0 agents"), "{}", people.summary);
-    for who in ["carl", "adrian", "mason", "nora"] {
+    for who in [
+        "carl", "adrian", "iris", "evan", "mason", "nora", "olivia", "miles",
+    ] {
         assert!(people.summary.contains(who), "{} not named", who);
     }
 

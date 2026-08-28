@@ -51,6 +51,23 @@ pub enum Ask {
     Subscribe { since: u64 },
     /// Do something. The half of the protocol that changes the world.
     Command { command: PanelCommand },
+    /// A `PreToolUse` hook asking whether Carl may do something, and waiting for the answer.
+    ///
+    /// Takes over the connection, like `Subscribe` does, because the hook has nothing else to
+    /// say and is holding a tool call still until it hears back.
+    MayI {
+        request: crate::panel::permission::Request,
+    },
+    /// JJ's answer to one of those.
+    ///
+    /// `question` rather than `id` because a frame already has an `id`, and the two are
+    /// different things: the frame's correlates a reply with the request that caused it, and
+    /// this one names the thing being decided. Both flattened into one object, so sharing the
+    /// name is not a style question, it is a collision.
+    Answered {
+        question: String,
+        verdict: crate::panel::permission::Verdict,
+    },
 }
 
 /// Backend to panel.
@@ -127,6 +144,19 @@ pub enum Reply {
         /// When the sample was taken, which is not when this was sent.
         at: u64,
         diagnostics: Vec<crate::providers::health::Diagnostic>,
+    },
+    /// Carl is asking to do something and a person has to say. Pushed to every subscriber.
+    ///
+    /// Carries no sequence, for the same reason telemetry does not: it is a question being
+    /// asked now rather than a place in the record of what happened. What Carl then did, or
+    /// was stopped from doing, is the army's business and reaches the journal on its own.
+    Permission {
+        request: crate::panel::permission::Request,
+    },
+    /// The answer, so a panel that did not answer stops showing the question.
+    Settled {
+        question: String,
+        verdict: crate::panel::permission::Verdict,
     },
     /// The request was refused, and by what rule.
     ///

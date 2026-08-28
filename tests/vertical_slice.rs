@@ -146,42 +146,28 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
         "only the sleeping one is left alone"
     );
 
-    // 2. Carl hands the department its objective. He cannot reach past Adrian and there is no
-    //    way here to try.
+    // 2. Carl hands the department its objective. Factorio is Mason's department and Mason
+    //    answers to Carl, so this is one hop rather than two. Carl cannot reach past Mason to
+    //    Nora, and there is no way here to try.
     let objective = task(
         "carl",
-        "adrian",
+        "mason",
         "the army can show it wrote something it was asked for",
         "a result file exists where the worker was allowed to write",
     );
     slice.board.delegate("carl", &objective).unwrap();
     slice
         .board
-        .advance("adrian", &objective.id, Status::InHand)
+        .advance("mason", &objective.id, Status::InHand)
         .unwrap();
 
-    // 3. Adrian decides it is Mason's, and splits it rather than passing it on whole.
-    let departmental = Task::split_from(
-        &objective,
-        "adrian",
-        "mason",
-        "have the factorio worker produce the result file",
-        Verification::of(["result.txt is there and says done"]).unwrap(),
-    )
-    .unwrap();
-    slice.board.delegate("adrian", &departmental).unwrap();
-    slice
-        .board
-        .advance("mason", &departmental.id, Status::InHand)
-        .unwrap();
-
-    // 4. Mason writes the concrete task and says where it may happen. The grant is recorded
+    // 3. Mason writes the concrete task and says where it may happen. The grant is recorded
     //    here. What enforces it is the capability layer the worker runs against.
     let workspace = slice.people.folder("nora").join("work");
     std::fs::create_dir_all(&workspace).unwrap();
 
     let concrete = Task::split_from(
-        &departmental,
+        &objective,
         "mason",
         "nora",
         "write result.txt in the workspace you were given",
@@ -258,18 +244,7 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
 
     // 9. Back up, one step at a time. Nobody skips a level going up either, because a task is
     //    only reviewable by whoever created it.
-    slice.board.submit("mason", &departmental.id, 20).unwrap();
-    slice
-        .board
-        .review(
-            "adrian",
-            &departmental.id,
-            true,
-            "checked the worker's file",
-        )
-        .unwrap();
-
-    slice.board.submit("adrian", &objective.id, 20).unwrap();
+    slice.board.submit("mason", &objective.id, 20).unwrap();
     slice
         .board
         .review(
@@ -294,7 +269,7 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
         .unwrap();
 
     // Everything finished, once each.
-    for id in [&concrete.id, &departmental.id, &objective.id] {
+    for id in [&concrete.id, &objective.id] {
         let task = slice.board.get(id).unwrap().unwrap();
         assert_eq!(task.status, Status::Accepted, "{id}");
     }
@@ -303,7 +278,31 @@ fn an_objective_goes_from_carl_to_a_worker_and_an_accepted_result_comes_back() {
         .iter()
         .filter(|r| r.event.kind() == "reviewed")
         .count();
-    assert_eq!(reviews, 3, "one review per task and no more");
+    // Two tasks now rather than three: Factorio is its own department, so the objective goes
+    // straight from Carl to Mason and there is no departmental task in between.
+    assert_eq!(reviews, 2, "one review per task and no more");
+
+    // And the same record answers whether the army is getting better, without a second file
+    // anybody had to remember to write. This is the measure the flagship is judged on, taken
+    // off the only walk in this repository that uses real processes.
+    //
+    // Two accepted reviews rather than the three this assertion carried on the runtime branch.
+    // Factorio is its own department now, so the objective goes straight from Carl to Mason and
+    // there is no departmental task in between. The count follows the chain, and the chain got
+    // one step shorter.
+    let measured = carl::army::metrics::of(&slice.records());
+    assert_eq!(measured.objectives.len(), 1, "one objective, not two tasks");
+    assert_eq!(measured.objectives[0].goal, objective.goal);
+    assert!(measured.objectives[0].accepted());
+    assert!(
+        measured.objectives[0].unattended(),
+        "JJ opened it and never had to come back"
+    );
+    assert_eq!(measured.reviews.accepted, 2);
+    assert_eq!(measured.reviews.rejected, 0);
+    assert_eq!(measured.retries.repeats, 0, "nobody had to do it twice");
+    assert_eq!(measured.recovery.crashes, 0);
+    assert_eq!(measured.interventions_each(), Some(0.0));
 
     // The record reads as one ordered story rather than as two files that have to be lined up.
     let seqs: Vec<u64> = slice.records().iter().map(|r| r.seq).collect();

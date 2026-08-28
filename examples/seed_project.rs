@@ -34,6 +34,7 @@ fn main() {
             project: t.project.clone(),
 
             workspace: t.workspace.clone(),
+            objective: None,
         },
     )
     .unwrap();

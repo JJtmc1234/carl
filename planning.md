@@ -4,6 +4,22 @@ The work in chunks, with what has to be true before a chunk counts as finished.
 
 Effort is in sessions, where a session is roughly an afternoon.
 
+## what this is aimed at
+
+One workflow, made dramatically better over the next year, rather than five layers built before
+any of them is known to be useful. It is written up in
+[docs/flagship-workflow.md](docs/flagship-workflow.md), along with the nine measures and the
+security split, and the test for taking on a second area is in
+[docs/three-year-expansion-gate.md](docs/three-year-expansion-gate.md).
+
+The short version. **Carl owns work. AOS owns execution. ME OS is a separate operating system
+and is not part of this.** The flagship is Carl taking a real ME objective, organising the army
+around it, executing inside boundaries AOS enforces, and handing back a reviewed result.
+
+Phases 1 to 7 below built the assistant. Phases 8 to 11 are the rest of that assistant and are
+still worth doing. The army work underneath them is what the flagship is actually made of, and
+the gates for it are in the flagship document rather than repeated here.
+
 ## done
 
 | phase | effort | what | done when |
@@ -66,6 +82,22 @@ fifteen seconds forever is technically running.
 Done when a failure that persists for five minutes reaches JJ somewhere he will see it.
 
 Effort: half a session.
+
+## the army, which is where the flagship lives
+
+Not a phase list, because the gates are in
+[docs/flagship-workflow.md](docs/flagship-workflow.md) and two copies of a plan disagree within
+a month.
+
+What is built: the organisation and its delegation rules, tasks with review and escalation, the
+event journal with one numbering, per agent identity, memory and hours, the runtime supervisor
+with restart policy and crash recovery, the Command Panel, and the nine measures folded out of
+the journal by `carl army metrics`.
+
+What is not: priority setting, blocked task aging, lead summaries that arrive without being
+asked for, the escalation path that reaches JJ, and the join between a grant Carl records and
+the capability layer in AOS that enforces it. That last one is the gap David's security concern
+actually lands on.
 
 ## not planned, and why
 

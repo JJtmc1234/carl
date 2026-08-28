@@ -156,6 +156,15 @@ impl PanelDataSource for MockPanelDataSource {
                     PanelEvent::DecisionSettled { id: id.clone() },
                 );
             }
+            Command::AnswerPermission { question, allow } => {
+                self.reply_in(
+                    Duration::from_millis(120),
+                    PanelEvent::PermissionSettled {
+                        id: question.clone(),
+                        allowed: *allow,
+                    },
+                );
+            }
             Command::Intervene(i) => {
                 self.reply_in(
                     Duration::from_millis(150),
@@ -223,6 +232,9 @@ fn opening_state() -> Snapshot {
     nora.last_activity_at = Some(EPOCH - 600);
 
     Snapshot {
+        // Never from a snapshot. A question lives only as long as the process waiting on it,
+        // and rebuilding one from a snapshot would put a settled question back on screen.
+        permissions: Vec::new(),
         agents,
         tasks: vec![task],
         projects: script::projects(EPOCH),

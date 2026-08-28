@@ -2,11 +2,16 @@
 //!
 //! Every step is a real `Task`, so the rules in `org.rs` and `task.rs` are the only route the
 //! work can take rather than a description of the route it usually takes. Carl cannot skip
-//! Adrian here because `Task::assign` refuses it, not because this file remembers not to.
+//! Mason here because `Task::assign` refuses it, not because this file remembers not to.
+//!
+//! **Three layers, not four.** Factorio used to be a sub department of coding, so this went
+//! Carl to Adrian to Mason to Nora. Mason leads his own department now and answers to Carl, so
+//! Adrian is not on this route at all and the chain refuses him if he is put back on it. Adrian
+//! leads engineering, which is Iris and Evan, and that is a different campaign.
 //!
 //! The one decision that is genuinely this module's is when to stop. Nora gets her attempt and
 //! two corrections. After the third rejection the task is abandoned rather than tried again,
-//! and it goes to Adrian, because a task rejected three times is usually a task that was
+//! and it goes back to Mason, because a task rejected three times is usually a task that was
 //! written wrong rather than done wrong.
 
 use super::words;
@@ -14,19 +19,14 @@ use super::{Chain, MAX_ATTEMPTS, Next, Passage, after_review, read_handback, rea
 use crate::Result;
 use crate::army::task::{Status, Task};
 
-/// JJ to Carl to Adrian to Mason to Nora, and back up again.
+/// JJ to Carl to Mason to Nora, and back up again.
 pub fn campaign(chain: &mut Chain, request: &str) -> Result<Passage> {
     let workdir = chain.workdir().display().to_string();
 
     // Down. Each handover creates a real task, and each one is refused if it does not follow
     // the chain or arrives with nothing that can be checked.
     let said = chain.ask("carl", &words::carl_hands_down(request))?;
-    let (mut for_adrian, adrian_goal, _) = chain.hand_down("carl", "adrian", &said, None)?;
-    chain.advance(&mut for_adrian, "adrian", Status::InHand)?;
-
-    let said = chain.ask("adrian", &words::adrian_hands_down(&adrian_goal))?;
-    let (mut for_mason, mason_goal, _) =
-        chain.hand_down("adrian", "mason", &said, Some(&for_adrian))?;
+    let (mut for_mason, mason_goal, _) = chain.hand_down("carl", "mason", &said, None)?;
     chain.advance(&mut for_mason, "mason", Status::InHand)?;
 
     let said = chain.ask("mason", &words::mason_writes_task(&mason_goal, &workdir))?;
@@ -42,24 +42,16 @@ pub fn campaign(chain: &mut Chain, request: &str) -> Result<Passage> {
         "mason",
         &words::mason_reports_up(done.accepted, done.attempts, &done.why, &done.history),
     )?;
-    settle(chain, &mut for_mason, "adrian", done.accepted, &from_mason)?;
+    settle(chain, &mut for_mason, "carl", done.accepted, &from_mason)?;
 
-    chain.advance(&mut for_adrian, "adrian", Status::Submitted)?;
-    let from_adrian = chain.ask(
-        "adrian",
-        &words::adrian_reports_up(done.accepted, &from_mason),
-    )?;
-    settle(chain, &mut for_adrian, "carl", done.accepted, &from_adrian)?;
-
-    let answer = chain.ask("carl", &words::carl_answers_jj(request, &from_adrian))?;
-    chain.decided("carl", Some(&for_adrian.id), &answer)?;
+    let answer = chain.ask("carl", &words::carl_answers_jj(request, &from_mason))?;
+    chain.decided("carl", Some(&for_mason.id), &answer)?;
 
     Ok(Passage {
         request: request.to_string(),
-        for_adrian: adrian_goal,
         for_mason: mason_goal,
         for_nora: nora_goal,
-        tasks: vec![for_adrian, for_mason, for_nora],
+        tasks: vec![for_mason, for_nora],
         attempts: done.attempts,
         accepted: done.accepted,
         answer,

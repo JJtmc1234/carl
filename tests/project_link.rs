@@ -43,7 +43,7 @@ fn a_task_can_be_given_a_project_when_it_is_created() {
 /// forgetting to mention it, which is the failure nobody would ever notice.
 #[test]
 fn a_split_task_inherits_its_parents_project() {
-    let parent = Task::assign("adrian", "mason", "the Factorio side", verification())
+    let parent = Task::assign("carl", "mason", "the Factorio side", verification())
         .unwrap()
         .for_project(jjtorio());
     let child =
@@ -55,7 +55,7 @@ fn a_split_task_inherits_its_parents_project() {
 
 #[test]
 fn a_split_of_an_unprojected_task_stays_unprojected() {
-    let parent = Task::assign("adrian", "mason", "some errand", verification()).unwrap();
+    let parent = Task::assign("carl", "mason", "some errand", verification()).unwrap();
     let child = Task::split_from(&parent, "mason", "nora", "part of it", verification()).unwrap();
     assert_eq!(child.project, None, "nothing was inherited from nothing");
 }
@@ -98,6 +98,7 @@ fn delegate(journal: &mut Journal, t: &Task) {
                 project: t.project.clone(),
 
                 workspace: t.workspace.clone(),
+                objective: None,
             },
         )
         .unwrap();

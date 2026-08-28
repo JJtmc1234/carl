@@ -18,6 +18,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::command::PanelCommand;
+use super::permission;
 use super::view::PanelSnapshot;
 use super::wire::{Ask, Frame, PanelEvent, Reply, Request, VERSION};
 use crate::{Error, Result};
@@ -106,6 +107,39 @@ impl PanelClient {
         }
     }
 
+    /// Asks whether Carl may do this, and blocks until somebody says or the wait runs out.
+    ///
+    /// Gives up the connection because the backend takes it over: the hook has nothing else to
+    /// say and is holding a real tool call still.
+    ///
+    /// **Every failure returns `Deny`, including this returning an error.** A caller that treated
+    /// an unreachable panel as consent would have a permission system that grants everything the
+    /// moment nobody is watching.
+    pub fn may_i(mut self, request: permission::Request) -> Result<permission::Verdict> {
+        let asked = request.id.clone();
+        self.send(Ask::MayI { request })?;
+        match self.read()?.body {
+            Reply::Settled { question, verdict } if question == asked => Ok(verdict),
+            Reply::Settled { question, .. } => Err(Error::Refused(format!(
+                "answered {question}, which is not the question that was asked"
+            ))),
+            other => Err(unexpected("a verdict", &other)),
+        }
+    }
+
+    /// Says what JJ decided about one outstanding question.
+    pub fn answer(&mut self, question: &str, verdict: permission::Verdict) -> Result<Done> {
+        let sent = self.send(Ask::Answered {
+            question: question.to_string(),
+            verdict,
+        })?;
+        match self.read()?.body {
+            Reply::Done { seq, what } => Ok(Done { seq, what }),
+            Reply::Refused { why } => Err(Error::Refused(why)),
+            other => Err(unexpected_for(&sent, "done", &other)),
+        }
+    }
+
     /// Starts the live stream, giving up this connection to do it.
     ///
     /// `since` is the last sequence already held. Everything after it is replayed before the
@@ -178,6 +212,18 @@ pub enum Incoming {
         at: u64,
         diagnostics: Vec<crate::providers::health::Diagnostic>,
     },
+    /// Carl is asking whether he may do something, and is waiting.
+    ///
+    /// Carries no sequence. Nothing has happened yet, which is the whole point of being asked.
+    Asked(Box<permission::Request>),
+    /// A question has stopped being one, whoever ended it.
+    ///
+    /// Sent to every connected panel, including ones that were not the one to answer, so a
+    /// question does not sit on a second screen after it has been decided on the first.
+    Answered {
+        question: String,
+        verdict: permission::Verdict,
+    },
     /// The backend cannot honour the sequence asked for. Take a fresh snapshot.
     Gap {
         asked_for: u64,
@@ -241,6 +287,10 @@ impl Events {
                 have_to,
                 why,
             }),
+            // Outside the sequence, like telemetry, and for the same reason: a question Carl
+            // asked is not a thing the army recorded happening.
+            Reply::Permission { request } => Ok(Incoming::Asked(Box::new(request))),
+            Reply::Settled { question, verdict } => Ok(Incoming::Answered { question, verdict }),
             Reply::Refused { why } => Err(Error::Refused(why)),
             other => Err(unexpected("an event", &other)),
         }

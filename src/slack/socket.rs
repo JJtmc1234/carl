@@ -23,12 +23,57 @@ use crate::Result;
 const REMEMBERED: usize = 64;
 
 /// Reads envelopes until the process is killed, handing questions to `on_ask`.
+/// How long a silent socket is given before it is treated as dead.
+///
+/// Slack pings roughly every thirty seconds, so three minutes of complete silence is not a
+/// quiet channel, it is a link that is no longer there.
+const SILENCE_MEANS_DEAD: Duration = Duration::from_secs(180);
+
+/// Whether this error is the read timeout rather than a real failure.
+///
+/// Named rather than matched inline, because the two read identically in a log and only one of
+/// them means something is wrong.
+fn silent_too_long(e: &tungstenite::Error) -> bool {
+    match e {
+        tungstenite::Error::Io(io) => matches!(
+            io.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ),
+        _ => false,
+    }
+}
+
+/// Puts a read timeout on the socket underneath the websocket.
+///
+/// tungstenite hands back either a plain stream or a TLS one, and the timeout lives on the
+/// `TcpStream` under whichever it is. Slack is always TLS in practice, and the plain arm is
+/// there so the timeout is not quietly lost if that ever changes.
+fn set_read_timeout(
+    ws: &tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+    how_long: Duration,
+) -> std::io::Result<()> {
+    match ws.get_ref() {
+        tungstenite::stream::MaybeTlsStream::Plain(tcp) => tcp.set_read_timeout(Some(how_long)),
+        // Which TLS variant exists depends on the feature this was built with, so both are
+        // matched and the catch all keeps it compiling either way rather than only on the
+        // machine it was written on.
+        tungstenite::stream::MaybeTlsStream::Rustls(tls) => {
+            tls.get_ref().set_read_timeout(Some(how_long))
+        }
+        other => {
+            let _ = other;
+            Ok(())
+        }
+    }
+}
+
 pub fn serve(api: &Api, me: &Me, on_ask: &mut dyn FnMut(Ask)) -> Result<()> {
     let mut seen: VecDeque<String> = VecDeque::new();
     // Threads Carl has answered in. Kept here rather than in the worker because it has to be
     // updated in step with the decision to answer, and the worker is deliberately behind a
     // queue that can be several messages long.
     let mut engaged = Engaged::new();
+
     let mut backoff = Duration::from_secs(1);
 
     loop {
@@ -54,6 +99,21 @@ pub fn serve(api: &Api, me: &Me, on_ask: &mut dyn FnMut(Ask)) -> Result<()> {
             }
         };
 
+        // A read timeout, so a link that has quietly died is noticed.
+        //
+        // Without one, `read` blocks for ever. A connection that goes away without a close
+        // frame, which is what a dropped route or a sleeping laptop leaves behind, sits there
+        // looking established while nothing arrives. Carl went deaf for two days that way: the
+        // socket showed ESTAB the whole time, no error was ever raised, and there was nothing
+        // in the log because there was nothing to log.
+        //
+        // Slack sends a ping every half minute or so, and tungstenite answers those itself and
+        // hands the loop an `Ok` it skips. So on a healthy link something arrives well inside
+        // this, and a timeout genuinely means the link is gone rather than that Slack is quiet.
+        if let Err(e) = set_read_timeout(&ws, SILENCE_MEANS_DEAD) {
+            eprintln!("could not set a read timeout on the slack socket: {e}");
+        }
+
         eprintln!("connected to slack.");
         backoff = Duration::from_secs(1);
 
@@ -65,7 +125,16 @@ pub fn serve(api: &Api, me: &Me, on_ask: &mut dyn FnMut(Ask)) -> Result<()> {
                 Ok(Message::Binary(_)) => continue,
                 Ok(Message::Close(_)) => break,
                 Err(e) => {
-                    eprintln!("slack connection dropped: {e}");
+                    // A timeout here is the whole point of having one: the link went away
+                    // without saying so, and going round again is the only way to notice.
+                    if silent_too_long(&e) {
+                        eprintln!(
+                            "nothing from slack in {}s, treating the link as dead and dialling again.",
+                            SILENCE_MEANS_DEAD.as_secs()
+                        );
+                    } else {
+                        eprintln!("slack connection dropped: {e}");
+                    }
                     break;
                 }
             };

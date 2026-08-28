@@ -33,6 +33,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "  sample at {at}, {} machine readings (no sequence: not a thing that happened)",
                 diagnostics.len()
             ),
+            Update::Asked(r) => println!("  ASKED  {} {} ({})", r.tool, r.detail, r.id),
+            Update::Answered { question, verdict } => {
+                println!("  settled {question} {}", verdict.word())
+            }
         }
         if live.health() == Health::Disconnected {
             println!("         (backend gone, still trying)");

@@ -142,6 +142,20 @@ impl Exchange<'_> {
         // describes itself as a tool for software engineering, and without this Carl inherits
         // that and turns down questions about anything else.
         let mut identity = crate::brief::IDENTITY.to_string();
+
+        // Who the army is, taken from the compiled table on every turn.
+        //
+        // Carl was asked how Miles was getting on and said he did not know who Miles is. He was
+        // right about what he had been told: this brief described a general assistant and never
+        // mentioned that an army exists, let alone who is in it. The chain's own brief had the
+        // chart, but that is a different prompt used for a different thing, so the Carl JJ talks
+        // to had never seen it.
+        //
+        // Built rather than written out, so adding a department to `org.rs` reaches this on the
+        // next turn instead of the next time somebody remembers.
+        identity.push_str("\n\n");
+        identity.push_str(&crate::army::org::as_brief());
+
         if let Some(extra) = self.extra {
             identity.push_str("\n\n");
             identity.push_str(extra);

@@ -14,6 +14,7 @@
 //! per task. Written down because it is a choice and there is a point at which it stops being
 //! the right one.
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,9 @@ use std::time::Duration;
 use super::command::{self, PanelCommand};
 use super::facts::Facts;
 use super::listen::Bound;
+use super::permission;
 use super::snapshot;
+use super::waiting::Waiting;
 use super::wire::{Ask, Frame, PanelEvent, Reply, Request, VERSION};
 use crate::army::event::{self, Intervention, Journal, Record};
 use crate::army::personnel::Personnel;
@@ -52,6 +55,16 @@ pub struct Server {
     /// the machine on every snapshot, which is exactly the render rate polling that must not
     /// happen, and each one would start with an empty cache so the limit would never bite.
     machine: Arc<Mutex<Diagnostics>>,
+    /// How long a question is held open before it refuses itself.
+    ///
+    /// A field rather than the constant read directly, so a test can prove the timeout refuses
+    /// rather than grants without sitting there for the real ninety seconds.
+    patience: Duration,
+    /// Questions asked by a hook and not yet answered, shared by every connection.
+    ///
+    /// It has to be shared: the hook asks on one connection and JJ answers on another, so a
+    /// per connection store would mean the answer never reached the process holding still.
+    waiting: Arc<Waiting>,
 }
 
 impl Server {
@@ -59,8 +72,16 @@ impl Server {
         let home = home.into();
         Self {
             machine: Arc::new(Mutex::new(Diagnostics::new(&home))),
+            waiting: Arc::new(Waiting::new()),
+            patience: permission::WAIT,
             home,
         }
+    }
+
+    /// Shortens how long a question is held open. For tests.
+    pub fn patience(mut self, how_long: Duration) -> Self {
+        self.patience = how_long;
+        self
     }
 
     /// Serves until the socket is dropped, which removes it. One thread per connection.
@@ -76,8 +97,10 @@ impl Server {
             };
             let home = self.home.clone();
             let machine = Arc::clone(&self.machine);
+            let waiting = Arc::clone(&self.waiting);
+            let patience = self.patience;
             std::thread::spawn(move || {
-                let _ = talk(&home, &machine, stream);
+                let _ = talk(&home, &machine, &waiting, patience, stream);
             });
         }
         Ok(())
@@ -85,7 +108,13 @@ impl Server {
 }
 
 /// One connected panel, until it goes away.
-pub fn talk(home: &Path, machine: &Mutex<Diagnostics>, stream: UnixStream) -> Result<()> {
+pub fn talk(
+    home: &Path,
+    machine: &Mutex<Diagnostics>,
+    waiting: &Waiting,
+    patience: Duration,
+    stream: UnixStream,
+) -> Result<()> {
     let mut out = stream.try_clone()?;
     let reader = BufReader::new(stream);
 
@@ -140,7 +169,75 @@ pub fn talk(home: &Path, machine: &Mutex<Diagnostics>, stream: UnixStream) -> Re
             // Takes over the connection. A subscribed panel is streaming, and interleaving
             // request handling on the same socket would need framing this protocol does not
             // have. A panel that wants both opens two connections.
-            Ask::Subscribe { since } => return stream_from(home, machine, &mut out, id, since),
+            Ask::Subscribe { since } => {
+                return stream_from(home, machine, waiting, &mut out, id, since);
+            }
+
+            // Takes over the connection. The hook has nothing else to say and is holding a tool
+            // call still, so it parks here until JJ answers or the wait runs out.
+            Ask::MayI { request } => {
+                let asked = request.clone();
+                let answer = match waiting.ask(request) {
+                    Some(rx) => rx,
+                    None => {
+                        send(
+                            &mut out,
+                            &Frame::to(
+                                id,
+                                Reply::Settled {
+                                    question: asked.id,
+                                    verdict: permission::Verdict::Deny,
+                                },
+                            ),
+                        )?;
+                        continue;
+                    }
+                };
+                let verdict = answer
+                    .recv_timeout(patience)
+                    .unwrap_or(permission::Verdict::Deny);
+                waiting.give_up(&asked.id);
+                send(
+                    &mut out,
+                    &Frame::to(
+                        id,
+                        Reply::Settled {
+                            question: asked.id,
+                            verdict,
+                        },
+                    ),
+                )?;
+            }
+
+            Ask::Answered {
+                question: which,
+                verdict,
+            } => {
+                let landed = waiting.answer(&which, verdict);
+                eprintln!(
+                    "[permission] answer for {which} arrived: {} ({})",
+                    verdict.word(),
+                    if landed {
+                        "landed"
+                    } else {
+                        "nothing was waiting"
+                    }
+                );
+                send(
+                    &mut out,
+                    &Frame::to(
+                        id,
+                        Reply::Done {
+                            seq: None,
+                            what: if landed {
+                                format!("{which} answered {}", verdict.word())
+                            } else {
+                                format!("nothing was waiting on {which}, it has already gone")
+                            },
+                        },
+                    ),
+                )?;
+            }
             Ask::Command { command } => {
                 let replies = carry_out(home, command, &mut out, id.clone());
                 match replies {
@@ -184,6 +281,7 @@ fn send(out: &mut UnixStream, frame: &Frame) -> Result<()> {
 fn stream_from(
     home: &Path,
     machine: &Mutex<Diagnostics>,
+    waiting: &Waiting,
     out: &mut UnixStream,
     id: Option<String>,
     since: u64,
@@ -209,6 +307,22 @@ fn stream_from(
     // timer of its own.
     let mut told_of = machine.lock().ok().and_then(|m| m.last_sampled_at());
 
+    // Everything already waiting, because a panel opened after the question was asked is exactly
+    // the panel that needs to see it. Outcomes start from now: a question this panel never saw,
+    // already settled, is not news.
+    let mut outcomes_upto = waiting.settled_now();
+    let mut shown: HashSet<String> = HashSet::new();
+    for request in waiting.outstanding() {
+        shown.insert(request.id.clone());
+        eprintln!(
+            "[permission] offering {} ({}) to a subscriber",
+            request.id, request.tool
+        );
+        if send(out, &Frame::to(None, Reply::Permission { request })).is_err() {
+            return Ok(());
+        }
+    }
+
     loop {
         let fresh: Vec<Record> = event::read(&path)?
             .into_iter()
@@ -226,6 +340,41 @@ fn stream_from(
             && send(out, &frame).is_err()
         {
             return Ok(());
+        }
+
+        // Questions, and questions that have stopped being questions. Polled on the same tick as
+        // the journal because a panel is a screen and a tick is faster than a person.
+        for request in waiting.outstanding() {
+            if !shown.insert(request.id.clone()) {
+                continue;
+            }
+            eprintln!(
+                "[permission] pushing {} ({}) live",
+                request.id, request.tool
+            );
+            if send(out, &Frame::to(None, Reply::Permission { request })).is_err() {
+                return Ok(());
+            }
+        }
+        let (settled, upto) = waiting.settled_after(outcomes_upto);
+        outcomes_upto = upto;
+        for outcome in settled {
+            shown.remove(&outcome.id);
+            eprintln!(
+                "[permission] telling a subscriber {} is settled as {}",
+                outcome.id,
+                outcome.verdict.word()
+            );
+            let frame = Frame::to(
+                None,
+                Reply::Settled {
+                    question: outcome.id,
+                    verdict: outcome.verdict,
+                },
+            );
+            if send(out, &frame).is_err() {
+                return Ok(());
+            }
         }
         std::thread::sleep(TICK);
     }
@@ -320,13 +469,43 @@ fn carry_out(
             let mut journal = open_journal(home)?;
             let recorded =
                 command::record(&mut journal, Intervention::Objective { what: text.clone() })?;
-            let _ = speak(home, &format!("New objective from JJ: {text}"), out, id);
+
+            // And then it is handed to a lead, which is the step that used to be missing. Being
+            // told and answering in conversation left every objective sitting in the record with
+            // nothing done about it, so the work came back to whoever was at the keyboard.
+            //
+            // Which lead is Carl's judgement and is asked for. Whether he may have that lead is
+            // not, and is checked against the organisation before anything is written.
+            let handed = hand_objective_down(home, &mut journal, recorded.seq, text, out);
+
+            // And straight on down, because a lead holding work is the state this whole thing
+            // exists to end. JJ chose "on objective" over a timer: work flows the moment he asks
+            // for something, and an army nobody has asked anything of costs nothing.
+            let onward = match &handed {
+                Ok((lead, _)) => carry_on_down(home, lead, out),
+                Err(_) => None,
+            };
+
+            let what = match &handed {
+                Ok((lead, task)) => format!(
+                    "objective recorded at {}, handed to {lead} as task {task}, {} notified{}",
+                    recorded.seq,
+                    recorded.told.len(),
+                    match &onward {
+                        Some(note) => format!(". {note}"),
+                        None => String::new(),
+                    }
+                ),
+                // Recorded and told, but not moved. Said plainly rather than swallowed: an
+                // objective JJ believes is being worked on and is not is the worst outcome here.
+                Err(why) => format!(
+                    "objective recorded at {} and Carl told, but it was not handed down. {why}",
+                    recorded.seq
+                ),
+            };
             return Ok(Reply::Done {
                 seq: Some(recorded.seq),
-                what: format!(
-                    "objective recorded and Carl told, {} notified",
-                    recorded.told.len()
-                ),
+                what,
             });
         }
         PanelCommand::Inspect { agent } => {
@@ -342,10 +521,26 @@ fn carry_out(
             question: seq.to_string(),
             answer: text.clone(),
         },
-        PanelCommand::JjMessage { agent, text } => Intervention::Message {
-            to: agent.clone(),
-            what: text.clone(),
-        },
+        // Recorded, and then actually delivered. Until now this wrote the intervention down and
+        // stopped, so JJ could message an agent from the panel and never hear back: the record
+        // said he had spoken to them and nobody had. Hunter asked to be able to talk to Miles
+        // from the panel, and a message nobody answers is not talking to them.
+        PanelCommand::JjMessage { agent, text } => {
+            let mut journal = open_journal(home)?;
+            let recorded = command::record(
+                &mut journal,
+                Intervention::Message {
+                    to: agent.clone(),
+                    what: text.clone(),
+                },
+            )?;
+            let answer = ask_agent(home, agent, text, out)
+                .unwrap_or_else(|why| format!("{agent} did not answer. {why}"));
+            return Ok(Reply::Done {
+                seq: Some(recorded.seq),
+                what: answer,
+            });
+        }
         PanelCommand::JjInstruct { agent, instruction } => Intervention::Override {
             agent: agent.clone(),
             instruction: instruction.clone(),
@@ -401,6 +596,166 @@ fn holding(home: &Path, agent: &str) -> Result<TaskId> {
 /// Text is forwarded as it arrives rather than at the end, because `turn::stream` already hands
 /// it over that way and holding it back would make the panel slower than the terminal for no
 /// reason.
+/// Asks Carl which lead an objective belongs to, and hands it to them.
+///
+/// The answer is streamed to the panel as he writes it, so JJ watches the decision being made
+/// rather than waiting on a silent socket and then being told what happened.
+///
+/// Returns the lead and the task id, or why it did not move. Every failure is a refusal to
+/// write rather than a guess: a wrong owner chosen quietly is worse than an objective that
+/// visibly did not move, because nobody goes looking for the second one.
+fn hand_objective_down(
+    home: &Path,
+    journal: &mut Journal,
+    objective_seq: u64,
+    text: &str,
+    out: &mut UnixStream,
+) -> std::result::Result<(String, String), String> {
+    let asked = crate::army::chain::objective::ask_which_lead(text);
+    let thread = ThreadId::new(THREAD).map_err(|e| e.to_string())?;
+
+    let answer = crate::turn::stream(home, &thread, &asked, None, None, &mut |chunk| match send(
+        out,
+        &Frame::to(None, Reply::Speaking { text: chunk.into() }),
+    ) {
+        Ok(()) => crate::claude::Flow::Continue,
+        Err(_) => crate::claude::Flow::Stop,
+    })
+    .map_err(|e| e.to_string())?;
+
+    let chosen = crate::army::chain::objective::read_choice(&answer.text);
+    let (_record, task) = crate::army::chain::objective::hand_down(journal, objective_seq, &chosen)
+        .map_err(|e| e.to_string())?;
+
+    Ok((chosen.lead, task.id.to_string()))
+}
+
+/// Asks a lead to hand on whatever it is now holding, one step.
+///
+/// Called straight after Carl delegates, so an objective reaches somebody who will actually do
+/// it rather than stopping at the lead. Returns a sentence for JJ, or `None` when there was
+/// nothing to move.
+///
+/// Failure here is deliberately not failure of the objective. The objective is recorded and the
+/// lead has it either way, and a lead that could not be reached is a thing to say rather than a
+/// reason to pretend nothing happened.
+fn carry_on_down(home: &Path, lead: &str, out: &mut UnixStream) -> Option<String> {
+    let mut board = crate::army::board::Board::open(home).ok()?;
+    let stuck = crate::army::chain::work::waiting_on_a_lead(&board).ok()?;
+    let task = stuck.into_iter().find(|t| t.owner == lead)?;
+
+    let asked = crate::army::chain::assign::ask_which_agent(lead, &task.goal).ok()?;
+    let said = ask_agent(home, lead, &asked, out).ok()?;
+
+    let mut people = Personnel::open(home).ok();
+    match crate::army::chain::work::hand_on_one(&mut board, people.as_mut(), lead, &task, &said) {
+        Ok((agent, _)) => Some(format!("{lead} handed it to {agent}")),
+        Err(why) => Some(format!("{lead} could not hand it on. {why}")),
+    }
+}
+
+/// Puts a message to one named agent and hands back what they said.
+///
+/// Runs the agent in its own process with its own brief, rather than asking Carl to relay. Carl
+/// hands work to leads and does not see inside their departments, so a relayed answer would be
+/// Carl guessing on somebody else's behalf.
+///
+/// Tools come from the agent's rank, and from a small extra list where the job needs one: Miles
+/// reads mail, so he is given the Gmail calls that read and draft and none that send or delete.
+/// That boundary is the permission list rather than a sentence in his brief.
+fn ask_agent(
+    home: &Path,
+    agent: &str,
+    said: &str,
+    out: &mut UnixStream,
+) -> std::result::Result<String, String> {
+    let who = crate::army::org::require(agent).map_err(|e| e.to_string())?;
+    let people = Personnel::open(home).map_err(|e| e.to_string())?;
+
+    // The agent's own memory is what makes this the same agent as last time.
+    let mut brief = crate::army::chain::brief_for(who);
+    let summary = people.folder(agent).join("memory").join("summary.md");
+    if let Ok(extra) = std::fs::read_to_string(&summary) {
+        brief.push_str("\n\nWhat you keep between conversations:\n");
+        brief.push_str(&extra);
+    }
+    let rules = people.folder(agent).join("memory").join("rules.md");
+    if let Ok(extra) = std::fs::read_to_string(&rules) {
+        brief.push_str("\n\n");
+        brief.push_str(&extra);
+    }
+
+    let mut tools = crate::army::chain::tools_for(who.rank);
+    tools.extend(extra_tools_for(agent).into_iter().map(str::to_owned));
+
+    let _ = send(
+        out,
+        &Frame::to(
+            None,
+            Reply::Speaking {
+                text: format!("[{agent}] thinking...\n"),
+            },
+        ),
+    );
+
+    // The message goes in on stdin, not as a trailing argument.
+    //
+    // `--allowedTools` takes a list, so anything after it on the command line is read as another
+    // tool name. With the tools last, the message was swallowed and `claude` exited saying no
+    // input was given at all, which reached JJ as "miles did not answer". Ordering the flags to
+    // avoid it works but is one edit away from breaking again. Stdin cannot be eaten by a flag.
+    let mut cmd = std::process::Command::new("claude");
+    cmd.arg("-p")
+        .arg("--append-system-prompt")
+        .arg(&brief)
+        .arg("--permission-mode")
+        .arg("acceptEdits");
+    if !tools.is_empty() {
+        cmd.arg("--allowedTools").arg(tools.join(","));
+    }
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    {
+        use std::io::Write;
+        let mut pipe = child
+            .stdin
+            .take()
+            .ok_or_else(|| "claude gave us no stdin to write to".to_string())?;
+        pipe.write_all(said.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    let done = child.wait_with_output().map_err(|e| e.to_string())?;
+    let text = String::from_utf8_lossy(&done.stdout).trim().to_string();
+    if text.is_empty() {
+        return Err(String::from_utf8_lossy(&done.stderr).trim().to_string());
+    }
+    let _ = send(
+        out,
+        &Frame::to(None, Reply::Speaking { text: text.clone() }),
+    );
+    Ok(text)
+}
+
+/// Calls one agent needs that its rank does not imply.
+///
+/// Read and draft only for Miles. No send, no trash, no spam marking: an agent that cannot call
+/// them cannot be talked into calling them, which is a stronger promise than telling him not to.
+fn extra_tools_for(agent: &str) -> Vec<&'static str> {
+    match agent {
+        "miles" => vec![
+            "mcp__claude_ai_Gmail__search_threads",
+            "mcp__claude_ai_Gmail__get_thread",
+            "mcp__claude_ai_Gmail__get_message",
+            "mcp__claude_ai_Gmail__list_drafts",
+            "mcp__claude_ai_Gmail__create_draft",
+            "mcp__claude_ai_Gmail__update_draft",
+        ],
+        _ => Vec::new(),
+    }
+}
+
 fn speak(home: &Path, said: &str, out: &mut UnixStream, id: Option<String>) -> Result<Reply> {
     let thread = ThreadId::new(THREAD)?;
     let answer = crate::turn::stream(home, &thread, said, None, None, &mut |text| {

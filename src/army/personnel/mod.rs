@@ -30,7 +30,7 @@
 mod config;
 mod enlist;
 mod files;
-mod founding;
+pub mod founding;
 mod hours;
 mod identity;
 pub mod memory;
@@ -46,6 +46,7 @@ pub use enlist::{announcement, enlist, found, may_enlist};
 /// The careful small file reader and writer every agent file goes through, shared with the
 /// supervisor so its records get the same staged write and the same error naming the file.
 pub(crate) use files::{read_json, write_json};
+pub use founding::{founding_config, founding_profile};
 pub use hours::{Hours, local_hour};
 pub use identity::{AgentId, Identity};
 pub use profile::Profile;

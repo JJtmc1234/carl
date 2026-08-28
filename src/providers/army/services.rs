@@ -50,15 +50,33 @@ impl Unit {
         (up >= 0.0).then_some(up)
     }
 
+    /// How long a unit has to stay up after a restart before it counts as settled.
+    ///
+    /// An hour. Long enough that a service dying every few minutes never reaches it, short
+    /// enough that one bad morning does not colour the rest of the week.
+    pub const SETTLED_AFTER: f64 = 3600.0;
+
     /// The judgement, which is deliberately five ways rather than two.
     ///
-    /// A unit that is up but has restarted is degraded, not healthy. A unit that is stopped is
+    /// A unit that is up but has restarted **recently** is degraded. A unit that is stopped is
     /// blocked rather than failed, because somebody stopping a service on purpose is not a
     /// crash and should not read like one.
-    pub fn health(&self) -> Health {
+    ///
+    /// `machine_uptime` is needed because the restart count on its own is useless here.
+    /// `NRestarts` is cumulative for the life of the unit and never resets, so the old rule of
+    /// "restarts > 0 means degraded" marked a service degraded for ever: `carl-aec` was killed
+    /// once on the 15th and was still reading degraded eight days later, having been up and
+    /// working the whole time. An alert that can never clear is one somebody learns to ignore,
+    /// and then it is worse than no alert.
+    pub fn health(&self, machine_uptime: f64) -> Health {
         match (self.active_state.as_deref(), self.sub_state.as_deref()) {
             (Some("active"), Some("running")) => {
-                if self.restarts.unwrap_or(0) > 0 {
+                let restarted = self.restarts.unwrap_or(0) > 0;
+                // Unknown uptime is not evidence of having settled, so it stays degraded.
+                let settled = self
+                    .uptime_secs(machine_uptime)
+                    .is_some_and(|up| up >= Self::SETTLED_AFTER);
+                if restarted && !settled {
                     Health::Degraded
                 } else {
                     Health::Healthy
@@ -165,7 +183,9 @@ pub fn diagnostics_with(program: &str, machine_uptime: Option<f64>) -> Vec<Diagn
                 let uptime = machine_uptime.and_then(|m| unit.uptime_secs(m));
                 Diagnostic::new(
                     &format!("army.service.{name}"),
-                    unit.health(),
+                    // No machine uptime means nothing can be shown to have settled, so a unit
+                    // that has restarted stays degraded rather than being let off.
+                    unit.health(machine_uptime.unwrap_or(0.0)),
                     unit.summary(),
                     Kind::EventDriven,
                 )
@@ -205,8 +225,37 @@ mod tests {
         assert_eq!(u.sub_state.as_deref(), Some("running"));
         assert_eq!(u.restarts, Some(0));
         assert_eq!(u.main_pid, Some(2868404));
-        assert_eq!(u.health(), Health::Healthy);
+        assert_eq!(u.health(0.0), Health::Healthy);
         assert_eq!(u.summary(), "running");
+    }
+
+    /// A service that restarted once a week ago and has been up ever since is well.
+    ///
+    /// `NRestarts` is cumulative and never resets, so the old rule of "restarts > 0 means
+    /// degraded" could never clear. `carl-aec` was killed on the 15th and still read degraded on
+    /// the 23rd, having worked the whole time. An alert that cannot clear is one somebody learns
+    /// to ignore.
+    #[test]
+    fn a_unit_that_has_settled_since_its_restart_reads_healthy_again() {
+        let u = parse_show(
+            "carl-aec",
+            "ActiveState=active\nSubState=running\nNRestarts=3\nExecMainStartTimestampMonotonic=1000000\n",
+        );
+        // Machine up for a day, service started a second in: it has been up all day.
+        assert_eq!(u.health(86_400.0), Health::Healthy);
+        // And the count is still visible, so nothing is hidden by calling it well.
+        assert!(u.summary().contains("restarted 3 times"), "{}", u.summary());
+    }
+
+    /// A service that has just come back from a restart has not proved anything yet.
+    #[test]
+    fn a_unit_that_restarted_moments_ago_is_still_degraded() {
+        let u = parse_show(
+            "carl-listen",
+            "ActiveState=active\nSubState=running\nNRestarts=2\nExecMainStartTimestampMonotonic=86340000000\n",
+        );
+        // Started a minute before now, so it is well short of an hour.
+        assert_eq!(u.health(86_400.0), Health::Degraded);
     }
 
     /// The case the whole restart count exists for. Active is not the same as well.
@@ -216,7 +265,7 @@ mod tests {
             "carl-listen",
             "ActiveState=active\nSubState=running\nNRestarts=7\n",
         );
-        assert_eq!(u.health(), Health::Degraded);
+        assert_eq!(u.health(0.0), Health::Degraded);
         assert!(u.summary().contains("restarted 7 times"), "{}", u.summary());
     }
 
@@ -224,24 +273,24 @@ mod tests {
     #[test]
     fn a_stopped_unit_is_blocked_and_a_failed_one_is_failed() {
         let stopped = parse_show("x", "ActiveState=inactive\nSubState=dead\n");
-        assert_eq!(stopped.health(), Health::Blocked);
+        assert_eq!(stopped.health(0.0), Health::Blocked);
         assert_eq!(stopped.summary(), "stopped");
 
         let broken = parse_show("x", "ActiveState=failed\nSubState=failed\n");
-        assert_eq!(broken.health(), Health::Failed);
+        assert_eq!(broken.health(0.0), Health::Failed);
     }
 
     #[test]
     fn a_unit_still_coming_up_is_degraded_rather_than_failed() {
         let starting = parse_show("x", "ActiveState=activating\nSubState=start\n");
-        assert_eq!(starting.health(), Health::Degraded);
+        assert_eq!(starting.health(0.0), Health::Degraded);
     }
 
     /// Silence from systemd is not a claim about the service.
     #[test]
     fn no_answer_from_systemd_is_unknown_rather_than_failed() {
         let nothing = parse_show("x", "");
-        assert_eq!(nothing.health(), Health::Unknown);
+        assert_eq!(nothing.health(0.0), Health::Unknown);
         assert_eq!(nothing.main_pid, None);
         assert_eq!(nothing.restarts, None);
     }
