@@ -294,6 +294,30 @@ fn main() -> Result<()> {
             // No voice brief here. This is being read, not heard, and one or two sentences is
             // the wrong shape for a terminal.
             let answer = turn::stream(&home, &thread, &said, None, None, &mut |t| {
+                // Notes go straight out, dimmed, and are never accumulated. Only the words are
+                // the answer, so only the words are stripped, printed and remembered.
+                let t = match t {
+                    carl::Say::Words(t) => t,
+                    carl::Say::Thinking(t) => {
+                        let _ = write!(out, "\x1b[2m{t}\x1b[0m");
+                        let _ = out.flush();
+                        return carl::Flow::Continue;
+                    }
+                    carl::Say::Doing { tool, detail } => {
+                        let _ = write!(
+                            out,
+                            "\x1b[2m{}\x1b[0m",
+                            carl::claude::doing_line(tool, detail)
+                        );
+                        let _ = out.flush();
+                        return carl::Flow::Continue;
+                    }
+                    carl::Say::Refused { tool, why } => {
+                        let _ = write!(out, "{}", carl::claude::refusal_line(tool, why));
+                        let _ = out.flush();
+                        return carl::Flow::Continue;
+                    }
+                };
                 seen.push_str(t);
                 let visible = carl::remember::split(&seen).text;
                 // Only ever appends, and only on a character boundary. Stripping a note can

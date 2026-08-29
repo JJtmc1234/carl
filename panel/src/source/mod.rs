@@ -74,6 +74,15 @@ pub enum PanelEvent {
         /// True while more is coming. The panel shows a caret and does not treat it as final.
         streaming: bool,
     },
+    /// Part of Carl's reasoning, as he produces it.
+    ///
+    /// Its own event rather than more `CarlSaid`, because the panel has to be able to put it
+    /// somewhere other than the reply. Folded into the answer it reads as Carl talking to
+    /// himself mid sentence, which is exactly what it looked like before there was a frame
+    /// for it.
+    CarlThinking { text: String },
+    /// A tool Carl has just picked up, kept apart so it can be counted and laid out.
+    CarlDoing { tool: String, detail: String },
     /// JJ's own message, echoed back once the backend has it.
     JjSaid(String),
     DecisionRaised(Box<crate::model::Decision>),

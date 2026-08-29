@@ -34,7 +34,7 @@ const TICK: std::time::Duration = std::time::Duration::from_millis(100);
 /// stale fragment is survivable. Carl never speaking again is not.
 const DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
-use super::{Answer, Chunk, Flow, Runner, chunk_of};
+use super::{Answer, Chunk, Flow, Runner, Say, chunk_of};
 use crate::{Error, Result, SessionId};
 
 pub struct Session {
@@ -151,7 +151,7 @@ impl Session {
     pub fn ask(
         &mut self,
         prompt: &str,
-        on_text: &mut dyn FnMut(&str) -> Flow,
+        on_text: &mut dyn FnMut(Say<'_>) -> Flow,
         while_waiting: &mut dyn FnMut() -> Flow,
     ) -> Result<Answer> {
         if prompt.trim().is_empty() {
@@ -190,8 +190,11 @@ impl Session {
                 // Said out loud rather than swallowed. The person who can widen the allow list
                 // is the one reading this, and until now the refusal never left the transcript.
                 Ok(Chunk::Refused { tool, why }) => {
-                    let line = crate::claude::refusal_line(&tool, &why);
-                    if on_text(&line) == Flow::Stop {
+                    if on_text(Say::Refused {
+                        tool: &tool,
+                        why: &why,
+                    }) == Flow::Stop
+                    {
                         break;
                     }
                 }
@@ -199,14 +202,24 @@ impl Session {
                 // working, not part of the answer, and it must not end up in the transcript or
                 // be spoken out loud.
                 Ok(Chunk::Doing { tool, detail }) => {
-                    let line = crate::claude::doing_line(&tool, &detail);
-                    if on_text(&line) == Flow::Stop {
+                    if on_text(Say::Doing {
+                        tool: &tool,
+                        detail: &detail,
+                    }) == Flow::Stop
+                    {
+                        break;
+                    }
+                }
+                // Shown as it happens and kept out of `said` for the same reason as a tool
+                // note. Reasoning is not the reply.
+                Ok(Chunk::Thinking(t)) => {
+                    if on_text(Say::Thinking(&t)) == Flow::Stop {
                         break;
                     }
                 }
                 Ok(Chunk::Text(t)) => {
                     said.push_str(&t);
-                    if on_text(&t) == Flow::Stop {
+                    if on_text(Say::Words(&t)) == Flow::Stop {
                         return Ok(self.abandon(said));
                     }
                 }
@@ -253,7 +266,9 @@ impl Session {
         while std::time::Instant::now() < until {
             match self.chunks.recv_timeout(TICK) {
                 // Nobody is listening to this turn any more, so a refusal in it is history.
-                Ok(Chunk::Refused { .. }) | Ok(Chunk::Doing { .. }) => continue,
+                Ok(Chunk::Refused { .. }) | Ok(Chunk::Doing { .. }) | Ok(Chunk::Thinking(_)) => {
+                    continue;
+                }
                 Ok(Chunk::Final(_)) => break,
                 Ok(Chunk::Text(_)) => {}
                 Err(RecvTimeoutError::Timeout) => {}

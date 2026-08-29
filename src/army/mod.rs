@@ -242,7 +242,11 @@ fn run_with_deadline(
     let answer = open.ask(
         instruction,
         &mut |chunk| {
-            said.push_str(chunk);
+            // The words only. An agent's transcript is what it said, not its reasoning or the
+            // tools it reached for on the way.
+            if let Some(words) = chunk.words() {
+                said.push_str(words);
+            }
             crate::claude::Flow::Continue
         },
         &mut || {

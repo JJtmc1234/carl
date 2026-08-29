@@ -184,6 +184,26 @@ pub struct Turn {
     pub text: String,
     /// True while the text is still arriving.
     pub streaming: bool,
+    /// Carl's reasoning for this turn, in the order he produced it.
+    ///
+    /// Held apart from `text` rather than folded into it. It is not the answer, it must never
+    /// reach the transcript, and it is the thing a reader wants collapsed by default and open
+    /// when an answer is taking a suspiciously long time.
+    pub thinking: String,
+    /// The tools picked up during this turn, in order, with duplicates kept.
+    ///
+    /// Kept as a list rather than a rendered string so the panel can count them. Twelve reads
+    /// in a row is a fact about what Carl is doing, and a paragraph cannot be counted.
+    pub doing: Vec<ToolCall>,
+}
+
+/// One tool call, as the stream reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    /// `Bash`, `Read`, `Grep`, as the CLI names it.
+    pub tool: String,
+    /// The command or the path. Empty when the call carried neither.
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

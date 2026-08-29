@@ -614,12 +614,11 @@ fn hand_objective_down(
     let asked = crate::army::chain::objective::ask_which_lead(text);
     let thread = ThreadId::new(THREAD).map_err(|e| e.to_string())?;
 
-    let answer = crate::turn::stream(home, &thread, &asked, None, None, &mut |chunk| match send(
-        out,
-        &Frame::to(None, Reply::Speaking { text: chunk.into() }),
-    ) {
-        Ok(()) => crate::claude::Flow::Continue,
-        Err(_) => crate::claude::Flow::Stop,
+    let answer = crate::turn::stream(home, &thread, &asked, None, None, &mut |chunk| {
+        match send(out, &Frame::to(None, frame_for(chunk))) {
+            Ok(()) => crate::claude::Flow::Continue,
+            Err(_) => crate::claude::Flow::Stop,
+        }
     })
     .map_err(|e| e.to_string())?;
 
@@ -693,7 +692,7 @@ fn ask_agent(
         &Frame::to(
             None,
             Reply::Speaking {
-                text: format!("[{agent}] thinking...\n"),
+                text: format!("[{agent}]\n"),
             },
         ),
     );
@@ -704,8 +703,15 @@ fn ask_agent(
     // tool name. With the tools last, the message was swallowed and `claude` exited saying no
     // input was given at all, which reached JJ as "miles did not answer". Ordering the flags to
     // avoid it works but is one edit away from breaking again. Stdin cannot be eaten by a flag.
+    // Streamed rather than waited for. The blocking form sent one "thinking..." and then
+    // nothing at all until the whole answer landed, so an agent reading forty files and an
+    // agent that had wedged looked exactly alike for as long as it took.
     let mut cmd = std::process::Command::new("claude");
     cmd.arg("-p")
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--include-partial-messages")
+        .arg("--verbose")
         .arg("--append-system-prompt")
         .arg(&brief)
         .arg("--permission-mode")
@@ -726,16 +732,51 @@ fn ask_agent(
             .ok_or_else(|| "claude gave us no stdin to write to".to_string())?;
         pipe.write_all(said.as_bytes()).map_err(|e| e.to_string())?;
     }
+    // Read here rather than on a thread. Nothing else is waiting on this connection, and the
+    // child keeps writing into the pipe while a frame is being sent.
+    let mut said = String::new();
+    if let Some(pipe) = child.stdout.take() {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(pipe)
+            .lines()
+            .map_while(std::result::Result::ok)
+        {
+            let Some(chunk) = crate::claude::chunk_of(&line) else {
+                continue;
+            };
+            let frame = match chunk {
+                crate::claude::Chunk::Text(t) => {
+                    said.push_str(&t);
+                    Reply::Speaking { text: t }
+                }
+                crate::claude::Chunk::Thinking(t) => Reply::Thinking { text: t },
+                crate::claude::Chunk::Doing { tool, detail } => Reply::Doing { tool, detail },
+                crate::claude::Chunk::Refused { tool, why } => Reply::Speaking {
+                    text: crate::claude::refusal_line(&tool, &why),
+                },
+                // The envelope repeats the whole answer. Kept only as the fallback for a
+                // stream that produced no text deltas at all, never appended to what arrived.
+                crate::claude::Chunk::Final(a) => {
+                    if said.trim().is_empty() {
+                        said = a.text.clone();
+                        Reply::Speaking { text: a.text }
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            if send(out, &Frame::to(None, frame)).is_err() {
+                // The panel hung up. Nothing is reading the rest of this.
+                break;
+            }
+        }
+    }
     let done = child.wait_with_output().map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&done.stdout).trim().to_string();
-    if text.is_empty() {
+    let said = said.trim().to_string();
+    if said.is_empty() {
         return Err(String::from_utf8_lossy(&done.stderr).trim().to_string());
     }
-    let _ = send(
-        out,
-        &Frame::to(None, Reply::Speaking { text: text.clone() }),
-    );
-    Ok(text)
+    Ok(said)
 }
 
 /// Calls one agent needs that its rank does not imply.
@@ -756,10 +797,28 @@ fn extra_tools_for(agent: &str) -> Vec<&'static str> {
     }
 }
 
+/// Turns one piece of a turn into the frame that carries it.
+///
+/// One place, so the panel's two streaming paths cannot drift into showing different things.
+/// A refusal keeps its prose because it is addressed to a person and says what to do about it.
+fn frame_for(say: crate::claude::Say<'_>) -> Reply {
+    match say {
+        crate::claude::Say::Words(t) => Reply::Speaking { text: t.into() },
+        crate::claude::Say::Thinking(t) => Reply::Thinking { text: t.into() },
+        crate::claude::Say::Doing { tool, detail } => Reply::Doing {
+            tool: tool.into(),
+            detail: detail.into(),
+        },
+        crate::claude::Say::Refused { tool, why } => Reply::Speaking {
+            text: crate::claude::refusal_line(tool, why),
+        },
+    }
+}
+
 fn speak(home: &Path, said: &str, out: &mut UnixStream, id: Option<String>) -> Result<Reply> {
     let thread = ThreadId::new(THREAD)?;
-    let answer = crate::turn::stream(home, &thread, said, None, None, &mut |text| {
-        match send(out, &Frame::to(None, Reply::Speaking { text: text.into() })) {
+    let answer = crate::turn::stream(home, &thread, said, None, None, &mut |chunk| {
+        match send(out, &Frame::to(None, frame_for(chunk))) {
             Ok(()) => crate::claude::Flow::Continue,
             // The panel hung up mid answer. Stopping is right: the rest is going nowhere.
             Err(_) => crate::claude::Flow::Stop,

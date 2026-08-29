@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::claude::{Answer, Flow, Pool, Runner, Turn};
+use crate::claude::{Answer, Flow, Pool, Runner, Say, Turn};
 use crate::{Area, Camera, ThreadId};
 use anyhow::{Context, Result};
 
@@ -90,7 +90,7 @@ pub fn stream(
     said: &str,
     sent: Option<&str>,
     extra: Option<&str>,
-    on_text: &mut dyn FnMut(&str) -> Flow,
+    on_text: &mut dyn FnMut(Say<'_>) -> Flow,
 ) -> Result<Answer> {
     // The panel and the terminal are JJ's own surfaces, reached through a socket in a 0700
     // directory or through his own keyboard. They read the `jj` permits. Slack reads `shared`,
@@ -153,7 +153,7 @@ pub struct Asking<'a> {
 /// question instead.
 pub fn stream_in(
     asking: Asking<'_>,
-    on_text: &mut dyn FnMut(&str) -> Flow,
+    on_text: &mut dyn FnMut(Say<'_>) -> Flow,
     // Called while nothing is arriving, so a turn can be given up on before its first word.
     while_waiting: &mut dyn FnMut() -> Flow,
 ) -> Result<Answer> {
@@ -191,7 +191,7 @@ pub fn stream_in(
 pub fn look_in(
     asking: Asking<'_>,
     area: Area,
-    on_text: &mut dyn FnMut(&str) -> Flow,
+    on_text: &mut dyn FnMut(Say<'_>) -> Flow,
     while_waiting: &mut dyn FnMut() -> Flow,
 ) -> Result<Answer> {
     // The picture is described to Carl and never recorded, so anything the caller wanted said

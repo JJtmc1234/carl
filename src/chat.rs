@@ -260,7 +260,12 @@ fn answer(
     let mut seen = String::new();
     let mut pace = Pace::started_with(0);
 
-    let mut show = |chunk: &str| -> carl::Flow {
+    let mut show = |chunk: carl::Say<'_>| -> carl::Flow {
+        // Words only. A channel gets the answer, and Carl's reasoning is neither addressed to
+        // it nor something a reader can do anything with.
+        let Some(chunk) = chunk.words() else {
+            return carl::Flow::Continue;
+        };
         seen.push_str(chunk);
         // Stripped before showing, not after. A half written [remember] line appearing in a
         // channel and then vanishing is worse than never streaming at all.

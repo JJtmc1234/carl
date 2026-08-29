@@ -166,7 +166,7 @@ impl LivePanel {
     pub fn command_streaming(
         &mut self,
         command: PanelCommand,
-        on_text: &mut dyn FnMut(&str),
+        on_text: &mut dyn FnMut(crate::panel::client::Heard<'_>),
     ) -> Result<Done> {
         let mut client = PanelClient::connect(&self.socket)?;
         let done = client.command_streaming(command, on_text)?;

@@ -38,6 +38,21 @@ pub struct PanelClient {
     next_id: u64,
 }
 
+/// One piece of a turn arriving over the socket.
+///
+/// The client's mirror of `claude::Say`. A separate type on purpose: this side owns whatever
+/// the wire happens to carry, and collapsing the two would make every new wire frame a change
+/// to the thing that talks to the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Heard<'a> {
+    /// Part of the answer.
+    Words(&'a str),
+    /// Part of Carl's reasoning.
+    Thinking(&'a str),
+    /// A tool he has picked up.
+    Doing { tool: &'a str, detail: &'a str },
+}
+
 impl PanelClient {
     /// Opens a connection. Fails if nothing is listening.
     pub fn connect(socket: &Path) -> Result<Self> {
@@ -93,13 +108,18 @@ impl PanelClient {
     pub fn command_streaming(
         &mut self,
         command: PanelCommand,
-        on_text: &mut dyn FnMut(&str),
+        on_text: &mut dyn FnMut(Heard<'_>),
     ) -> Result<Done> {
         let id = self.send(Ask::Command { command })?;
         loop {
             let frame = self.read()?;
             match frame.body {
-                Reply::Speaking { text } => on_text(&text),
+                Reply::Speaking { text } => on_text(Heard::Words(&text)),
+                Reply::Thinking { text } => on_text(Heard::Thinking(&text)),
+                Reply::Doing { tool, detail } => on_text(Heard::Doing {
+                    tool: &tool,
+                    detail: &detail,
+                }),
                 Reply::Done { seq, what } => return Ok(Done { seq, what }),
                 Reply::Refused { why } => return Err(Error::Refused(why)),
                 other => return Err(unexpected_for(&id, "done", &other)),

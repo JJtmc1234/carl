@@ -88,7 +88,9 @@ fn one_question_gets_one_answer() {
         .ask(
             "anything",
             &mut |t| {
-                heard.push_str(t);
+                if let Some(words) = t.words() {
+                    heard.push_str(words);
+                }
                 Flow::Continue
             },
             &mut || Flow::Continue,
@@ -113,7 +115,9 @@ fn a_second_question_gets_its_own_answer() {
             .ask(
                 "again",
                 &mut |t| {
-                    heard.push_str(t);
+                    if let Some(words) = t.words() {
+                    heard.push_str(words);
+                }
                     Flow::Continue
                 },
                 &mut || Flow::Continue,
@@ -184,7 +188,9 @@ fn the_next_question_is_not_answered_with_the_abandoned_one() {
         .ask(
             "now this",
             &mut |t| {
-                heard.push_str(t);
+                if let Some(words) = t.words() {
+                    heard.push_str(words);
+                }
                 Flow::Continue
             },
             &mut || Flow::Continue,
@@ -217,7 +223,9 @@ fn a_turn_can_still_be_cut_off_once_it_has_started() {
         .ask(
             "go on",
             &mut |t| {
-                heard.push_str(t);
+                if let Some(words) = t.words() {
+                    heard.push_str(words);
+                }
                 if heard.contains("two") {
                     Flow::Stop
                 } else {

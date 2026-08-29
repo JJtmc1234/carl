@@ -55,6 +55,7 @@ pub fn draw(app: &mut App, ui: &mut Ui, asked: usize) {
                             ui,
                             who,
                             color,
+                            turn,
                             &text_of(turn, tick),
                             widgets::ago(now, turn.at),
                         );
@@ -65,10 +66,13 @@ pub fn draw(app: &mut App, ui: &mut Ui, asked: usize) {
 
 /// What a turn reads as, including while it is still arriving.
 ///
-/// The old version appended a full block, `\u{2588}`. Against text that is a fat cursor, and
-/// against Carl's opening empty turn it is a lone square sitting under his name with no
-/// explanation, which is what JJ was looking at. So an answer that has not started says it is
-/// thinking, and one that is arriving gets a thin bar rather than a brick.
+/// The caret is `|`, and the reason is a font rather than a taste.
+///
+/// It was `\u{2588}` and then `\u{258f}`, and neither was ever drawn. Ubuntu-Light, the
+/// proportional face this text is rendered in, contains no Block Elements at all, so egui drew
+/// its missing glyph box for both and JJ saw a square under Carl's name. Hack has them and this
+/// text is not in Hack. Checking the font rather than picking a different block is the whole
+/// fix: `|` is ASCII and is in every font there has ever been.
 ///
 /// `tick` is the running time in seconds, used only to animate. A still indicator cannot be
 /// told from a stuck one.
@@ -77,16 +81,32 @@ pub(crate) fn text_of(turn: &crate::model::Turn, tick: f64) -> String {
         return turn.text.clone();
     }
     if turn.text.trim().is_empty() {
-        // Nothing yet. Say so, and move, so a wedged process looks different from a busy one.
+        // Nothing of the answer yet. The reasoning and the tool list are drawn above this and
+        // usually say far more, so this only covers the moment before even those arrive.
         let dots = ".".repeat(1 + (tick * 2.0) as usize % 3);
-        return format!("thinking{dots}");
+        return format!("working{dots}");
     }
-    // A thin bar, half the width of the old block, so it reads as a cursor and not a glyph.
-    format!("{}\u{258f}", turn.text)
+    // Blinking, so a live stream and a stalled one look different. The off frame is a space
+    // rather than nothing, so the text does not shift by a character twice a second.
+    match (tick * 2.0) as usize % 2 {
+        0 => format!("{}|", turn.text),
+        _ => format!("{} ", turn.text),
+    }
 }
 
 /// One turn, as a block with the speaker's colour down its edge.
-fn block(ui: &mut Ui, who: &str, color: eframe::egui::Color32, text: &str, when: String) {
+///
+/// The reasoning and the tool list go above the answer, in a quieter colour. Above, because
+/// they are produced first and reading them after the reply is pointless. Quieter, because
+/// neither is the answer and the reply has to stay the thing your eye lands on.
+fn block(
+    ui: &mut Ui,
+    who: &str,
+    color: eframe::egui::Color32,
+    turn: &crate::model::Turn,
+    text: &str,
+    when: String,
+) {
     let inner = eframe::egui::Frame::none()
         .fill(theme::RAISED)
         .rounding(theme::CARD_CORNER)
@@ -104,6 +124,7 @@ fn block(ui: &mut Ui, who: &str, color: eframe::egui::Color32, text: &str, when:
                 });
             });
             ui.add_space(4.0);
+            super::working::draw(ui, turn, turn.at);
             ui.add(Label::new(
                 RichText::new(text).font(theme::prose()).color(theme::TEXT),
             ));

@@ -47,6 +47,8 @@ fn every_source_lands_in_one_list_newest_first() {
         from: Speaker::Carl,
         text: "Handed to Adrian.".into(),
         streaming: false,
+        thinking: String::new(),
+        doing: Vec::new(),
     }];
 
     let beats = recent(&s, 10);
@@ -180,6 +182,8 @@ fn a_long_turn_is_cut_and_says_it_was_cut() {
         from: Speaker::Jj,
         text: "word ".repeat(80),
         streaming: false,
+        thinking: String::new(),
+        doing: Vec::new(),
     }];
     let line = &recent(&s, 1)[0].what;
     assert!(line.ends_with("..."), "{line}");

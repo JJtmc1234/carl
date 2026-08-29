@@ -21,7 +21,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use super::{Answer, Flow, Runner, Session};
+use super::{Answer, Flow, Runner, Say, Session};
 use crate::{Result, SessionId, ThreadId};
 
 /// How many conversations to keep open at once.
@@ -76,7 +76,7 @@ impl Pool {
         session: &SessionId,
         resume: bool,
         prompt: &str,
-        on_text: &mut dyn FnMut(&str) -> Flow,
+        on_text: &mut dyn FnMut(Say<'_>) -> Flow,
         while_waiting: &mut dyn FnMut() -> Flow,
     ) -> Result<Answer> {
         self.ensure(thread, session, resume)?;

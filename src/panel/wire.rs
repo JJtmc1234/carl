@@ -130,6 +130,23 @@ pub enum Reply {
     Speaking {
         text: String,
     },
+    /// Part of Carl's reasoning, as he produces it.
+    ///
+    /// A frame of its own rather than more `Speaking`, because it is not the answer and a panel
+    /// has to be able to put it somewhere else. Merged into the reply it would read as Carl
+    /// talking to himself in the middle of a sentence.
+    Thinking {
+        text: String,
+    },
+    /// A tool Carl has just picked up.
+    ///
+    /// Split into the tool and the one detail worth reading rather than a pre-formatted line,
+    /// so a panel can lay it out as it likes and a reader can count tool calls. A sentence
+    /// cannot be counted, which is the same reason `PanelEvent` is a closed list.
+    Doing {
+        tool: String,
+        detail: String,
+    },
     /// Fresh machine readings, pushed because nothing else would have said.
     ///
     /// **This frame carries no sequence, deliberately.** Army events are ordered by the journal

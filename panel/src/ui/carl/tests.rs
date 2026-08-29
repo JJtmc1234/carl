@@ -53,21 +53,21 @@ mod thinking_tests {
             from: Speaker::Carl,
             text: text.into(),
             streaming,
+            thinking: String::new(),
+            doing: Vec::new(),
         }
     }
 
-    /// JJ saw a lone square under Carl's name and asked what it was.
+    /// JJ saw a lone square under Carl's name, twice, and asked what it was.
     ///
-    /// It was `\u{2588}`, a full block, appended as a cursor. Against text it reads as a fat
-    /// caret. Against Carl's opening empty turn it is a brick with no explanation.
+    /// First it was `\u{2588}` and then `\u{258f}`, and swapping one for the other changed
+    /// nothing, because the square was never the character. Ubuntu-Light is the proportional
+    /// face this text is drawn in and it contains no Block Elements at all, so egui drew its
+    /// missing glyph box both times. Only ASCII is safe here.
     #[test]
-    fn an_answer_that_has_not_started_says_it_is_thinking() {
+    fn an_answer_that_has_not_started_says_it_is_working() {
         let out = text_of(&turn("", true), 0.0);
-        assert!(out.starts_with("thinking"), "{out:?}");
-        assert!(
-            !out.contains('\u{2588}'),
-            "the block is still there: {out:?}"
-        );
+        assert!(out.starts_with("working"), "{out:?}");
     }
 
     /// A still indicator cannot be told from a stuck one.
@@ -79,13 +79,37 @@ mod thinking_tests {
         assert!(a != b || b != c, "it never changes: {a:?} {b:?} {c:?}");
     }
 
-    /// Once words are arriving the cursor is a thin bar, not a brick.
+    /// Once words are arriving the cursor is an ASCII bar.
     #[test]
-    fn an_arriving_answer_gets_a_thin_cursor() {
+    fn an_arriving_answer_gets_an_ascii_cursor() {
         let out = text_of(&turn("belt rate is", true), 0.0);
         assert!(out.starts_with("belt rate is"));
-        assert!(out.ends_with('\u{258f}'), "{out:?}");
-        assert!(!out.contains('\u{2588}'));
+        assert!(out.ends_with('|'), "{out:?}");
+    }
+
+    /// The real bug, stated as a rule. Any glyph outside ASCII is a gamble on a font that has
+    /// already been lost twice, so nothing here may reach for one.
+    #[test]
+    fn nothing_the_conversation_draws_leaves_ascii() {
+        for text in ["", "belt rate is", "done"] {
+            for streaming in [true, false] {
+                for tick in [0.0, 0.4, 0.9, 1.6] {
+                    let out = text_of(&turn(text, streaming), tick);
+                    let stray: Vec<char> = out.chars().filter(|c| !c.is_ascii()).collect();
+                    assert!(stray.is_empty(), "non ascii {stray:?} in {out:?}");
+                }
+            }
+        }
+    }
+
+    /// The blink must not move the text sideways. An off frame that is simply shorter makes
+    /// the whole paragraph twitch twice a second.
+    #[test]
+    fn the_blink_keeps_the_width() {
+        let on = text_of(&turn("steady", true), 0.0);
+        let off = text_of(&turn("steady", true), 0.6);
+        assert_ne!(on, off, "it never blinks");
+        assert_eq!(on.chars().count(), off.chars().count(), "{on:?} {off:?}");
     }
 
     /// A finished answer has no cursor at all.

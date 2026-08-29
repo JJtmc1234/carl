@@ -93,7 +93,27 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
             said_by: Some(carl::brief::OWNER),
         };
 
-        let mut on_text = |chunk: &str| {
+        let mut on_text = |chunk: carl::Say<'_>| {
+            // Notes are printed and never kept. Only the words are the answer, so only the
+            // words go into `whole`, which is what gets remembered and reprinted.
+            let chunk = match chunk {
+                carl::Say::Words(t) => t,
+                carl::Say::Thinking(t) => {
+                    let _ = write!(out, "\x1b[2m{t}\x1b[0m");
+                    let _ = out.flush();
+                    return Flow::Continue;
+                }
+                carl::Say::Doing { tool, detail } => {
+                    let _ = write!(out, "\x1b[2m{}\x1b[0m", carl::claude::doing_line(tool, detail));
+                    let _ = out.flush();
+                    return Flow::Continue;
+                }
+                carl::Say::Refused { tool, why } => {
+                    let _ = write!(out, "{}", carl::claude::refusal_line(tool, why));
+                    let _ = out.flush();
+                    return Flow::Continue;
+                }
+            };
             whole.push_str(chunk);
             let visible = carl::remember::split(&whole).text;
 

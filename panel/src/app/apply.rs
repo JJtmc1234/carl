@@ -89,9 +89,13 @@ impl App {
                 from: Speaker::Jj,
                 text,
                 streaming: false,
+                thinking: String::new(),
+                doing: Vec::new(),
             }),
 
             PanelEvent::CarlSaid { text, streaming } => self.carl_said(&text, streaming),
+            PanelEvent::CarlThinking { text } => self.carl_thinking(&text),
+            PanelEvent::CarlDoing { tool, detail } => self.carl_doing(&tool, &detail),
 
             PanelEvent::DecisionRaised(decision) => {
                 let id = decision.id.clone();
@@ -231,9 +235,53 @@ impl App {
                 from: Speaker::Carl,
                 text: text.to_string(),
                 streaming,
+                thinking: String::new(),
+                doing: Vec::new(),
             });
         }
         self.conversation_at_end = true;
+    }
+
+    /// Adds to the reasoning of the turn Carl is producing.
+    ///
+    /// Opens a turn if none is open, because reasoning normally arrives before the first word
+    /// of the answer. Requiring words first would mean the reasoning had nowhere to go for
+    /// exactly the stretch it is most wanted.
+    fn carl_thinking(&mut self, text: &str) {
+        self.open_carl_turn().thinking.push_str(text);
+        self.conversation_at_end = true;
+    }
+
+    /// Records a tool call against the turn Carl is producing.
+    fn carl_doing(&mut self, tool: &str, detail: &str) {
+        self.open_carl_turn().doing.push(crate::model::ToolCall {
+            tool: tool.to_string(),
+            detail: detail.to_string(),
+        });
+        self.conversation_at_end = true;
+    }
+
+    /// The turn Carl is currently producing, started if there is not one.
+    fn open_carl_turn(&mut self) -> &mut Turn {
+        let open = self
+            .snapshot
+            .conversation
+            .last()
+            .is_some_and(|t| t.from == Speaker::Carl && t.streaming);
+        if !open {
+            self.snapshot.conversation.push(Turn {
+                at: self.snapshot.at,
+                from: Speaker::Carl,
+                text: String::new(),
+                streaming: true,
+                thinking: String::new(),
+                doing: Vec::new(),
+            });
+        }
+        self.snapshot
+            .conversation
+            .last_mut()
+            .expect("just pushed one if it was missing")
     }
 
     /// Marks a row as just changed, so the change can be seen landing.

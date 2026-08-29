@@ -15,11 +15,54 @@ use std::sync::mpsc::{Receiver, channel};
 use super::{Answer, Runner, Turn, check, parse};
 use crate::{Error, Result};
 
+/// One piece of a turn on its way to whoever is watching, and what kind of piece it is.
+///
+/// Words, reasoning and tool calls all arrive on the same channel and are emphatically not the
+/// same thing. The speakers want only the words. A screen wants all three, told apart, because
+/// the whole value of the other two is that they look different from the answer.
+///
+/// Before this existed the channel was a bare `&str` and the working notes were formatted into
+/// it. That reads fine in a terminal and is wrong everywhere else: the voice had no way to know
+/// it was about to read a file path out loud, and the panel had no way to style a note as
+/// anything other than more of Carl's sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Say<'a> {
+    /// The answer itself. The only kind that belongs in the transcript or in the speakers.
+    Words(&'a str),
+    /// Carl working out what to say.
+    ///
+    /// Never spoken and never added to the answer. It is not addressed to anybody, so reading
+    /// it out loud is both wrong and roughly twice as long as the reply.
+    Thinking(&'a str),
+    /// A tool he has just picked up.
+    Doing { tool: &'a str, detail: &'a str },
+    /// A tool call refused for want of permission.
+    Refused { tool: &'a str, why: &'a str },
+}
+
+impl Say<'_> {
+    /// The words, if this is words. `None` for every kind of note.
+    ///
+    /// The one call a surface that only wants the answer has to make, so forgetting to filter
+    /// is a compile error rather than Carl narrating his own reasoning.
+    pub fn words(&self) -> Option<&str> {
+        match self {
+            Say::Words(t) => Some(t),
+            _ => None,
+        }
+    }
+}
+
 /// A piece of an answer as it arrives.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Chunk {
     /// More words.
     Text(String),
+    /// Reasoning, as it is produced.
+    ///
+    /// Dropped on the floor until now. It is the most useful thing on screen while a long
+    /// answer is being worked out, and it was the one part of the stream nothing could see.
+    Thinking(String),
     /// The final envelope, which carries the session id and the cost.
     Final(Box<Answer>),
     /// A tool call that was refused for want of permission.
@@ -65,7 +108,7 @@ impl Runner {
     pub fn ask_streaming(
         &self,
         turn: &Turn<'_>,
-        on_text: &mut dyn FnMut(&str) -> Flow,
+        on_text: &mut dyn FnMut(Say<'_>) -> Flow,
     ) -> Result<Answer> {
         check(turn)?;
         std::fs::create_dir_all(turn.workdir)?;
@@ -123,21 +166,34 @@ impl Runner {
                 // Put in front of whoever is watching, for the same reason as in a session: the
                 // only person who can widen the allow list is the one reading the answer.
                 Chunk::Refused { tool, why } => {
-                    let line = crate::claude::refusal_line(&tool, &why);
-                    if on_text(&line) == Flow::Stop {
+                    if on_text(Say::Refused {
+                        tool: &tool,
+                        why: &why,
+                    }) == Flow::Stop
+                    {
                         break;
                     }
                 }
                 // Shown, never kept. A note about working is not part of the answer.
                 Chunk::Doing { tool, detail } => {
-                    let line = crate::claude::doing_line(&tool, &detail);
-                    if on_text(&line) == Flow::Stop {
+                    if on_text(Say::Doing {
+                        tool: &tool,
+                        detail: &detail,
+                    }) == Flow::Stop
+                    {
+                        break;
+                    }
+                }
+                // Same rule as a tool note. Reasoning is shown and never kept, so an
+                // interrupted answer does not have Carl's working in the transcript.
+                Chunk::Thinking(t) => {
+                    if on_text(Say::Thinking(&t)) == Flow::Stop {
                         break;
                     }
                 }
                 Chunk::Text(t) => {
                     said.push_str(&t);
-                    if on_text(&t) == Flow::Stop {
+                    if on_text(Say::Words(&t)) == Flow::Stop {
                         stopped = true;
                         break;
                     }
@@ -199,10 +255,15 @@ pub fn chunk_of(line: &str) -> Option<Chunk> {
                 return None;
             }
             let delta = event.get("delta")?;
-            if delta.get("type")?.as_str()? != "text_delta" {
-                return None;
+            // Two delta kinds are worth having and they carry their payload under different
+            // keys. `thinking_delta` holds `thinking`, `text_delta` holds `text`.
+            match delta.get("type")?.as_str()? {
+                "text_delta" => Some(Chunk::Text(delta.get("text")?.as_str()?.to_owned())),
+                "thinking_delta" => {
+                    Some(Chunk::Thinking(delta.get("thinking")?.as_str()?.to_owned()))
+                }
+                _ => None,
             }
-            Some(Chunk::Text(delta.get("text")?.as_str()?.to_owned()))
         }
         // What Carl has picked up. The assistant line repeats the whole answer so far, which is
         // why its text is deliberately ignored, but its tool calls are new each time and are
@@ -344,10 +405,48 @@ mod tests {
     }
 
     /// A thinking delta is Claude working, not Claude answering.
+    ///
+    /// It used to be discarded here, which meant no surface could show it even when showing it
+    /// was the point. It is carried now, as its own kind, and the promise that it is never
+    /// spoken is kept where the speaking happens rather than by throwing the data away.
     #[test]
-    fn thinking_is_not_read_out_loud() {
+    fn thinking_is_carried_as_its_own_kind() {
         let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}}"#;
-        assert_eq!(chunk_of(line), None);
+        assert_eq!(chunk_of(line), Some(Chunk::Thinking("hmm".into())));
+    }
+
+    /// The two delta kinds keep their payload under different keys, and reading the wrong one
+    /// yields nothing rather than the other one's text.
+    #[test]
+    fn a_thinking_delta_is_not_confused_with_a_text_delta() {
+        let thinking = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"working"}}}"#;
+        let words = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answer"}}}"#;
+        assert_eq!(chunk_of(thinking), Some(Chunk::Thinking("working".into())));
+        assert_eq!(chunk_of(words), Some(Chunk::Text("answer".into())));
+    }
+
+    /// Only the words belong to the answer. Everything else has to be filtered by a caller,
+    /// and `words()` is the one call that does it.
+    #[test]
+    fn only_words_count_as_the_answer() {
+        assert_eq!(Say::Words("hello").words(), Some("hello"));
+        assert_eq!(Say::Thinking("hmm").words(), None);
+        assert_eq!(
+            Say::Doing {
+                tool: "Bash",
+                detail: "ls"
+            }
+            .words(),
+            None
+        );
+        assert_eq!(
+            Say::Refused {
+                tool: "Bash",
+                why: "no"
+            }
+            .words(),
+            None
+        );
     }
 
     /// An error envelope arrives on the same result line, so it must still be caught.

@@ -40,6 +40,10 @@ enum FromBackend {
     Update(Box<Update>),
     /// A piece of Carl's answer, as it arrives.
     Speaking(String),
+    /// A piece of Carl's reasoning, as it arrives.
+    Thinking(String),
+    /// A tool Carl has just picked up.
+    Doing { tool: String, detail: String },
     /// A command finished, with whether it was accepted.
     Settled(Result<(), String>),
 }
@@ -191,8 +195,21 @@ fn commander(socket: PathBuf, orders: Receiver<Command>, tx: Sender<FromBackend>
 
             let outcome = PanelClient::connect(&socket)
                 .and_then(|mut client| {
-                    let mut sink = |text: &str| {
-                        let _ = tx.send(FromBackend::Speaking(text.to_string()));
+                    let mut sink = |heard: carl::panel::client::Heard<'_>| {
+                        let _ = tx.send(match heard {
+                            carl::panel::client::Heard::Words(t) => {
+                                FromBackend::Speaking(t.to_string())
+                            }
+                            carl::panel::client::Heard::Thinking(t) => {
+                                FromBackend::Thinking(t.to_string())
+                            }
+                            carl::panel::client::Heard::Doing { tool, detail } => {
+                                FromBackend::Doing {
+                                    tool: tool.to_string(),
+                                    detail: detail.to_string(),
+                                }
+                            }
+                        });
                     };
                     client.command_streaming(wire, &mut sink)
                 })
@@ -223,6 +240,17 @@ impl PanelDataSource for LivePanelDataSource {
                         text,
                         streaming: true,
                     });
+                }
+                // Reasoning and tool notes open the turn the same way words do, so the block
+                // exists to hold them before the first word of the answer arrives. That is the
+                // whole point: it is the wait that needed filling.
+                Ok(FromBackend::Thinking(text)) => {
+                    self.speaking = true;
+                    out.push(PanelEvent::CarlThinking { text });
+                }
+                Ok(FromBackend::Doing { tool, detail }) => {
+                    self.speaking = true;
+                    out.push(PanelEvent::CarlDoing { tool, detail });
                 }
                 Ok(FromBackend::Settled(result)) => {
                     // The end of an answer closes the turn, so the caret goes out only when the

@@ -245,6 +245,8 @@ fn opening_state() -> Snapshot {
                 from: Speaker::Jj,
                 text: "The belt throughput numbers in the planner are wrong. Sort it out.".into(),
                 streaming: false,
+                thinking: String::new(),
+                doing: Vec::new(),
             },
             Turn {
                 at: EPOCH + 40,
@@ -254,6 +256,8 @@ fn opening_state() -> Snapshot {
                        when it is claimed."
                     .into(),
                 streaming: false,
+                thinking: String::new(),
+                doing: Vec::new(),
             },
         ],
         decisions: Vec::new(),

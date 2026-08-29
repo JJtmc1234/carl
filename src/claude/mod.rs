@@ -19,7 +19,7 @@ mod session;
 mod stream;
 pub use pool::{KEEP_OPEN, Pool};
 pub use session::Session;
-pub use stream::{Chunk, Flow, chunk_of};
+pub use stream::{Chunk, Flow, Say, chunk_of};
 
 /// One turn: what to say, and which conversation to say it in.
 pub struct Turn<'a> {

@@ -23,6 +23,7 @@ mod beside;
 mod composer;
 mod conversation;
 mod decisions;
+mod working;
 
 #[cfg(test)]
 mod tests;

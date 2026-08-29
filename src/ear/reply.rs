@@ -54,7 +54,14 @@ impl Ear {
         };
 
         let answer = {
-            let mut on_text = |t: &str| narration.feed(t);
+            // Words only, and this is the line that keeps the old promise. Reasoning and
+            // tool notes reach every other surface now, and the speakers are the one place
+            // they must not: nobody wants Carl reading a file path out loud, and his working
+            // is comfortably longer than his answer.
+            let mut on_text = |t: carl::Say<'_>| match t.words() {
+                Some(words) => narration.feed(words),
+                None => carl::Flow::Continue,
+            };
             if carl::needs_screen(question) {
                 turn::look_in(
                     turn::Asking {
