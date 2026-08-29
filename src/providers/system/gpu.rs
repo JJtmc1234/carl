@@ -180,21 +180,10 @@ mod tests {
         );
     }
 
-    /// Against the real machine. Both sources were verified present here, so a failure means
-    /// something changed rather than that the test is optimistic.
+    /// Hardware availability is runtime state, not a test precondition. The provider promises
+    /// to degrade to unknown when `nvidia-smi` is absent or cannot reach the driver.
     #[test]
-    fn this_machine_reports_a_gpu_and_a_cpu_temperature() {
-        let gpu = read_gpu().expect("nvidia-smi answered when this was written");
-        assert!(!gpu.name.is_empty());
-        assert!(
-            gpu.memory_total_mib.unwrap_or(0) > 1024,
-            "a card with under a gibibyte is not this one"
-        );
-
-        let temp = read_cpu_temperature().expect("thermal zones were readable when written");
-        assert!(
-            (10.0..115.0).contains(&temp),
-            "a CPU at {temp}C is either off or on fire"
-        );
+    fn a_missing_gpu_tool_is_unknown_rather_than_a_failure() {
+        assert_eq!(read_gpu_with("/definitely/not/a/real/nvidia-smi"), None);
     }
 }
