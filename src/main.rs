@@ -269,6 +269,28 @@ enum ArmyAction {
         last: usize,
     },
 
+    /// Put an agent the supervisor gave up on back in the ordinary queue.
+    ///
+    /// Giving up is deliberate: six starts that did not stick means starting it again is not the
+    /// fix. `wake` refuses a degraded agent for that reason and the refusal is right. What was
+    /// missing is the way out. A transient fault took all ten agents down on 2026 08 28 and the
+    /// army stayed down for twenty one hours because no command existed to say the cause had
+    /// been looked at.
+    ///
+    /// This clears the verdict and nothing else. It starts no process and promises nothing: the
+    /// supervisor's ordinary policy decides what happens on its next pass.
+    Revive {
+        /// Which agents. All of the given up ones, when left out.
+        agents: Vec<String>,
+        /// Also abandon the recorded conversation so the next start begins a new one.
+        ///
+        /// For when the recorded session names a conversation that no longer exists. Every
+        /// resume then fails the same way forever and reviving alone just repeats the loop.
+        /// The agent keeps its memory folder, which is what continuity actually rests on.
+        #[arg(long)]
+        fresh: bool,
+    },
+
     /// Bring existing memory folders up to the current layout, without touching what is in them.
     ///
     /// `found` refuses a home that already holds an army and there is deliberately no other way
@@ -558,6 +580,62 @@ fn main() -> Result<()> {
                 }
                 for record in &recent {
                     println!("{}", carl::army::survey::line_of(record));
+                }
+                Ok(())
+            }
+
+            ArmyAction::Revive { agents, fresh } => {
+                use carl::army::runtime::revive::{self, Revived};
+
+                // Named agents, or everybody the survey says was given up on. Deriving the
+                // second from the survey rather than from a second scan means the list is
+                // exactly what `carl army status` just showed.
+                let wanted: Vec<String> = match agents.is_empty() {
+                    false => agents,
+                    true => carl::army::survey::everyone(&home)?
+                        .iter()
+                        .filter(|s| {
+                            matches!(
+                                s.runtime.as_ref().map(|r| &r.lifecycle),
+                                Some(carl::army::runtime::Lifecycle::Degraded { .. })
+                            )
+                        })
+                        .map(|s| s.agent.name.to_string())
+                        .collect(),
+                };
+
+                if wanted.is_empty() {
+                    println!("nobody has been given up on.");
+                    return Ok(());
+                }
+
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+
+                let mut cleared = 0usize;
+                for name in &wanted {
+                    match revive::one(&home, name, fresh, now)? {
+                        Revived::Cleared { was } => {
+                            cleared += 1;
+                            println!("  {name:8} back in the queue. It was given up on: {was}");
+                        }
+                        Revived::SessionAbandoned => println!(
+                            "  {name:8} was already in the queue. Its recorded conversation \
+                             is abandoned, so the next start begins a new one"
+                        ),
+                        Revived::NotGivenUp(why) => println!("  {name:8} left alone, {why}"),
+                        Revived::NoRecord => {
+                            println!("  {name:8} has no runtime record, so nothing to undo")
+                        }
+                    }
+                }
+                if cleared > 0 {
+                    println!(
+                        "\n{cleared} cleared. The supervisor decides on its next pass, and it \
+                         will give up again if the cause is still there."
+                    );
                 }
                 Ok(())
             }

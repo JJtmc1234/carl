@@ -75,6 +75,24 @@ impl Runner {
         args.push(if resume { "--resume" } else { "--session-id" }.into());
         args.push(session.to_string());
 
+        // The same three the one shot path passes, and for the same reasons.
+        //
+        // This list is built from scratch rather than through `args_with`, so every flag added
+        // there had to be added here too and none of them were. The long running agents under
+        // the supervisor are the ones that matter most: they ran on whatever model the CLI
+        // defaulted to while their folder said otherwise, could not open the shared memory they
+        // are told to read first, and still held the subagent tool that delegation refuses.
+        if let Some(model) = &self.model {
+            args.push("--model".into());
+            args.push(model.clone());
+        }
+        if let Some(shared) = super::shared_memory() {
+            args.push("--add-dir".into());
+            args.push(shared);
+        }
+        args.push("--disallowedTools".into());
+        args.extend(super::NEVER.iter().map(|s| (*s).to_string()));
+
         if !system.is_empty() {
             args.push("--append-system-prompt".into());
             args.push(system.to_string());
@@ -317,6 +335,82 @@ impl Drop for Session {
         if let Some(r) = self.reader.take() {
             let _ = r.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod session_arg_tests {
+    use super::*;
+    use crate::claude::{NEVER, Runner};
+
+    fn args(runner: &Runner, resume: bool) -> Vec<String> {
+        let session = SessionId::fresh().expect("a session id");
+        runner.session_args(&session, "brief", resume)
+    }
+
+    /// The bug this covers. `session_args` builds its list from scratch, so every flag added to
+    /// `args_with` had to be added here too and none of them were. The agents this path starts
+    /// are the long running ones, which are the agents that matter most.
+    #[test]
+    fn a_session_runs_on_the_model_its_folder_asks_for() {
+        let a = args(&Runner::at("claude").running("claude-fable-5"), false);
+        let at = a
+            .iter()
+            .position(|x| x == "--model")
+            .expect("the model must reach a long running agent too");
+        assert_eq!(a[at + 1], "claude-fable-5");
+    }
+
+    #[test]
+    fn an_unset_model_passes_no_flag_on_the_session_path_either() {
+        assert!(
+            !args(&Runner::at("claude"), false)
+                .iter()
+                .any(|x| x == "--model")
+        );
+    }
+
+    /// A long running agent is told to read the shared memory before it works, and could not
+    /// open it, because this path never passed the directory.
+    #[test]
+    fn a_session_can_reach_the_shared_memory_when_there_is_one() {
+        let a = args(&Runner::at("claude"), false);
+        match super::super::shared_memory() {
+            Some(dir) => {
+                let at = a.iter().position(|x| x == "--add-dir").expect("--add-dir");
+                assert_eq!(a[at + 1], dir);
+            }
+            None => assert!(!a.iter().any(|x| x == "--add-dir")),
+        }
+    }
+
+    /// Delegation refuses a spawned subagent, and this path handed one to every agent it started.
+    #[test]
+    fn a_session_never_holds_the_subagent_tool() {
+        for resume in [true, false] {
+            let a = args(&Runner::at("claude"), resume);
+            let at = a
+                .iter()
+                .position(|x| x == "--disallowedTools")
+                .expect("the refusal must be on the session path");
+            for banned in NEVER {
+                assert!(
+                    a[at + 1..].iter().any(|x| x == banned),
+                    "{banned} not refused"
+                );
+            }
+        }
+    }
+
+    /// Resuming and pinning are different flags and sending both is an error.
+    #[test]
+    fn resuming_and_pinning_are_never_sent_together() {
+        let resumed = args(&Runner::at("claude"), true);
+        let fresh = args(&Runner::at("claude"), false);
+        assert!(resumed.iter().any(|x| x == "--resume"));
+        assert!(!resumed.iter().any(|x| x == "--session-id"));
+        assert!(fresh.iter().any(|x| x == "--session-id"));
+        assert!(!fresh.iter().any(|x| x == "--resume"));
     }
 }
 

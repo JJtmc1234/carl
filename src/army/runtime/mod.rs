@@ -42,6 +42,7 @@ mod continuity;
 mod lock;
 mod policy;
 mod record;
+pub mod revive;
 mod store;
 mod supervisor;
 
