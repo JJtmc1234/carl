@@ -418,21 +418,31 @@ mod rank_tests {
 
     /// The bug JJ reported: Carl was writing code.
     ///
-    /// He is the chief. In the chain `tools_for` gives a chief nothing, which is the whole point
-    /// of having one. Reached through the panel he was built from `permissions.json` instead and
-    /// got `Write` and `Edit`, so the same agent had two sets of powers and the permissive one
-    /// was the one JJ talked to.
+    /// He is the chief. In the chain `tools_for` gives a chief nothing that can change
+    /// anything, which is the whole point of having one. Reached through the panel he was built
+    /// from `permissions.json` instead and got `Write` and `Edit`, so the same agent had two
+    /// sets of powers and the permissive one was the one JJ talked to.
+    ///
+    /// He may read now, because every agent is told to read Projects/MEMORY before working.
+    /// Reading is not doing the work, so the invariant is unchanged in the way that matters.
     #[test]
-    fn the_chief_holds_no_tools_however_he_is_reached() {
+    fn the_chief_can_never_change_anything_however_he_is_reached() {
         let generous = vec![
             "Bash(python3:*)".to_string(),
             "Write".to_string(),
             "Edit".to_string(),
             "Read".to_string(),
         ];
+        let kept = narrow_to_rank(&generous, Rank::Chief);
+        for forbidden in ["Write", "Edit", "Bash"] {
+            assert!(
+                !kept.iter().any(|t| t.contains(forbidden)),
+                "the chief was left holding {forbidden}: {kept:?}"
+            );
+        }
         assert!(
-            narrow_to_rank(&generous, Rank::Chief).is_empty(),
-            "the chief was left holding tools"
+            kept.iter().all(|t| matches!(t.as_str(), "Read" | "Grep")),
+            "the chief kept something that is not reading: {kept:?}"
         );
     }
 

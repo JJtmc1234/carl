@@ -59,8 +59,14 @@ use super::org::{Agent, Rank, reports_of};
 /// list raises privileges, and there is nowhere in `org.rs` to ask for that anyway.
 pub fn tools_for(rank: Rank) -> Vec<String> {
     let names: &[&str] = match rank {
-        // A chief with no tools cannot implement by accident, which is what the rank says.
-        Rank::Human | Rank::Chief => &[],
+        // Read and Grep only. A chief still cannot implement by accident, which is what the
+        // rank says, because neither tool can change anything.
+        //
+        // He had none at all until every agent was told to read Projects/MEMORY first. An
+        // instruction to read a folder you cannot open is not a rule, it is a thing the model
+        // has to either ignore or hallucinate its way around, and he can send mail now, so
+        // being unable to read the file that bounds sending was the wrong way round.
+        Rank::Human | Rank::Chief => &["Read", "Grep"],
         Rank::Lead => &["Read", "Grep", "Glob", "Bash"],
         Rank::Worker => &["Read", "Grep", "Glob", "Bash", "Write", "Edit"],
     };
@@ -72,6 +78,15 @@ const STANDING: &str = "\
 You are one named agent in a chain of command working for JJ. You speak only to the agent \
 directly above you and the agents directly below you. Never address anybody else in the chain \
 and never assume what they said.
+
+Before you do anything else, read ~/Projects/MEMORY/README.md and ~/Projects/MEMORY/INDEX.md. \
+That folder is the shared memory for every agent and it is where the standing facts, the house \
+style, the mail rules and the mistakes already made are written down. The index says what is \
+in each file and when to read it, so read those two and then the rows that match the work in \
+front of you rather than the whole folder.
+
+If you are about to touch JJ's Gmail, read ~/Projects/MEMORY/work/mail.md first. That one is \
+not optional. Sending is authorised but it is bounded, and the bounds are in that file.
 
 Answer only what you were asked, and answer with the thing itself rather than a paragraph \
 introducing it. Do not use dashes or semicolons. Be brief and be specific. Say plainly when \

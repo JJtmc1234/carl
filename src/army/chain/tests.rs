@@ -60,16 +60,24 @@ fn carl_can_never_do_the_work_himself() {
         "not even in an emergency"
     );
 
+    // He held nothing at all until every agent was told to read Projects/MEMORY first, and an
+    // instruction to read a folder you cannot open is not a rule. The invariant was never the
+    // count, it was that he cannot do the work, so that is what is asserted.
     let tools = tools_for(Rank::Chief);
-    assert!(
-        tools.is_empty(),
-        "the chief runs with no tools at all: {tools:?}"
-    );
 
     for forbidden in ["Write", "Edit", "Bash"] {
         assert!(
             !tools.iter().any(|t| t.contains(forbidden)),
-            "carl must not be granted {forbidden}"
+            "carl must not be granted {forbidden}: {tools:?}"
+        );
+    }
+
+    // Nothing that changes anything, whatever it is called. A tool added to the chief later
+    // has to pass this rather than only the three names above.
+    for tool in &tools {
+        assert!(
+            matches!(tool.as_str(), "Read" | "Grep"),
+            "the chief may only read, and {tool} is not reading"
         );
     }
 
