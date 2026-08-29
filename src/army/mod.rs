@@ -37,6 +37,7 @@ mod campaign;
 pub mod chain;
 pub mod event;
 pub mod handoff;
+pub mod health;
 /// Whether the army is getting better, folded out of the record.
 pub mod metrics;
 pub mod org;
@@ -46,6 +47,7 @@ mod report;
 mod roster;
 /// Keeping agent processes alive, which is a different job from giving them work.
 pub mod runtime;
+pub mod survey;
 pub mod task;
 
 pub use board::Board;

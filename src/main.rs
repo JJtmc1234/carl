@@ -244,6 +244,31 @@ enum ArmyAction {
     /// Who has a folder, and what each of them is holding.
     Who,
 
+    /// Every agent at once, as the chart, with anything wrong called out.
+    ///
+    /// `who` answers what each agent is holding. This answers whether each agent can work at
+    /// all, which is a different question: a process can be up, a session can be resumed, and
+    /// the folder the agent keeps everything in can be gone.
+    Status,
+
+    /// Everything known about one agent, from every source that knows something.
+    Inspect {
+        /// The agent's name in the organisation.
+        agent: String,
+    },
+
+    /// Recent things that actually happened, folded from the journal.
+    ///
+    /// The journal is append only and is already the durable history, so this reads it rather
+    /// than keeping a second copy that could disagree with it.
+    Activity {
+        /// Only what this agent did, and what was done to it. Everybody, when left out.
+        agent: Option<String>,
+        /// How many to show. The newest ones.
+        #[arg(long, default_value_t = 20)]
+        last: usize,
+    },
+
     /// Bring existing memory folders up to the current layout, without touching what is in them.
     ///
     /// `found` refuses a home that already holds an army and there is deliberately no other way
@@ -511,6 +536,32 @@ fn main() -> Result<()> {
                 println!("{} agents enlisted in {}", army.len(), home.display());
                 Ok(())
             }
+            ArmyAction::Status => {
+                let all = carl::army::survey::everyone(&home)?;
+                print_status(&all);
+                Ok(())
+            }
+
+            ArmyAction::Inspect { agent } => {
+                print_inspect(&carl::army::survey::one(&home, &agent)?);
+                Ok(())
+            }
+
+            ArmyAction::Activity { agent, last } => {
+                let recent = carl::army::survey::activity(&home, agent.as_deref(), last)?;
+                if recent.is_empty() {
+                    match &agent {
+                        Some(who) => println!("nothing recorded about {who}"),
+                        None => println!("nothing has been recorded in {}", home.display()),
+                    }
+                    return Ok(());
+                }
+                for record in &recent {
+                    println!("{}", carl::army::survey::line_of(record));
+                }
+                Ok(())
+            }
+
             ArmyAction::Migrate => {
                 let people = carl::army::personnel::Personnel::open(&home)?;
                 let mut touched = 0usize;
@@ -873,6 +924,117 @@ fn expand(path: &str) -> PathBuf {
 ///
 /// A rate over nothing is left blank rather than shown as zero or as a hundred percent. Both
 /// would be a score, and an army that has never been asked to do anything has not earned one.
+/// The army as the chart, with anything wrong called out beside the agent it is wrong for.
+///
+/// A tree because the reporting line is the thing an operator navigates by. A flat list sorted
+/// by name puts Miles between Mason and Nora, where nobody is looking for him.
+fn print_status(all: &[carl::army::survey::Standing]) {
+    use carl::army::survey::Standing;
+
+    if all.iter().all(|s| !s.enlisted) {
+        println!("no army has been founded here. `carl army found` gives everybody a folder.");
+        return;
+    }
+
+    fn row(s: &Standing, depth: usize) {
+        let indent = "  ".repeat(depth + 1);
+        let state = match (&s.enlisted, &s.runtime) {
+            (false, _) => "not enlisted".to_string(),
+            (true, None) => "no process record".to_string(),
+            (true, Some(r)) => carl::army::survey::lifecycle_word(&r.lifecycle).to_string(),
+        };
+        let holding = s.holding.as_deref().unwrap_or("idle");
+        let name = format!("{indent}{}", s.agent.name);
+        println!("{name:<20} {state:<18} {holding}");
+        if let Some(worry) = s.worry() {
+            println!("{:<20} ! {worry}", format!("{indent}"));
+        }
+    }
+
+    fn under(all: &[Standing], boss: Option<&str>, depth: usize) {
+        for s in all.iter().filter(|s| s.agent.reports_to == boss) {
+            row(s, depth);
+            under(all, Some(s.agent.name), depth + 1);
+        }
+    }
+
+    println!("jj");
+    under(all, Some("jj"), 0);
+
+    let worried: Vec<&Standing> = all.iter().filter(|s| s.worry().is_some()).collect();
+    match worried.len() {
+        0 => println!("\nnothing needs attention."),
+        n => println!("\n{n} of {} need attention, marked with !", all.len()),
+    }
+}
+
+/// Everything known about one agent, from every source that knows something.
+fn print_inspect(s: &carl::army::survey::Standing) {
+    let a = s.agent;
+    println!("{} ({})", a.display, a.name);
+    println!("  rank        {:?}", a.rank);
+    println!("  reports to  {}", a.reports_to.unwrap_or("nobody"));
+    println!(
+        "  hands to    {}",
+        match s.reports.is_empty() {
+            true => "nobody, so this agent does the work it is given".to_string(),
+            false => s
+                .reports
+                .iter()
+                .map(|r| r.name)
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    );
+    println!("  remit       {}", a.remit);
+    println!(
+        "  model       {}",
+        s.model.as_deref().unwrap_or("no folder, so unset")
+    );
+    println!(
+        "  holding     {}",
+        s.holding.as_deref().unwrap_or("nothing")
+    );
+
+    match &s.runtime {
+        // Absent is not stopped. Nobody has said, and saying "stopped" would be inventing it.
+        None => println!("  process     no supervisor has written about this agent"),
+        Some(r) => {
+            println!(
+                "  process     {}",
+                carl::army::survey::lifecycle_word(&r.lifecycle)
+            );
+            if let Some(session) = &r.session {
+                println!("  session     {session}");
+            }
+            // Three separate answers, not one blob. "the process was replaced and the session
+            // was resumed and the memory was kept" is the sentence somebody actually wants.
+            if let Some(c) = &r.continuity {
+                println!(
+                    "  continuity  process {:?}, session {:?}, memory {:?}",
+                    c.process, c.session, c.memory
+                );
+            }
+        }
+    }
+
+    println!("  memory      {}", s.health.memory.word());
+    println!("    summary   {} bytes", s.health.summary_bytes);
+    match (s.health.rules, s.health.watching) {
+        (Some(rules), Some(watching)) => {
+            println!("    learned   {rules} rules, {watching} being watched")
+        }
+        _ => println!("    learned   unreadable"),
+    }
+    if s.health.legacy_rules {
+        println!("    rules.md  present, superseded by learned.md");
+    }
+
+    if let Some(worry) = s.worry() {
+        println!("\n  ! {worry}");
+    }
+}
+
 fn print_metrics(m: &carl::army::Metrics, recent: usize) {
     fn rate(part: usize, whole: usize) -> String {
         match whole {
