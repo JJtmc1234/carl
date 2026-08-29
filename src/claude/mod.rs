@@ -176,6 +176,23 @@ impl Runner {
 
 }
 
+/// Tools no agent may ever hold, whatever else it is granted.
+///
+/// The chain of command is the whole design. Carl hands to a lead, the lead hands to one of its
+/// own people, and work moves one step at a time. `org::check_delegation` refuses anything else
+/// and the briefs say it in words.
+///
+/// None of that binds the built in subagent tool. Given it, Carl does not delegate to Olivia,
+/// he spawns a fresh process and tells it "you are Miles, do this". That agent has no identity,
+/// no memory folder, no rank, no journal entry and no lead. It looks like delegation in the
+/// transcript and it is not delegation at all: nobody was asked, nobody reviewed it, and
+/// Olivia never knew. JJ reported exactly this on 2026 08 29.
+///
+/// So it is refused at the process rather than discouraged in a brief, for the same reason the
+/// mail tools that destroy are simply absent. An agent that cannot call a tool cannot be talked
+/// into calling it.
+pub const NEVER: &[&str] = &["Task", "Agent"];
+
 /// Where the shared memory lives, if it is there at all.
 ///
 /// `None` when the folder is absent, so a checkout without it does not pass a flag naming a
@@ -225,6 +242,10 @@ impl Runner {
             args.push("--add-dir".into());
             args.push(shared);
         }
+
+        // Before `--allowedTools`, which is variadic and swallows whatever follows its list.
+        args.push("--disallowedTools".into());
+        args.extend(NEVER.iter().map(|s| (*s).to_string()));
 
         if !self.allowed.is_empty() {
             args.push("--allowedTools".into());
@@ -354,6 +375,53 @@ pub fn parse(stdout: &str) -> Result<Answer> {
 
 fn first_line(s: &str) -> Option<&str> {
     s.lines().map(str::trim).find(|l| !l.is_empty())
+}
+
+#[cfg(test)]
+mod delegation_tests {
+    use super::*;
+
+    fn args_of(runner: &Runner) -> Vec<String> {
+        let session = SessionId::fresh().expect("a session id");
+        runner.args_for(&Turn {
+            session: &session,
+            resume: false,
+            prompt: "hello",
+            extra_system: None,
+            workdir: std::path::Path::new("/tmp"),
+        })
+    }
+
+    /// The bug JJ reported. Carl did not delegate to Olivia, he spawned a subagent and told it
+    /// "you are Miles, do this". That thing has no identity, no memory, no rank and no lead,
+    /// and Olivia never knew. It reads as delegation in a transcript and is not delegation.
+    #[test]
+    fn no_agent_is_ever_handed_the_subagent_tool() {
+        let args = args_of(&Runner::at("claude"));
+        let at = args
+            .iter()
+            .position(|a| a == "--disallowedTools")
+            .expect("the refusal must be passed on every invocation");
+        for banned in NEVER {
+            assert!(
+                args[at + 1..].iter().any(|a| a == banned),
+                "{banned} was not refused: {args:?}"
+            );
+        }
+    }
+
+    /// `--allowedTools` is variadic, so anything after its list is read as another tool name.
+    /// The refusal has to come first or it is silently swallowed into the allow list, which
+    /// would grant the exact tool it exists to deny.
+    #[test]
+    fn the_refusal_comes_before_the_allow_list() {
+        let args = args_of(&Runner::at("claude"));
+        let deny = args.iter().position(|a| a == "--disallowedTools");
+        let allow = args.iter().position(|a| a == "--allowedTools");
+        if let (Some(deny), Some(allow)) = (deny, allow) {
+            assert!(deny < allow, "the deny list is inside the allow list: {args:?}");
+        }
+    }
 }
 
 #[cfg(test)]

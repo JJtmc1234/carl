@@ -721,6 +721,10 @@ fn ask_agent(
         .arg(&brief)
         .arg("--permission-mode")
         .arg("acceptEdits");
+    // Never the subagent tool. Spawning "you are Miles" is not delegating to Olivia, and this
+    // path builds its command by hand so it does not get the Runner's refusal for free.
+    cmd.arg("--disallowedTools")
+        .arg(crate::claude::NEVER.join(","));
     if !tools.is_empty() {
         cmd.arg("--allowedTools").arg(tools.join(","));
     }

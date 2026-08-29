@@ -37,13 +37,15 @@ fn the_scale_has_six_distinct_steps_that_climb() {
 
 /// Data lines up and prose does not have to. Getting this the wrong way round is how a panel
 /// ends up with ragged columns of figures and cramped sentences.
+/// One family everywhere, on JJ's instruction of 2026 08 29.
+///
+/// It also removes a whole class of bug. The proportional face is Ubuntu-Light, which carries
+/// no Block Elements, so anything drawn from that range came out as a missing glyph box. Two
+/// families meant two fonts to check and the check was skipped twice.
 #[test]
-fn the_family_follows_what_the_text_is() {
-    for f in [label(), body(), heading(), display()] {
-        assert_eq!(f.family, FontFamily::Monospace, "{f:?} carries data");
-    }
-    for f in [prose(), title()] {
-        assert_eq!(f.family, FontFamily::Proportional, "{f:?} carries words");
+fn every_role_is_monospace() {
+    for f in [label(), body(), heading(), display(), prose(), title()] {
+        assert_eq!(f.family, FontFamily::Monospace, "{f:?} is not monospace");
     }
     assert_eq!(
         prose().size,
@@ -193,10 +195,14 @@ fn both_font_families_are_present() {
     }
 }
 
-/// The reason prose is proportional, measured rather than asserted by taste. If this ever
-/// stops being true the family choice should be revisited rather than kept out of habit.
+/// What monospace everywhere actually costs, measured rather than assumed.
+///
+/// It used to assert the opposite, that proportional bought enough line to be worth a second
+/// family. JJ chose one family on 2026 08 29, so the cost is real and this records it instead
+/// of pretending there was none. Prose is now exactly as wide as data, because it is the same
+/// font.
 #[test]
-fn proportional_prose_fits_more_of_a_sentence_on_a_line() {
+fn prose_and_data_measure_the_same_because_they_are_one_family() {
     let ctx = eframe::egui::Context::default();
     install(&ctx);
     let _ = ctx.run(Default::default(), |_| {});
@@ -207,10 +213,27 @@ fn proportional_prose_fits_more_of_a_sentence_on_a_line() {
             .size()
             .x
     };
-    assert!(
-        width(prose()) < width(body()) * 0.85,
-        "proportional is not buying enough line to be worth a second family"
-    );
+    assert_eq!(width(prose()), width(body()));
+}
+
+/// The bug this family choice closes for good.
+///
+/// The old proportional face was Ubuntu-Light, which carries no Block Elements, so a cursor
+/// drawn from that range came out as a missing glyph box. It was fixed once by swapping one
+/// absent glyph for another absent one. Hack has them, and now everything is Hack.
+#[test]
+fn the_block_glyphs_that_were_missing_are_present_now() {
+    let ctx = eframe::egui::Context::default();
+    install(&ctx);
+    let _ = ctx.run(Default::default(), |_| {});
+
+    for glyph in ['\u{2588}', '\u{258f}', '\u{2502}', '|'] {
+        let galley = ctx.fonts(|f| f.layout_no_wrap(glyph.to_string(), prose(), TEXT));
+        assert!(
+            galley.size().x > 1.0,
+            "{glyph:?} does not render in the prose family"
+        );
+    }
 }
 
 /// Spacing a label rather than shrinking it is how the small type stays legible.

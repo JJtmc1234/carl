@@ -77,12 +77,16 @@ pub fn edge(color: Color32) -> Stroke {
 
 /// Which family a role belongs to.
 ///
-/// Both were built and looked at before this was settled. Proportional at 15px for running
-/// prose fits about a third more words on a line and reads faster, which matters in the
-/// conversation and in the long one line descriptions. Monospace won everywhere a column has
-/// to line up, which is most of the rest of the panel.
+/// Monospace, everywhere, on JJ's instruction of 2026 08 29. It used to be proportional for
+/// running prose, which fits about a third more words on a line, and monospace only where a
+/// column had to line up.
+///
+/// The second reason to keep it this way is the square. egui's proportional face is
+/// Ubuntu-Light and it contains no Block Elements at all, so any box drawing or block glyph
+/// rendered as a missing glyph box. Hack has them. One family everywhere means one font to
+/// check rather than two, and the checking is the part that was skipped twice.
 fn prose_family() -> FontFamily {
-    FontFamily::Proportional
+    FontFamily::Monospace
 }
 
 fn data_family() -> FontFamily {
