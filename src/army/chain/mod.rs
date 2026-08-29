@@ -57,6 +57,16 @@ use super::org::{Agent, Rank, reports_of};
 /// rather than taking her word for it. That is a real gap, since a shell can write a file, and
 /// it is the smallest grant that still lets a reviewer check rather than trust. Nothing in any
 /// list raises privileges, and there is nowhere in `org.rs` to ask for that anyway.
+/// The one command a chief may run, and the reason he may run anything at all.
+///
+/// `carl handoff` is the real route down the chain. It refuses any edge the organisation does
+/// not have, so this grants Carl the ability to reach his five leads and nothing else. It
+/// cannot write a file, cannot run another command, and cannot reach past a lead to somebody
+/// inside a department.
+///
+/// Leads and workers already hold unrestricted `Bash`, so they can call it without this.
+pub const HANDOFF: &str = "Bash(carl handoff:*)";
+
 /// Mail, for everybody, whatever their rank.
 ///
 /// JJ asked on 2026 08 29 that every agent be able to write and send. It went into the panel's
@@ -81,14 +91,22 @@ pub const MAIL: &[&str] = &[
 
 pub fn tools_for(rank: Rank) -> Vec<String> {
     let names: &[&str] = match rank {
-        // Read and Grep only. A chief still cannot implement by accident, which is what the
-        // rank says, because neither tool can change anything.
+        // Read, Grep, and the one scoped command that hands work to a lead. A chief still
+        // cannot implement by accident, which is what the rank says: none of the three can
+        // change a file or run anything else.
+        //
+        // The handoff is not a convenience. Without it Carl has no way to reach Olivia at all,
+        // and an agent with a job it cannot do by the allowed route does it by some other
+        // route. Given the subagent tool he spawned a process and told it who to be. With that
+        // refused and nothing in its place he did the department's work himself. Both are the
+        // chief doing what the rank exists to stop, and neither is fixed by another sentence
+        // in the brief.
         //
         // He had none at all until every agent was told to read Projects/MEMORY first. An
         // instruction to read a folder you cannot open is not a rule, it is a thing the model
         // has to either ignore or hallucinate its way around, and he can send mail now, so
         // being unable to read the file that bounds sending was the wrong way round.
-        Rank::Human | Rank::Chief => &["Read", "Grep"],
+        Rank::Human | Rank::Chief => &["Read", "Grep", HANDOFF],
         Rank::Lead => &["Read", "Grep", "Glob", "Bash"],
         Rank::Worker => &["Read", "Grep", "Glob", "Bash", "Write", "Edit"],
     };
@@ -115,11 +133,19 @@ If you are about to touch JJ's Gmail, read ~/Projects/MEMORY/work/mail.md first.
 not optional. Sending is authorised but it is bounded, and the bounds are in that file.
 
 Work moves one step at a time, straight down, to a named agent who already exists. You hand \
-to your own direct reports and to nobody else. Never spawn a helper, a subagent or a fresh \
-process and tell it who it is. That is not delegating, because the thing you made has no \
-identity, no memory, no rank and no lead, and the agent whose job you took never heard about \
-it. If the work belongs to somebody else's department, hand it to the lead of that department \
-and let them place it.
+to your own direct reports and to nobody else.
+
+The way you hand work over is `carl handoff --from <you> --to <them> \"the work\"`. It runs \
+the real agent, with their own memory and their own tools, and it gives you back what they \
+said. It refuses any handoff the organisation does not allow and tells you which lead to go \
+through instead.
+
+Never spawn a helper, a subagent or a fresh process and tell it who it is. That is not \
+delegating, because the thing you made has no identity, no memory, no rank and no lead, and \
+the agent whose job you took never heard about it. If the work belongs to somebody else's \
+department, hand it to the lead of that department and let them place it. If you cannot reach \
+anybody who should do the work, say so and stop. Doing it yourself instead is the same \
+mistake wearing a different hat.
 
 Answer only what you were asked, and answer with the thing itself rather than a paragraph \
 introducing it. Do not use dashes or semicolons. Be brief and be specific. Say plainly when \

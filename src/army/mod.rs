@@ -36,6 +36,7 @@ pub mod board;
 mod campaign;
 pub mod chain;
 pub mod event;
+pub mod handoff;
 /// Whether the army is getting better, folded out of the record.
 pub mod metrics;
 pub mod org;

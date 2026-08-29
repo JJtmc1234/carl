@@ -65,11 +65,22 @@ fn carl_can_never_do_the_work_himself() {
     // count, it was that he cannot do the work, so that is what is asserted.
     let tools = tools_for(Rank::Chief);
 
-    for forbidden in ["Write", "Edit", "Bash"] {
+    for forbidden in ["Write", "Edit"] {
         assert!(
             !tools.iter().any(|t| t.contains(forbidden)),
             "carl must not be granted {forbidden}: {tools:?}"
         );
+    }
+
+    // Bare `Bash` runs anything. The scoped handoff runs one command that can only hand work to
+    // a lead, and `check_delegation` decides whether even that is allowed. The distinction is
+    // the whole point, so it is asserted rather than left to the eye.
+    assert!(
+        !tools.iter().any(|t| t == "Bash"),
+        "carl must never hold unrestricted Bash: {tools:?}"
+    );
+    for tool in tools.iter().filter(|t| t.contains("Bash")) {
+        assert_eq!(tool, HANDOFF, "the only shell carl gets is the handoff");
     }
 
     // Everything he holds is either reading or mail. A tool added to the chief later has to
@@ -78,10 +89,12 @@ fn carl_can_never_do_the_work_himself() {
     // Mail is not doing the work. JJ asked that every agent be able to write and send, and the
     // thing the chief must never do is implement, which is Write, Edit and Bash above.
     for tool in &tools {
-        let allowed = matches!(tool.as_str(), "Read" | "Grep") || MAIL.contains(&tool.as_str());
+        let allowed = matches!(tool.as_str(), "Read" | "Grep")
+            || tool == HANDOFF
+            || MAIL.contains(&tool.as_str());
         assert!(
             allowed,
-            "the chief may only read and send mail, and {tool} is neither"
+            "the chief may only read, hand work down and send mail, and {tool} is none of them"
         );
     }
 

@@ -151,6 +151,29 @@ enum Command {
         journal: Option<String>,
     },
 
+    /// Hand one piece of work to one of your direct reports, and wait for the answer.
+    ///
+    /// The real route down the chain, and the only one. Refuses anything that is not an edge in
+    /// the organisation and says which lead to go through instead.
+    ///
+    /// This exists because refusing the fake route was not enough on its own. Carl had no way to
+    /// reach Olivia, so given the built in subagent tool he spawned a process and told it "you
+    /// are Miles", and once that was taken away he did the work himself. Both are the chief
+    /// doing a department's job.
+    Handoff {
+        /// Who is handing the work over. Must be able to delegate to `to`.
+        #[arg(long)]
+        from: String,
+        /// Which of their direct reports is being given it.
+        #[arg(long)]
+        to: String,
+        /// How long to let them work, in seconds.
+        #[arg(long)]
+        deadline: Option<u64>,
+        /// The work itself, as an outcome rather than an implementation.
+        work: Vec<String>,
+    },
+
     /// Decide one tool call by asking the panel. Run by Claude Code, not by a person.
     ///
     /// Reads a PreToolUse payload on stdin and prints the decision. Denies whenever it cannot
@@ -698,6 +721,33 @@ fn main() -> Result<()> {
             }
             for (thread, n) in counts {
                 println!("{thread}  {n} message(s)");
+            }
+            Ok(())
+        }
+
+        Command::Handoff {
+            from,
+            to,
+            deadline,
+            work,
+        } => {
+            let work = work.join(" ");
+            let deadline = deadline
+                .map(std::time::Duration::from_secs)
+                .unwrap_or(carl::army::chain::DEADLINE);
+            let handed = carl::army::handoff::hand(
+                &home,
+                std::path::Path::new("claude"),
+                &from,
+                &to,
+                &work,
+                deadline,
+            )?;
+            // The answer on its own, so whoever handed the work over reads what came back and
+            // not a report about it having come back.
+            println!("{}", handed.said);
+            if let Some(seq) = handed.seq {
+                eprintln!("recorded at {seq}");
             }
             Ok(())
         }
