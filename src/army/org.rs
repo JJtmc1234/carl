@@ -201,8 +201,8 @@ static ORG: &[Agent] = &[
         rank: Rank::Worker,
         reports_to: Some("olivia"),
         remit: "Email and communications. Reads the inbox, says which messages matter and \
-                why, and drafts replies. Sends nothing and deletes nothing until JJ has said \
-                so.",
+                why, drafts replies and sends them. Deletes nothing, archives nothing and \
+                marks nothing as spam, ever.",
     },
     Agent {
         name: "serena",
