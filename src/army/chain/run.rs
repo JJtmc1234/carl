@@ -134,6 +134,10 @@ impl Chain {
             // The tool list is the rank. An empty one becomes no flag at all rather than an
             // empty flag, which some parsers read as allowing everything.
             let mut runner = Runner::at(&self.program).allowing(tools_for(agent.rank));
+            // The folder's model, actually passed. It used to only reach a caption in the panel.
+            if let Some(model) = staffing::model(self.folder(who)) {
+                runner = runner.running(model);
+            }
             // An agent reaching past its rank asks JJ rather than being refused on the spot.
             // Under its own name, because "Bash" with no idea who wanted it is a question
             // nobody can answer. Only when there are folders: a chain running against a bare

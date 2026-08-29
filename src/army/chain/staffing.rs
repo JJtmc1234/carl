@@ -88,6 +88,14 @@ pub fn brief(agent: &'static Agent, folder: Option<&Folder>) -> Result<String> {
 ///
 /// `Config::check` has already refused a zero or an unbounded deadline at load, so anything
 /// reaching here is usable. The fallback is the chain's own, for an agent with no folder yet.
+/// Which model this agent's folder says it runs on.
+///
+/// `None` when there is no folder, so a chain against a bare temporary directory says nothing
+/// and lets the CLI choose rather than asserting a default that would drift.
+pub fn model(folder: Option<&Folder>) -> Option<&'static str> {
+    folder.map(|f| f.config.model.id())
+}
+
 pub fn deadline(folder: Option<&Folder>, fallback: Duration) -> Duration {
     match folder {
         Some(f) => Duration::from_secs(f.config.deadline_secs),

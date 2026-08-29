@@ -21,6 +21,8 @@ pub enum Model {
     #[default]
     #[serde(rename = "claude-opus-5")]
     Opus,
+    #[serde(rename = "claude-fable-5")]
+    Fable,
     #[serde(rename = "claude-sonnet-5")]
     Sonnet,
     #[serde(rename = "claude-haiku-4-5")]
@@ -32,6 +34,7 @@ impl Model {
     pub fn id(self) -> &'static str {
         match self {
             Self::Opus => "claude-opus-5",
+            Self::Fable => "claude-fable-5",
             Self::Sonnet => "claude-sonnet-5",
             Self::Haiku => "claude-haiku-4-5",
         }
@@ -115,6 +118,7 @@ mod tests {
             "\"claude-opus-5\""
         );
         assert_eq!(Model::Opus.id(), "claude-opus-5");
+        assert_eq!(Model::Fable.id(), "claude-fable-5");
     }
 
     #[test]

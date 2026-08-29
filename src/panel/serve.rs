@@ -708,6 +708,11 @@ fn ask_agent(
     // agent that had wedged looked exactly alike for as long as it took.
     let mut cmd = std::process::Command::new("claude");
     cmd.arg("-p");
+    // The model this agent's folder asks for. This path builds its command by hand, so it does
+    // not get the Runner's handling for free.
+    if let Some(folder) = people.get(agent) {
+        cmd.arg("--model").arg(folder.config.model.id());
+    }
     // The shared memory sits outside whatever directory this runs in, and every agent is told
     // to read it before working. See the note in claude::args_with.
     if let Some(shared) = crate::claude::shared_memory() {

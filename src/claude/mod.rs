@@ -73,6 +73,11 @@ pub struct Runner {
     /// How much Claude decides for itself about the rest. `Ask` in headless means refuse, which
     /// is why this is worth setting per surface rather than leaving at the default everywhere.
     mode: permits::Mode,
+    /// Which model this agent runs on, when it is not the CLI's default.
+    ///
+    /// `None` means say nothing and let the CLI choose, rather than naming a default here that
+    /// would then have to agree with it forever.
+    model: Option<String>,
     /// Where the panel socket is, when Carl is allowed to put a question to JJ.
     ///
     /// `None` means he is not, and `Ask` then keeps its old headless meaning of refuse. The
@@ -128,6 +133,7 @@ impl Default for Runner {
         Self {
             program: PathBuf::from("claude"),
             allowed: vec![PYTHON.to_string()],
+            model: None,
             mode: permits::Mode::Ask,
             ask_through: None,
         }
@@ -139,6 +145,7 @@ impl Runner {
         Self {
             program: program.into(),
             allowed: vec![PYTHON.to_string()],
+            model: None,
             mode: permits::Mode::Ask,
             ask_through: None,
         }
@@ -158,6 +165,17 @@ impl Runner {
     }
 
     /// Replaces the allowed tool list. An empty list means Carl may use no tools at all.
+    /// Runs this agent on a named model.
+    ///
+    /// Wired late, and worth saying why. `config.model` existed for a while and was only ever
+    /// read to draw a label in the panel, so an agent's folder could say `claude-fable-5` while
+    /// the process ran whatever the CLI defaulted to. A configuration field that changes a
+    /// caption and nothing else is worse than not having one, because it reads as settled.
+    pub fn running(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
     pub fn allowing(mut self, tools: Vec<String>) -> Self {
         self.allowed = tools;
         self
@@ -228,6 +246,11 @@ impl Runner {
         head: impl IntoIterator<Item = &'b str>,
     ) -> Vec<String> {
         let mut args: Vec<String> = head.into_iter().map(str::to_owned).collect();
+
+        if let Some(model) = &self.model {
+            args.push("--model".into());
+            args.push(model.clone());
+        }
 
         // The shared memory, which every agent is told to read before it works.
         //
@@ -408,6 +431,33 @@ mod delegation_tests {
                 "{banned} was not refused: {args:?}"
             );
         }
+    }
+
+    /// The field that only drew a label.
+    ///
+    /// `config.model` was read in exactly two places, both of which put it on a screen. An
+    /// agent's folder could say `claude-fable-5` while its process ran whatever the CLI
+    /// defaulted to, and the panel would confidently show the wrong answer. Found when JJ asked
+    /// for Carl to be Fable 5 and the change would have been cosmetic.
+    #[test]
+    fn a_named_model_is_actually_passed_to_the_cli() {
+        let args = args_of(&Runner::at("claude").running("claude-fable-5"));
+        let at = args
+            .iter()
+            .position(|a| a == "--model")
+            .expect("the model must reach the command line");
+        assert_eq!(args[at + 1], "claude-fable-5");
+    }
+
+    /// Saying nothing is different from saying the default. Naming a default here would be a
+    /// second place that has to agree with the CLI about what it is.
+    #[test]
+    fn no_model_means_no_flag_at_all() {
+        let args = args_of(&Runner::at("claude"));
+        assert!(
+            !args.iter().any(|a| a == "--model"),
+            "an unset model must pass no flag: {args:?}"
+        );
     }
 
     /// `--allowedTools` is variadic, so anything after its list is read as another tool name.
