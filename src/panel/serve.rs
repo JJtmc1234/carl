@@ -707,8 +707,13 @@ fn ask_agent(
     // nothing at all until the whole answer landed, so an agent reading forty files and an
     // agent that had wedged looked exactly alike for as long as it took.
     let mut cmd = std::process::Command::new("claude");
-    cmd.arg("-p")
-        .arg("--output-format")
+    cmd.arg("-p");
+    // The shared memory sits outside whatever directory this runs in, and every agent is told
+    // to read it before working. See the note in claude::args_with.
+    if let Some(shared) = crate::claude::shared_memory() {
+        cmd.arg("--add-dir").arg(shared);
+    }
+    cmd.arg("--output-format")
         .arg("stream-json")
         .arg("--include-partial-messages")
         .arg("--verbose")

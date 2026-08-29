@@ -174,6 +174,20 @@ impl Runner {
         &self.program
     }
 
+}
+
+/// Where the shared memory lives, if it is there at all.
+///
+/// `None` when the folder is absent, so a checkout without it does not pass a flag naming a
+/// directory that does not exist.
+pub fn shared_memory() -> Option<String> {
+    let path = std::path::Path::new(&std::env::var("HOME").ok()?)
+        .join("Projects")
+        .join("MEMORY");
+    path.is_dir().then(|| path.to_string_lossy().into_owned())
+}
+
+impl Runner {
     /// The allow list as arguments, or nothing at all when it is empty.
     ///
     /// Nothing rather than an empty flag, because some argument parsers read an empty allow
@@ -197,6 +211,20 @@ impl Runner {
         head: impl IntoIterator<Item = &'b str>,
     ) -> Vec<String> {
         let mut args: Vec<String> = head.into_iter().map(str::to_owned).collect();
+
+        // The shared memory, which every agent is told to read before it works.
+        //
+        // An agent runs in its own folder under Projects/army, so Projects/MEMORY is a sibling
+        // it cannot reach, and reading outside the working directory needs saying so. Without
+        // this the instruction is worse than absent: an agent asked to send mail read its
+        // standing orders, could not open the file naming the rules, and correctly refused to
+        // send anything at all.
+        //
+        // Before `--allowedTools`, which is variadic. Nothing goes after that list.
+        if let Some(shared) = shared_memory() {
+            args.push("--add-dir".into());
+            args.push(shared);
+        }
 
         if !self.allowed.is_empty() {
             args.push("--allowedTools".into());
