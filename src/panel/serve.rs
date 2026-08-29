@@ -781,20 +781,34 @@ fn ask_agent(
 
 /// Calls one agent needs that its rank does not imply.
 ///
-/// Read and draft only for Miles. No send, no trash, no spam marking: an agent that cannot call
-/// them cannot be talked into calling them, which is a stronger promise than telling him not to.
-fn extra_tools_for(agent: &str) -> Vec<&'static str> {
-    match agent {
-        "miles" => vec![
-            "mcp__claude_ai_Gmail__search_threads",
-            "mcp__claude_ai_Gmail__get_thread",
-            "mcp__claude_ai_Gmail__get_message",
-            "mcp__claude_ai_Gmail__list_drafts",
-            "mcp__claude_ai_Gmail__create_draft",
-            "mcp__claude_ai_Gmail__update_draft",
-        ],
-        _ => Vec::new(),
-    }
+/// Every agent reads and writes mail now, on JJ's instruction of 2026 08 29. It used to be Miles
+/// alone, and read and draft only.
+///
+/// What is still withheld is the part that destroys rather than the part that sends. Trash,
+/// spam marking and label changes are absent, so a bad turn can embarrass JJ but cannot lose him
+/// a message he needed. An agent that cannot call a tool cannot be talked into calling it, and
+/// that promise is worth keeping exactly where the damage would be permanent.
+fn mail_tools() -> Vec<&'static str> {
+    vec![
+        // Reading.
+        "mcp__claude_ai_Gmail__search_threads",
+        "mcp__claude_ai_Gmail__get_thread",
+        "mcp__claude_ai_Gmail__get_message",
+        "mcp__claude_ai_Gmail__list_drafts",
+        "mcp__claude_ai_Gmail__get_draft",
+        // Composing.
+        "mcp__claude_ai_Gmail__create_draft",
+        "mcp__claude_ai_Gmail__update_draft",
+        // Sending. Irreversible, which is why the rules around it live in the brief and in
+        // Projects/MEMORY rather than only here.
+        "mcp__claude_ai_Gmail__send_message",
+        "mcp__claude_ai_Gmail__reply",
+    ]
+}
+
+/// The mail tools plus anything one named agent needs on top.
+fn extra_tools_for(_agent: &str) -> Vec<&'static str> {
+    mail_tools()
 }
 
 /// Turns one piece of a turn into the frame that carries it.
