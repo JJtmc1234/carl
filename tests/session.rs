@@ -116,8 +116,8 @@ fn a_second_question_gets_its_own_answer() {
                 "again",
                 &mut |t| {
                     if let Some(words) = t.words() {
-                    heard.push_str(words);
-                }
+                        heard.push_str(words);
+                    }
                     Flow::Continue
                 },
                 &mut || Flow::Continue,

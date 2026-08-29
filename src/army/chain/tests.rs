@@ -523,7 +523,9 @@ fn every_rank_can_send_mail() {
     for rank in [Rank::Chief, Rank::Lead, Rank::Worker, Rank::Human] {
         let tools = tools_for(rank);
         assert!(
-            tools.iter().any(|t| t == "mcp__claude_ai_Gmail__send_message"),
+            tools
+                .iter()
+                .any(|t| t == "mcp__claude_ai_Gmail__send_message"),
             "{rank:?} cannot send"
         );
         assert!(

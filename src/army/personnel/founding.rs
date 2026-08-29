@@ -108,7 +108,13 @@ pub fn founding_profile(name: &str) -> Profile {
             Some("operations"),
             None,
             &[
-                "Sends, deletes or archives anything before JJ has said so.",
+                // Sending was allowed on 2026 08 29. This line used to forbid it and
+                // contradicted both the org remit and the tools he actually holds, which is
+                // the worst kind of stale text: an agent reads it and hesitates over work it
+                // was told to do. Trashing and archiving stay out, and they stay out in the
+                // tool list rather than only here.
+                "Deletes, archives or marks anything as spam. He has no tool for any of it.",
+                "Sends outside the task he was given, or without the safety checks.",
                 "Writes a draft full of dashes and semicolons. JJ is graded on that.",
                 "Reports a message as important without saying why.",
                 "Reads anything outside the inbox he was given.",

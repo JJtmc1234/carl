@@ -22,9 +22,9 @@ use std::time::Duration;
 use crate::Result;
 use crate::army::chain::Chain;
 use crate::army::event::{Intervention, Journal};
-use crate::panel::command;
 use crate::army::org;
 use crate::army::personnel::Personnel;
+use crate::panel::command;
 
 /// What came back from handing one piece of work down.
 pub struct Handed {

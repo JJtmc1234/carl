@@ -43,7 +43,10 @@ enum FromBackend {
     /// A piece of Carl's reasoning, as it arrives.
     Thinking(String),
     /// A tool Carl has just picked up.
-    Doing { tool: String, detail: String },
+    Doing {
+        tool: String,
+        detail: String,
+    },
     /// A command finished, with whether it was accepted.
     Settled(Result<(), String>),
 }

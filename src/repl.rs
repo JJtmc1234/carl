@@ -104,7 +104,11 @@ pub fn run(home: &Path, thread: &str) -> Result<()> {
                     return Flow::Continue;
                 }
                 carl::Say::Doing { tool, detail } => {
-                    let _ = write!(out, "\x1b[2m{}\x1b[0m", carl::claude::doing_line(tool, detail));
+                    let _ = write!(
+                        out,
+                        "\x1b[2m{}\x1b[0m",
+                        carl::claude::doing_line(tool, detail)
+                    );
                     let _ = out.flush();
                     return Flow::Continue;
                 }

@@ -191,7 +191,6 @@ impl Runner {
     pub fn program(&self) -> &Path {
         &self.program
     }
-
 }
 
 /// Tools no agent may ever hold, whatever else it is granted.
@@ -469,7 +468,10 @@ mod delegation_tests {
         let deny = args.iter().position(|a| a == "--disallowedTools");
         let allow = args.iter().position(|a| a == "--allowedTools");
         if let (Some(deny), Some(allow)) = (deny, allow) {
-            assert!(deny < allow, "the deny list is inside the allow list: {args:?}");
+            assert!(
+                deny < allow,
+                "the deny list is inside the allow list: {args:?}"
+            );
         }
     }
 }

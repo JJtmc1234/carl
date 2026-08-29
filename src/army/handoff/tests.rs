@@ -35,7 +35,10 @@ fn a_refusal_names_the_lead_to_go_through() {
         .expect_err("carl must not reach miles")
         .to_string();
     assert!(why.contains("miles"), "{why}");
-    assert!(why.contains("olivia"), "the refusal must name the route: {why}");
+    assert!(
+        why.contains("olivia"),
+        "the refusal must name the route: {why}"
+    );
 }
 
 /// Nobody hands work upwards, and nobody hands work sideways.
@@ -43,8 +46,14 @@ fn a_refusal_names_the_lead_to_go_through() {
 fn work_never_goes_up_or_sideways() {
     assert!(!org::may_delegate("miles", "olivia"), "upwards");
     assert!(!org::may_delegate("olivia", "carl"), "upwards");
-    assert!(!org::may_delegate("olivia", "adrian"), "sideways between leads");
-    assert!(!org::may_delegate("miles", "nora"), "sideways between workers");
+    assert!(
+        !org::may_delegate("olivia", "adrian"),
+        "sideways between leads"
+    );
+    assert!(
+        !org::may_delegate("miles", "nora"),
+        "sideways between workers"
+    );
 }
 
 /// A worker has nobody below it, so a worker that tries to delegate is refused rather than

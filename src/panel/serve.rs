@@ -614,11 +614,12 @@ fn hand_objective_down(
     let asked = crate::army::chain::objective::ask_which_lead(text);
     let thread = ThreadId::new(THREAD).map_err(|e| e.to_string())?;
 
-    let answer = crate::turn::stream(home, &thread, &asked, None, None, &mut |chunk| {
-        match send(out, &Frame::to(None, frame_for(chunk))) {
-            Ok(()) => crate::claude::Flow::Continue,
-            Err(_) => crate::claude::Flow::Stop,
-        }
+    let answer = crate::turn::stream(home, &thread, &asked, None, None, &mut |chunk| match send(
+        out,
+        &Frame::to(None, frame_for(chunk)),
+    ) {
+        Ok(()) => crate::claude::Flow::Continue,
+        Err(_) => crate::claude::Flow::Stop,
     })
     .map_err(|e| e.to_string())?;
 
