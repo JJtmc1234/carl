@@ -72,12 +72,16 @@ fn carl_can_never_do_the_work_himself() {
         );
     }
 
-    // Nothing that changes anything, whatever it is called. A tool added to the chief later
-    // has to pass this rather than only the three names above.
+    // Everything he holds is either reading or mail. A tool added to the chief later has to
+    // pass this rather than only the three names above.
+    //
+    // Mail is not doing the work. JJ asked that every agent be able to write and send, and the
+    // thing the chief must never do is implement, which is Write, Edit and Bash above.
     for tool in &tools {
+        let allowed = matches!(tool.as_str(), "Read" | "Grep") || MAIL.contains(&tool.as_str());
         assert!(
-            matches!(tool.as_str(), "Read" | "Grep"),
-            "the chief may only read, and {tool} is not reading"
+            allowed,
+            "the chief may only read and send mail, and {tool} is neither"
         );
     }
 
@@ -493,4 +497,41 @@ fn a_worker_is_told_the_organisation_as_well() {
         "miles was not told who he reports to"
     );
     assert!(brief.contains("carl"), "nor that Carl exists");
+}
+
+/// Mail reaches every rank, because JJ asked for every agent and not for the panel's agents.
+///
+/// The first attempt put the list in the panel's own tool builder. Three paths start an agent,
+/// `tools_for` is the one they all ask, and the other two are the supervisor and the chain. So
+/// the ten agents actually running under `carl-army` could not send at all, which is precisely
+/// the set JJ meant.
+#[test]
+fn every_rank_can_send_mail() {
+    for rank in [Rank::Chief, Rank::Lead, Rank::Worker, Rank::Human] {
+        let tools = tools_for(rank);
+        assert!(
+            tools.iter().any(|t| t == "mcp__claude_ai_Gmail__send_message"),
+            "{rank:?} cannot send"
+        );
+        assert!(
+            tools.iter().any(|t| t == "mcp__claude_ai_Gmail__reply"),
+            "{rank:?} cannot reply"
+        );
+    }
+}
+
+/// The half still withheld, and the reason it is withheld.
+///
+/// Sending is recoverable by apologising. Trashing a message JJ needed is not recoverable at
+/// all, so it stays out of the tool list where no prompt can talk an agent into it.
+#[test]
+fn nobody_can_destroy_mail() {
+    for rank in [Rank::Chief, Rank::Lead, Rank::Worker, Rank::Human] {
+        for forbidden in ["trash", "spam", "label", "untrash", "delete"] {
+            assert!(
+                !tools_for(rank).iter().any(|t| t.contains(forbidden)),
+                "{rank:?} was granted a mail tool matching {forbidden}"
+            );
+        }
+    }
 }

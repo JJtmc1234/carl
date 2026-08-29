@@ -57,6 +57,28 @@ use super::org::{Agent, Rank, reports_of};
 /// rather than taking her word for it. That is a real gap, since a shell can write a file, and
 /// it is the smallest grant that still lets a reviewer check rather than trust. Nothing in any
 /// list raises privileges, and there is nowhere in `org.rs` to ask for that anyway.
+/// Mail, for everybody, whatever their rank.
+///
+/// JJ asked on 2026 08 29 that every agent be able to write and send. It went into the panel's
+/// own tool list first, which reached exactly one of the three paths that start an agent, so the
+/// ten actually running under `carl-army` could not send at all. It belongs here instead,
+/// because this is the one function all three ask.
+///
+/// Trash, spam marking and label changes are deliberately absent. A bad turn can embarrass JJ.
+/// It must not be able to lose him a message he needed, and an agent that cannot call a tool
+/// cannot be talked into calling it.
+pub const MAIL: &[&str] = &[
+    "mcp__claude_ai_Gmail__search_threads",
+    "mcp__claude_ai_Gmail__get_thread",
+    "mcp__claude_ai_Gmail__get_message",
+    "mcp__claude_ai_Gmail__list_drafts",
+    "mcp__claude_ai_Gmail__get_draft",
+    "mcp__claude_ai_Gmail__create_draft",
+    "mcp__claude_ai_Gmail__update_draft",
+    "mcp__claude_ai_Gmail__send_message",
+    "mcp__claude_ai_Gmail__reply",
+];
+
 pub fn tools_for(rank: Rank) -> Vec<String> {
     let names: &[&str] = match rank {
         // Read and Grep only. A chief still cannot implement by accident, which is what the
@@ -70,7 +92,11 @@ pub fn tools_for(rank: Rank) -> Vec<String> {
         Rank::Lead => &["Read", "Grep", "Glob", "Bash"],
         Rank::Worker => &["Read", "Grep", "Glob", "Bash", "Write", "Edit"],
     };
-    names.iter().map(|s| s.to_string()).collect()
+    names
+        .iter()
+        .chain(MAIL.iter())
+        .map(|s| s.to_string())
+        .collect()
 }
 
 /// What everybody in the chain is told, whatever their rank.

@@ -781,34 +781,10 @@ fn ask_agent(
 
 /// Calls one agent needs that its rank does not imply.
 ///
-/// Every agent reads and writes mail now, on JJ's instruction of 2026 08 29. It used to be Miles
-/// alone, and read and draft only.
-///
-/// What is still withheld is the part that destroys rather than the part that sends. Trash,
-/// spam marking and label changes are absent, so a bad turn can embarrass JJ but cannot lose him
-/// a message he needed. An agent that cannot call a tool cannot be talked into calling it, and
-/// that promise is worth keeping exactly where the damage would be permanent.
-fn mail_tools() -> Vec<&'static str> {
-    vec![
-        // Reading.
-        "mcp__claude_ai_Gmail__search_threads",
-        "mcp__claude_ai_Gmail__get_thread",
-        "mcp__claude_ai_Gmail__get_message",
-        "mcp__claude_ai_Gmail__list_drafts",
-        "mcp__claude_ai_Gmail__get_draft",
-        // Composing.
-        "mcp__claude_ai_Gmail__create_draft",
-        "mcp__claude_ai_Gmail__update_draft",
-        // Sending. Irreversible, which is why the rules around it live in the brief and in
-        // Projects/MEMORY rather than only here.
-        "mcp__claude_ai_Gmail__send_message",
-        "mcp__claude_ai_Gmail__reply",
-    ]
-}
-
-/// The mail tools plus anything one named agent needs on top.
+/// Empty. Mail used to live here, which meant only the panel granted it and the agents running
+/// under the supervisor could not send. It is in `chain::tools_for` now, which every path asks.
 fn extra_tools_for(_agent: &str) -> Vec<&'static str> {
-    mail_tools()
+    Vec::new()
 }
 
 /// Turns one piece of a turn into the frame that carries it.
