@@ -679,11 +679,10 @@ fn ask_agent(
         brief.push_str("\n\nWhat you keep between conversations:\n");
         brief.push_str(&extra);
     }
-    let rules = people.folder(agent).join("memory").join("rules.md");
-    if let Ok(extra) = std::fs::read_to_string(&rules) {
-        brief.push_str("\n\n");
-        brief.push_str(&extra);
-    }
+    // rules.md is deliberately not pasted in any more. Its standing decisions were migrated
+    // into memory/learned.md, which is read when it is needed rather than carried on every
+    // turn. Neither learned.md nor the detailed handbook is inlined: the summary above is the
+    // index and names both, which is the whole point of having an index.
 
     let mut tools = crate::army::chain::tools_for(who.rank);
     tools.extend(extra_tools_for(agent).into_iter().map(str::to_owned));

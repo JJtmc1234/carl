@@ -244,6 +244,14 @@ enum ArmyAction {
     /// Who has a folder, and what each of them is holding.
     Who,
 
+    /// Bring existing memory folders up to the current layout, without touching what is in them.
+    ///
+    /// `found` refuses a home that already holds an army and there is deliberately no other way
+    /// to re-save everybody, so a folder made before a layout change would otherwise never get
+    /// the new files. Every step asks whether the thing is already there, so running this twice
+    /// is indistinguishable from running it once.
+    Migrate,
+
     /// Give a folder to somebody in the organisation who does not have one yet.
     ///
     /// What `found` cannot do, because `found` is for an empty home and refuses one that
@@ -501,6 +509,17 @@ fn main() -> Result<()> {
                     println!("  {name:8} {id}");
                 }
                 println!("{} agents enlisted in {}", army.len(), home.display());
+                Ok(())
+            }
+            ArmyAction::Migrate => {
+                let people = carl::army::personnel::Personnel::open(&home)?;
+                let mut touched = 0usize;
+                for name in people.names() {
+                    let folder = people.folder(name);
+                    carl::army::personnel::memory::migrate(&folder)?;
+                    touched += 1;
+                }
+                println!("checked {touched} memory folders, added only what was missing");
                 Ok(())
             }
             ArmyAction::Who => {
