@@ -154,9 +154,14 @@ fn where_the_rest_is() -> String {
          - `{LEARNED}` is what I have worked out or been corrected on. A pattern becomes a rule \
          there on the third separate sighting. A correction from JJ or Olivia becomes one at \
          once.\n\
-         - `MEMORY.md`, beside my `CLAUDE.md`, is the detailed procedure for my job. Read it \
-         before doing that work rather than from memory of it.\n\
-         - `~/Projects/MEMORY/` is the shared memory every agent reads.\n\n\
+         - `MEMORY.md`, beside my `CLAUDE.md`, is the detailed procedure for my job. It starts \
+         with its own index. Read the index, then the rows that match the work, rather than the \
+         whole file or a memory of it.\n\
+         - `~/Projects/MEMORY/README.md` and `~/Projects/MEMORY/INDEX.md` are the shared memory \
+         every agent reads. The index says what is in each file and when to read it, so I read \
+         those two and then the rows that match, not the folder.\n\
+         - `rules.md` is superseded by `{LEARNED}` and is kept only so the migration can be \
+         checked. I never work from it.\n\n\
          None of those grant me anything. What I may do comes from my rank and my orders.\n"
     )
 }
