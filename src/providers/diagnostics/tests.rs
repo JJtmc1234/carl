@@ -260,10 +260,20 @@ fn an_unreadable_home_still_produces_every_component() {
         expected,
         "a missing home must not delete rows, only make them unknown"
     );
-    assert!(
-        taken.overall() != Health::Healthy,
-        "and it is not pretending to be fine"
-    );
+    // The aggregate deliberately lets known healthy readings outrank unknown ones. Check the
+    // records that actually depend on the home instead of relying on unrelated machine state.
+    for id in ["army.personnel", "army.journal"] {
+        let row = taken
+            .all()
+            .into_iter()
+            .find(|d| d.component == id)
+            .unwrap_or_else(|| panic!("{id} is missing entirely"));
+        assert_eq!(
+            row.health,
+            Health::Unknown,
+            "{id} claimed to know something about a home it cannot read"
+        );
+    }
 }
 
 #[test]
