@@ -230,8 +230,12 @@ impl Session {
                 }
                 // Shown as it happens and kept out of `said` for the same reason as a tool
                 // note. Reasoning is not the reply.
-                Ok(Chunk::Thinking(t)) => {
-                    if on_text(Say::Thinking(&t)) == Flow::Stop {
+                Ok(Chunk::Thinking { text, tokens }) => {
+                    if on_text(Say::Thinking {
+                        text: &text,
+                        tokens,
+                    }) == Flow::Stop
+                    {
                         break;
                     }
                 }
@@ -284,7 +288,9 @@ impl Session {
         while std::time::Instant::now() < until {
             match self.chunks.recv_timeout(TICK) {
                 // Nobody is listening to this turn any more, so a refusal in it is history.
-                Ok(Chunk::Refused { .. }) | Ok(Chunk::Doing { .. }) | Ok(Chunk::Thinking(_)) => {
+                Ok(Chunk::Refused { .. })
+                | Ok(Chunk::Doing { .. })
+                | Ok(Chunk::Thinking { .. }) => {
                     continue;
                 }
                 Ok(Chunk::Final(_)) => break,

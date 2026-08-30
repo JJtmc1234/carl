@@ -376,8 +376,18 @@ fn main() -> Result<()> {
                 // the answer, so only the words are stripped, printed and remembered.
                 let t = match t {
                     carl::Say::Words(t) => t,
-                    carl::Say::Thinking(t) => {
-                        let _ = write!(out, "\x1b[2m{t}\x1b[0m");
+                    carl::Say::Thinking { text, tokens } => {
+                        // The text is usually redacted and the size is what there is, so a
+                        // silent terminal would be the only sign of a long think.
+                        match (text.is_empty(), tokens) {
+                            (true, Some(n)) => {
+                                let _ = write!(out, "\x1b[2m[thinking, ~{n} tokens]\x1b[0m");
+                            }
+                            (true, None) => {}
+                            (false, _) => {
+                                let _ = write!(out, "\x1b[2m{text}\x1b[0m");
+                            }
+                        }
                         let _ = out.flush();
                         return carl::Flow::Continue;
                     }

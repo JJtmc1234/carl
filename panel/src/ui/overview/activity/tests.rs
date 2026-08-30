@@ -49,6 +49,7 @@ fn every_source_lands_in_one_list_newest_first() {
         streaming: false,
         thinking: String::new(),
         doing: Vec::new(),
+        thought_tokens: None,
     }];
 
     let beats = recent(&s, 10);
@@ -184,6 +185,7 @@ fn a_long_turn_is_cut_and_says_it_was_cut() {
         streaming: false,
         thinking: String::new(),
         doing: Vec::new(),
+        thought_tokens: None,
     }];
     let line = &recent(&s, 1)[0].what;
     assert!(line.ends_with("..."), "{line}");

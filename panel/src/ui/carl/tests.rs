@@ -55,6 +55,7 @@ mod thinking_tests {
             streaming,
             thinking: String::new(),
             doing: Vec::new(),
+            thought_tokens: None,
         }
     }
 

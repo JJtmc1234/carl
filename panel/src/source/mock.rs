@@ -247,6 +247,7 @@ fn opening_state() -> Snapshot {
                 streaming: false,
                 thinking: String::new(),
                 doing: Vec::new(),
+                thought_tokens: None,
             },
             Turn {
                 at: EPOCH + 40,
@@ -258,6 +259,7 @@ fn opening_state() -> Snapshot {
                 streaming: false,
                 thinking: String::new(),
                 doing: Vec::new(),
+                thought_tokens: None,
             },
         ],
         decisions: Vec::new(),

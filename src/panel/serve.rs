@@ -763,7 +763,7 @@ fn ask_agent(
                     said.push_str(&t);
                     Reply::Speaking { text: t }
                 }
-                crate::claude::Chunk::Thinking(t) => Reply::Thinking { text: t },
+                crate::claude::Chunk::Thinking { text, tokens } => Reply::Thinking { text, tokens },
                 crate::claude::Chunk::Doing { tool, detail } => Reply::Doing { tool, detail },
                 crate::claude::Chunk::Refused { tool, why } => Reply::Speaking {
                     text: crate::claude::refusal_line(&tool, &why),
@@ -808,7 +808,10 @@ fn extra_tools_for(_agent: &str) -> Vec<&'static str> {
 fn frame_for(say: crate::claude::Say<'_>) -> Reply {
     match say {
         crate::claude::Say::Words(t) => Reply::Speaking { text: t.into() },
-        crate::claude::Say::Thinking(t) => Reply::Thinking { text: t.into() },
+        crate::claude::Say::Thinking { text, tokens } => Reply::Thinking {
+            text: text.into(),
+            tokens,
+        },
         crate::claude::Say::Doing { tool, detail } => Reply::Doing {
             tool: tool.into(),
             detail: detail.into(),

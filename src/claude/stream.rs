@@ -33,7 +33,12 @@ pub enum Say<'a> {
     ///
     /// Never spoken and never added to the answer. It is not addressed to anybody, so reading
     /// it out loud is both wrong and roughly twice as long as the reply.
-    Thinking(&'a str),
+    Thinking {
+        text: &'a str,
+        /// Roughly how many tokens of reasoning, when the CLI says. The text is usually
+        /// redacted, so this is often the only thing there is to show.
+        tokens: Option<u32>,
+    },
     /// A tool he has just picked up.
     Doing { tool: &'a str, detail: &'a str },
     /// A tool call refused for want of permission.
@@ -60,9 +65,16 @@ pub enum Chunk {
     Text(String),
     /// Reasoning, as it is produced.
     ///
-    /// Dropped on the floor until now. It is the most useful thing on screen while a long
-    /// answer is being worked out, and it was the one part of the stream nothing could see.
-    Thinking(String),
+    /// **The text is usually empty and that is not a bug.** The CLI emits the thinking events
+    /// with the content redacted: `{"type":"thinking_delta","thinking":"","estimated_tokens":50}`.
+    /// So what is actually available is that thinking is happening and roughly how much of it,
+    /// which is worth showing. An empty frame with the count thrown away looks like nothing is
+    /// happening, which is the opposite of the truth and is what it looked like before.
+    Thinking {
+        text: String,
+        /// Roughly how many tokens of reasoning, when the CLI says.
+        tokens: Option<u32>,
+    },
     /// The final envelope, which carries the session id and the cost.
     Final(Box<Answer>),
     /// A tool call that was refused for want of permission.
@@ -186,8 +198,12 @@ impl Runner {
                 }
                 // Same rule as a tool note. Reasoning is shown and never kept, so an
                 // interrupted answer does not have Carl's working in the transcript.
-                Chunk::Thinking(t) => {
-                    if on_text(Say::Thinking(&t)) == Flow::Stop {
+                Chunk::Thinking { text, tokens } => {
+                    if on_text(Say::Thinking {
+                        text: &text,
+                        tokens,
+                    }) == Flow::Stop
+                    {
                         break;
                     }
                 }
@@ -259,9 +275,13 @@ pub fn chunk_of(line: &str) -> Option<Chunk> {
             // keys. `thinking_delta` holds `thinking`, `text_delta` holds `text`.
             match delta.get("type")?.as_str()? {
                 "text_delta" => Some(Chunk::Text(delta.get("text")?.as_str()?.to_owned())),
-                "thinking_delta" => {
-                    Some(Chunk::Thinking(delta.get("thinking")?.as_str()?.to_owned()))
-                }
+                "thinking_delta" => Some(Chunk::Thinking {
+                    text: delta.get("thinking")?.as_str()?.to_owned(),
+                    tokens: delta
+                        .get("estimated_tokens")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|n| u32::try_from(n).ok()),
+                }),
                 _ => None,
             }
         }
@@ -412,7 +432,13 @@ mod tests {
     #[test]
     fn thinking_is_carried_as_its_own_kind() {
         let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"hmm"}}}"#;
-        assert_eq!(chunk_of(line), Some(Chunk::Thinking("hmm".into())));
+        assert_eq!(
+            chunk_of(line),
+            Some(Chunk::Thinking {
+                text: "hmm".into(),
+                tokens: None
+            })
+        );
     }
 
     /// The two delta kinds keep their payload under different keys, and reading the wrong one
@@ -421,7 +447,13 @@ mod tests {
     fn a_thinking_delta_is_not_confused_with_a_text_delta() {
         let thinking = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"working"}}}"#;
         let words = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"answer"}}}"#;
-        assert_eq!(chunk_of(thinking), Some(Chunk::Thinking("working".into())));
+        assert_eq!(
+            chunk_of(thinking),
+            Some(Chunk::Thinking {
+                text: "working".into(),
+                tokens: None
+            })
+        );
         assert_eq!(chunk_of(words), Some(Chunk::Text("answer".into())));
     }
 
@@ -430,7 +462,14 @@ mod tests {
     #[test]
     fn only_words_count_as_the_answer() {
         assert_eq!(Say::Words("hello").words(), Some("hello"));
-        assert_eq!(Say::Thinking("hmm").words(), None);
+        assert_eq!(
+            Say::Thinking {
+                text: "hmm",
+                tokens: None
+            }
+            .words(),
+            None
+        );
         assert_eq!(
             Say::Doing {
                 tool: "Bash",
@@ -454,6 +493,53 @@ mod tests {
     fn an_error_envelope_produces_no_chunk_rather_than_a_false_answer() {
         let line = r#"{"type":"result","is_error":true,"result":"session not found"}"#;
         assert_eq!(chunk_of(line), None);
+    }
+}
+
+#[cfg(test)]
+mod redacted_thinking_tests {
+    use super::*;
+
+    /// What the CLI actually sends, measured rather than assumed. The reasoning text is
+    /// redacted and the size comes with it, so a parser that keeps only the text carries an
+    /// empty string and throws away the one fact there is.
+    #[test]
+    fn a_redacted_thought_keeps_its_size() {
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"","estimated_tokens":50}}}"#;
+        assert_eq!(
+            chunk_of(line),
+            Some(Chunk::Thinking {
+                text: String::new(),
+                tokens: Some(50)
+            })
+        );
+    }
+
+    /// A null size is absent rather than zero. Zero would read as "thought about nothing",
+    /// which is a different claim from "did not say".
+    #[test]
+    fn a_missing_size_is_absent_rather_than_zero() {
+        let line = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"","estimated_tokens":null}}}"#;
+        assert_eq!(
+            chunk_of(line),
+            Some(Chunk::Thinking {
+                text: String::new(),
+                tokens: None
+            })
+        );
+    }
+
+    /// Reasoning is still never part of the answer, whatever it carries.
+    #[test]
+    fn a_thought_is_never_words() {
+        assert_eq!(
+            Say::Thinking {
+                text: "",
+                tokens: Some(50)
+            }
+            .words(),
+            None
+        );
     }
 }
 

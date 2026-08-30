@@ -48,9 +48,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 use std::io::Write;
                 let _ = std::io::stdout().flush();
             }
-            Heard::Thinking(t) => {
-                thinking += t.len();
-                eprintln!("[thinking] {}", first_line(t));
+            Heard::Thinking { text, tokens } => {
+                thinking += text.len();
+                // The text is usually redacted and the size is what there is, so say the size.
+                match (text.is_empty(), tokens) {
+                    (true, Some(n)) => eprintln!("[thinking] about {n} tokens so far"),
+                    (true, None) => eprintln!("[thinking] (redacted, no size given)"),
+                    (false, _) => eprintln!("[thinking] {}", first_line(text)),
+                }
             }
             Heard::Doing { tool, detail } => {
                 doing += 1;

@@ -91,10 +91,11 @@ impl App {
                 streaming: false,
                 thinking: String::new(),
                 doing: Vec::new(),
+                thought_tokens: None,
             }),
 
             PanelEvent::CarlSaid { text, streaming } => self.carl_said(&text, streaming),
-            PanelEvent::CarlThinking { text } => self.carl_thinking(&text),
+            PanelEvent::CarlThinking { text, tokens } => self.carl_thinking(&text, tokens),
             PanelEvent::CarlDoing { tool, detail } => self.carl_doing(&tool, &detail),
 
             PanelEvent::DecisionRaised(decision) => {
@@ -237,6 +238,7 @@ impl App {
                 streaming,
                 thinking: String::new(),
                 doing: Vec::new(),
+                thought_tokens: None,
             });
         }
         self.conversation_at_end = true;
@@ -247,8 +249,15 @@ impl App {
     /// Opens a turn if none is open, because reasoning normally arrives before the first word
     /// of the answer. Requiring words first would mean the reasoning had nowhere to go for
     /// exactly the stretch it is most wanted.
-    fn carl_thinking(&mut self, text: &str) {
-        self.open_carl_turn().thinking.push_str(text);
+    fn carl_thinking(&mut self, text: &str, tokens: Option<u32>) {
+        let turn = self.open_carl_turn();
+        turn.thinking.push_str(text);
+        // The CLI redacts the reasoning and reports its size, so for most turns this is the
+        // only thing there is. Keeping the largest rather than summing, because each delta
+        // carries a running estimate of the same block and adding them up would multiply it.
+        if let Some(n) = tokens {
+            turn.thought_tokens = Some(turn.thought_tokens.unwrap_or(0).max(n));
+        }
         self.conversation_at_end = true;
     }
 
@@ -276,6 +285,7 @@ impl App {
                 streaming: true,
                 thinking: String::new(),
                 doing: Vec::new(),
+                thought_tokens: None,
             });
         }
         self.snapshot

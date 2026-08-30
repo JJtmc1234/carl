@@ -137,6 +137,12 @@ pub enum Reply {
     /// talking to himself in the middle of a sentence.
     Thinking {
         text: String,
+        /// Roughly how many tokens of reasoning, when the CLI says.
+        ///
+        /// Usually the only thing there is. The CLI redacts the reasoning text and reports the
+        /// size, so a frame carrying an empty string and no count looks like nothing happening.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tokens: Option<u32>,
     },
     /// A tool Carl has just picked up.
     ///

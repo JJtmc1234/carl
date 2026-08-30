@@ -27,12 +27,12 @@ const DETAIL_WIDTH: usize = 64;
 /// `id` distinguishes the collapsing sections between turns. Two turns sharing one id share
 /// their open state, which reads as the panel opening a section you did not touch.
 pub(crate) fn draw(ui: &mut Ui, turn: &Turn, id: u64) {
-    if turn.doing.is_empty() && turn.thinking.trim().is_empty() {
+    if turn.doing.is_empty() && turn.thinking.trim().is_empty() && turn.thought_tokens.is_none() {
         return;
     }
     ui.push_id(id, |ui| {
         tools(ui, &turn.doing);
-        thinking(ui, &turn.thinking, turn.streaming);
+        thinking(ui, &turn.thinking, turn.thought_tokens, turn.streaming);
     });
     ui.add_space(4.0);
 }
@@ -82,9 +82,22 @@ pub(crate) fn line_for(call: &ToolCall) -> String {
 ///
 /// Collapsed because it is longer than the answer and is not addressed to anybody. Open on one
 /// click because when an answer is taking too long it is the only thing that says why.
-fn thinking(ui: &mut Ui, text: &str, streaming: bool) {
+fn thinking(ui: &mut Ui, text: &str, tokens: Option<u32>, streaming: bool) {
     let text = text.trim();
+
+    // The usual case, and the one that mattered. The CLI sends the thinking events with the
+    // text redacted and the size attached, so there is nothing to expand and a collapsing
+    // header would open onto an empty box. A line saying he is thinking and roughly how much
+    // is the whole of what is available, and it is far better than showing nothing at all,
+    // which is what a reader saw before and read as a stalled agent.
     if text.is_empty() {
+        if let Some(n) = tokens {
+            ui.label(
+                RichText::new(format!("  thinking, about {n} tokens so far"))
+                    .font(theme::label())
+                    .color(theme::FAINT),
+            );
+        }
         return;
     }
     CollapsingHeader::new(

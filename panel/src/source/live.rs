@@ -40,8 +40,12 @@ enum FromBackend {
     Update(Box<Update>),
     /// A piece of Carl's answer, as it arrives.
     Speaking(String),
-    /// A piece of Carl's reasoning, as it arrives.
-    Thinking(String),
+    /// A piece of Carl's reasoning, as it arrives. The text is usually redacted by the CLI and
+    /// the size is what there is.
+    Thinking {
+        text: String,
+        tokens: Option<u32>,
+    },
     /// A tool Carl has just picked up.
     Doing {
         tool: String,
@@ -203,8 +207,11 @@ fn commander(socket: PathBuf, orders: Receiver<Command>, tx: Sender<FromBackend>
                             carl::panel::client::Heard::Words(t) => {
                                 FromBackend::Speaking(t.to_string())
                             }
-                            carl::panel::client::Heard::Thinking(t) => {
-                                FromBackend::Thinking(t.to_string())
+                            carl::panel::client::Heard::Thinking { text, tokens } => {
+                                FromBackend::Thinking {
+                                    text: text.to_string(),
+                                    tokens,
+                                }
                             }
                             carl::panel::client::Heard::Doing { tool, detail } => {
                                 FromBackend::Doing {
@@ -247,9 +254,9 @@ impl PanelDataSource for LivePanelDataSource {
                 // Reasoning and tool notes open the turn the same way words do, so the block
                 // exists to hold them before the first word of the answer arrives. That is the
                 // whole point: it is the wait that needed filling.
-                Ok(FromBackend::Thinking(text)) => {
+                Ok(FromBackend::Thinking { text, tokens }) => {
                     self.speaking = true;
-                    out.push(PanelEvent::CarlThinking { text });
+                    out.push(PanelEvent::CarlThinking { text, tokens });
                 }
                 Ok(FromBackend::Doing { tool, detail }) => {
                     self.speaking = true;

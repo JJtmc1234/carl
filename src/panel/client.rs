@@ -48,7 +48,11 @@ pub enum Heard<'a> {
     /// Part of the answer.
     Words(&'a str),
     /// Part of Carl's reasoning.
-    Thinking(&'a str),
+    ///
+    /// `text` is usually empty, because the CLI redacts it and reports the size instead. When
+    /// that happens `tokens` is the only thing there is to show, and showing nothing makes a
+    /// thinking agent look like a stalled one.
+    Thinking { text: &'a str, tokens: Option<u32> },
     /// A tool he has picked up.
     Doing { tool: &'a str, detail: &'a str },
 }
@@ -115,7 +119,10 @@ impl PanelClient {
             let frame = self.read()?;
             match frame.body {
                 Reply::Speaking { text } => on_text(Heard::Words(&text)),
-                Reply::Thinking { text } => on_text(Heard::Thinking(&text)),
+                Reply::Thinking { text, tokens } => on_text(Heard::Thinking {
+                    text: &text,
+                    tokens,
+                }),
                 Reply::Doing { tool, detail } => on_text(Heard::Doing {
                     tool: &tool,
                     detail: &detail,

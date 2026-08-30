@@ -190,6 +190,12 @@ pub struct Turn {
     /// reach the transcript, and it is the thing a reader wants collapsed by default and open
     /// when an answer is taking a suspiciously long time.
     pub thinking: String,
+    /// Roughly how many tokens Carl spent reasoning on this turn.
+    ///
+    /// Separate from `thinking` because they arrive separately and usually only this one
+    /// arrives. The CLI sends the thinking events with the text redacted and the size attached,
+    /// so a turn with real reasoning behind it has an empty string and a number.
+    pub thought_tokens: Option<u32>,
     /// The tools picked up during this turn, in order, with duplicates kept.
     ///
     /// Kept as a list rather than a rendered string so the panel can count them. Twelve reads

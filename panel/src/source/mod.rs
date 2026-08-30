@@ -82,6 +82,9 @@ pub enum PanelEvent {
     /// for it.
     CarlThinking {
         text: String,
+        /// Roughly how many tokens of reasoning. The CLI redacts the text and reports the size,
+        /// so this is usually the only thing there is to put on screen.
+        tokens: Option<u32>,
     },
     /// A tool Carl has just picked up, kept apart so it can be counted and laid out.
     CarlDoing {
