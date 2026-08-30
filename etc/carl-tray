@@ -5,10 +5,16 @@ The army has been invisible. It was down for twenty one hours in August and noth
 because knowing meant remembering to run a command. A thing in the top bar is the difference
 between state you can check and state you notice.
 
-Deliberately small. It shows how many agents are up and whether any need attention, and it opens
-the panel. It decides nothing, stores nothing and starts no agents: every action here shells out
-to `carl`, which is the one thing that owns the army. A tray that kept its own idea of the state
-would be a second source of truth in the place least able to defend one.
+Deliberately small. It shows how many agents are up and whether any need attention, opens the
+panel, and asks Carl about the screen when JJ asks it to. It decides nothing, stores nothing and
+starts no agents: every action here shells out to `carl`, which is the one thing that owns the
+army. A tray that kept its own idea of the state would be a second source of truth in the place
+least able to defend one.
+
+The screen is read on demand and never watched. JJ chose that on 2026 08 30. Nothing here takes
+a picture unless a menu item was clicked, and `carl look` replaces the same file each time
+rather than keeping a history. Ambient watching would make everything on screen readable by ten
+agents, which is a decision to make deliberately rather than inherit from a convenience.
 
 Python rather than Rust because the whole thing is a menu and a timer, and the GTK bindings are
 already on the machine. It reads `carl army status --brief`, which exists as a stable contract
@@ -16,6 +22,7 @@ for exactly this: the tree output is laid out for a person and free to change.
 """
 
 import subprocess
+import threading
 
 import gi
 
@@ -80,6 +87,8 @@ class Tray:
         menu.append(Gtk.SeparatorMenuItem())
 
         for label, handler in [
+            ("Ask Carl about my screen", self.ask_screen),
+            ("Ask Carl about this window", self.ask_window),
             ("Open the panel", self.open_panel),
             ("Status in a terminal", self.open_status),
             ("Revive whoever was given up on", self.revive),
@@ -127,6 +136,78 @@ class Tray:
             self.indicator.set_icon_full(ICON_OK, "Carl, healthy")
             self.indicator.set_label(f"carl {running}/{total}", "carl")
         return True
+
+    def ask_screen(self, _):
+        self.ask_about_screen(window_only=False)
+
+    def ask_window(self, _):
+        self.ask_about_screen(window_only=True)
+
+    def ask_about_screen(self, window_only):
+        """Takes one screenshot, on purpose, because JJ asked and not before.
+
+        On demand rather than ambient, which JJ chose on 2026 08 30. Nothing here watches the
+        screen and nothing keeps a picture: `carl look` replaces the same file each time. The
+        difference matters, because ambient would make everything on screen readable by ten
+        agents and that is a decision worth making deliberately rather than inheriting from a
+        convenience.
+        """
+        what = self.prompt(
+            "Ask about this window" if window_only else "Ask about the screen",
+            "What should Carl look for?",
+        )
+        if what is None:
+            return
+
+        args = ["look"] + (["--window"] if window_only else []) + ([what] if what else [])
+        # Off the main loop. Carl takes seconds and a frozen top bar for the whole of it looks
+        # like the machine has hung rather than like something is being read.
+        self.status_item.set_label("looking at the screen...")
+        threading.Thread(target=self._look, args=(args,), daemon=True).start()
+
+    def _look(self, args):
+        answer = carl(*args, timeout=180)
+        GLib.idle_add(self.show_answer, answer)
+
+    def show_answer(self, answer):
+        self.refresh()
+        text = answer or "Carl could not answer. Check `carl look` in a terminal."
+        dialog = Gtk.MessageDialog(
+            transient_for=None,
+            modal=False,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.CLOSE,
+            text="Carl looked at the screen",
+        )
+        dialog.format_secondary_text(text)
+        # Scrollable, because an answer about a screenshot is a paragraph rather than a line and
+        # a dialog that grows off the display cannot be dismissed.
+        dialog.set_default_size(560, -1)
+        dialog.connect("response", lambda d, _: d.destroy())
+        dialog.show()
+        return False
+
+    def prompt(self, title, question):
+        """One line of text, or None when it was cancelled."""
+        dialog = Gtk.Dialog(title=title, modal=True)
+        dialog.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Ask", Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text(question)
+        entry.set_activates_default(True)
+        entry.set_width_chars(48)
+        box = dialog.get_content_area()
+        box.set_spacing(8)
+        box.set_border_width(12)
+        box.add(Gtk.Label(label=question, xalign=0))
+        box.add(entry)
+        dialog.show_all()
+
+        answered = dialog.run()
+        text = entry.get_text().strip()
+        dialog.destroy()
+        return text if answered == Gtk.ResponseType.OK else None
 
     def open_panel(self, _):
         # Through systemd, because it owns the panel. Starting a second window by hand is how a
