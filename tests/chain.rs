@@ -53,6 +53,27 @@ fn work_reaches_the_worker_through_every_link() {
     // The line back up is walkable, which is what makes a tree of work possible later.
     assert_eq!(to_mason.parent.as_ref(), Some(&from_jj.id));
     assert!(from_jj.parent.is_none());
+
+    // The engineering side of the same objective, which is now a sibling of Factorio rather
+    // than its parent. Two departments, one chief, and nobody standing in between for no
+    // reason anybody could state.
+    let to_adrian = Task::split_from(
+        &from_jj,
+        "carl",
+        "adrian",
+        "the coding side of it",
+        verification(),
+    )
+    .unwrap();
+    let to_evan = Task::split_from(
+        &to_adrian,
+        "adrian",
+        "evan",
+        "fix the issue Iris wrote",
+        verification(),
+    )
+    .unwrap();
+    assert_eq!(to_evan.parent.as_ref(), Some(&to_adrian.id));
 }
 
 /// The engineering side of the same rule, which is the half that gained agents.
