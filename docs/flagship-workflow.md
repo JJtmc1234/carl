@@ -54,18 +54,21 @@ Twelve stages. The status column is what is true in this repository today, not w
 | 2 | priority | Carl decides what it displaces, and says so | not built |
 | 3 | delegation | Carl splits it to a lead, the lead splits it to a worker, nobody skips a level | built and tested |
 | 4 | execution | a permanent agent with a durable identity does the work in a long running process | built, first slice |
-| 5 | scoped permission | the lead grants one workspace, and something other than Carl enforces it | grant built, enforcement is AOS |
-| 6 | reporting | structured events for Carl, richer prose for the lead | events built, lead summaries not |
+| 5 | scoped permission | the lead grants one workspace, and something other than Carl enforces it | half. Carl records the grant, AOS enforces, never joined |
+| 6 | reporting | structured events for Carl, richer prose for the lead | half. Events built, lead summaries not |
 | 7 | review | whoever created the task reviews it, and nobody reviews their own work | built and tested |
 | 8 | blockers | a task that cannot move is visible and aging, not silently parked | not built |
 | 9 | failure recovery | a crashed worker's task stays its own, and it picks it up after the restart | built and tested |
 | 10 | memory continuity | a new process resumes the conversation, or reports exactly what was lost | built and tested |
-| 11 | escalation | three rejections goes over the lead's head, and a question Carl cannot answer reaches JJ | escalation built, the JJ path is not |
+| 11 | escalation | three rejections goes over the lead's head, and a question Carl cannot answer reaches JJ | half. Up the chain works, reaching JJ does not |
 | 12 | final output | a reviewed result, with the record able to say who accepted it and why | built and tested |
 
-Seven of twelve are built. The gaps are priority, blockers, lead summaries, the escalation path
-to JJ, and the enforcement half of stage 5. That last one is the only gap that is somebody
-else's repository, and it is the one David's security concern actually lands on.
+Seven built, three half built, two not started. Half means one side works and the other does
+not, which is a different thing from a gap and is worth counting separately.
+
+Stage 5 is the half that matters. The grant is recorded in Carl and the enforcement lives in
+AOS, and the two have never been pointed at each other on real work. It is also the only gap
+that is somebody else's repository, and it is the one David's security concern lands on.
 
 ## What "dramatically better" means
 
