@@ -1,0 +1,30 @@
+[Unit]
+# The Command Panel window, always on.
+#
+# JJ asked for the panel to be part of the machine rather than something he remembers to start.
+# It had been launched by hand, which is how a window that predated its own binary ended up on
+# screen for hours, showing a fix as though it had done nothing.
+#
+# After the backend, because the window attaches to its socket on startup. Wants rather than
+# Requires: the window retries, and a panel that opens and reports no backend is more useful
+# than one that refuses to open at all.
+Description=Carl Command Panel, window
+PartOf=graphical-session.target
+After=carl-panel-backend.service
+Wants=carl-panel-backend.service
+
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# A moment for the backend to bind its socket. The window survives connecting late, but a first
+# frame that says disconnected is a worse thing to open onto every login.
+ExecStartPre=/bin/sleep 2
+ExecStart=%h/.local/bin/carl-panel
+Restart=always
+RestartSec=5
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=graphical-session.target

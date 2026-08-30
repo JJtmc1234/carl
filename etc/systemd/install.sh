@@ -22,15 +22,20 @@ units="$HOME/.config/systemd/user"
 echo "building a release binary, which is what a service should run"
 cd "$repo"
 cargo build --release
+# The panel window is a second crate and a second binary. It was left out for a long time, so
+# the panel only ever ran out of the build directory and a window that predated its own binary
+# could sit on screen showing a fix as though it had done nothing.
+(cd "$repo/panel" && cargo build --release)
 
 mkdir -p "$HOME/.local/bin" "$units"
 install -m755 "$repo/target/release/carl" "$HOME/.local/bin/carl"
 # The sandboxed interpreter. Carl only allows this one, so without it here he can compute
 # nothing at all and says so rather than falling back to the real python.
 install -m755 "$repo/etc/carl-python" "$HOME/.local/bin/carl-python"
-echo "installed $HOME/.local/bin/carl and carl-python"
+install -m755 "$repo/target/release/carl-panel" "$HOME/.local/bin/carl-panel"
+echo "installed $HOME/.local/bin/carl, carl-panel and carl-python"
 
-for unit in carl-aec carl-listen carl-slack carl-army; do
+for unit in carl-aec carl-listen carl-slack carl-army carl-panel-backend carl-panel; do
   install -m644 "$here/$unit.service" "$units/$unit.service"
 done
 
@@ -41,7 +46,10 @@ systemctl --user daemon-reload
 
 # Slack is only started if it has been set up. Starting it without tokens gives a service
 # that fails every fifteen seconds forever, which buries anything else in the journal.
-want=(carl-aec carl-listen)
+# The panel is always on, because JJ asked for it to be part of the machine rather than
+# something he remembers to start. The backend comes with it: the window is a view and the
+# backend is the thing with state.
+want=(carl-aec carl-listen carl-panel-backend carl-panel)
 if [ -f "$HOME/.carl/slack.json" ] || [ -n "${CARL_SLACK_BOT_TOKEN:-}" ]; then
   want+=(carl-slack)
 else
