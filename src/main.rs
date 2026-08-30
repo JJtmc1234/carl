@@ -276,6 +276,28 @@ enum ArmyAction {
         last: usize,
     },
 
+    /// What the agents are actually doing, as they do it.
+    ///
+    /// `activity` answers what was decided and `status` answers what is up. Between those two
+    /// an agent can spend four minutes working with nothing said about it at all, which is what
+    /// this is for: the tool calls it makes and how much reasoning it is doing, in order.
+    ///
+    /// **The reasoning text itself is redacted before our code sees it.** The CLI emits the
+    /// thinking events with the content blanked and only an estimated size, so what is shown is
+    /// how much thinking is happening rather than the words. The tool calls are not redacted,
+    /// and they are the reasoning acted on.
+    Watch {
+        /// Only this agent. Everybody, when left out.
+        #[arg(long)]
+        agent: Option<String>,
+        /// How many of the most recent to show first.
+        #[arg(long, default_value_t = 40)]
+        last: usize,
+        /// Keep printing as more arrives, until interrupted.
+        #[arg(long, short)]
+        follow: bool,
+    },
+
     /// Put an agent the supervisor gave up on back in the ordinary queue.
     ///
     /// Giving up is deliberate: six starts that did not stick means starting it again is not the
@@ -603,6 +625,12 @@ fn main() -> Result<()> {
                 }
                 Ok(())
             }
+
+            ArmyAction::Watch {
+                agent,
+                last,
+                follow,
+            } => watch(&home, agent.as_deref(), last, follow),
 
             ArmyAction::Revive { agents, fresh } => {
                 use carl::army::runtime::revive::{self, Revived};
@@ -999,6 +1027,50 @@ fn main() -> Result<()> {
 }
 
 /// Unix seconds, for the commands that write a time down.
+/// Prints what the agents are doing, and keeps printing when asked to.
+///
+/// Polled rather than watched with inotify. The file is appended to a few times a second at
+/// most, a fifth of a second is faster than anybody reads, and a poll cannot miss a write the
+/// way a dropped watch descriptor can.
+fn watch(
+    home: &std::path::Path,
+    agent: Option<&str>,
+    last: usize,
+    follow: bool,
+) -> anyhow::Result<()> {
+    use carl::army::watching;
+
+    let recent = watching::read(home, agent, last)?;
+    if recent.is_empty() && !follow {
+        match agent {
+            Some(who) => println!("nothing recorded about {who} working"),
+            None => println!("nobody has done any recorded work in {}", home.display()),
+        }
+        return Ok(());
+    }
+    for line in &recent {
+        println!("{}", watching::line_of(line, now()));
+    }
+
+    if !follow {
+        return Ok(());
+    }
+
+    // From the end of the file rather than from the last line printed. The two are the same
+    // here and the offset is the thing that survives a trim.
+    let (_, mut at) = watching::since(home, 0, agent)?;
+    println!("following. ctrl c to stop.");
+    loop {
+        let (more, next) = watching::since(home, at, agent)?;
+        at = next;
+        for line in &more {
+            println!("{}", watching::line_of(line, now()));
+        }
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

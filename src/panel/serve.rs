@@ -687,6 +687,12 @@ fn ask_agent(
     let mut tools = crate::army::chain::tools_for(who.rank);
     tools.extend(extra_tools_for(agent).into_iter().map(str::to_owned));
 
+    // Also written down, not only streamed. The panel showing a tool call is worth nothing to
+    // anybody who was not watching the panel at the time, and this is the same agent doing the
+    // same work as under the supervisor, so it belongs in the same file.
+    let mut notes = crate::army::watching::Watching::of(home, agent);
+    notes.asked(said);
+
     let _ = send(
         out,
         &Frame::to(
@@ -749,6 +755,9 @@ fn ask_agent(
     // Read here rather than on a thread. Nothing else is waiting on this connection, and the
     // child keeps writing into the pipe while a frame is being sent.
     let mut said = String::new();
+    // Also written down, not only streamed. The panel showing a tool call is worth nothing to
+    // anybody who was not watching the panel at the time, and this is the same agent doing the
+    // same work as under the supervisor, so it belongs in the same file.
     if let Some(pipe) = child.stdout.take() {
         use std::io::BufRead;
         for line in std::io::BufReader::new(pipe)
@@ -758,6 +767,9 @@ fn ask_agent(
             let Some(chunk) = crate::claude::chunk_of(&line) else {
                 continue;
             };
+            if let Some(say) = chunk.as_say() {
+                notes.saw(say);
+            }
             let frame = match chunk {
                 crate::claude::Chunk::Text(t) => {
                     said.push_str(&t);
@@ -787,6 +799,7 @@ fn ask_agent(
     }
     let done = child.wait_with_output().map_err(|e| e.to_string())?;
     let said = said.trim().to_string();
+    notes.answered(&said, false);
     if said.is_empty() {
         return Err(String::from_utf8_lossy(&done.stderr).trim().to_string());
     }

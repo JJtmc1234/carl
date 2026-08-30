@@ -20,6 +20,7 @@ use crate::army::event::{Event, Journal};
 use crate::army::org;
 use crate::army::personnel::Personnel;
 use crate::army::task::{Status, Task, TaskId, Verification};
+use crate::army::watching;
 use crate::claude::{Flow, Runner, Session};
 use crate::{Error, Result, SessionId};
 
@@ -153,6 +154,12 @@ impl Chain {
         }
 
         let deadline = staffing::deadline(self.folder(who), self.deadline);
+        // Taken before the borrow below, and the working directory when there are no folders,
+        // which is how every test here runs.
+        let home = self
+            .people
+            .as_ref()
+            .map_or_else(|| self.workdir.clone(), |p| p.home().to_path_buf());
         let began = Instant::now();
         let voice = self
             .voices
@@ -161,13 +168,30 @@ impl Chain {
             .map(|(_, s)| s)
             .expect("just opened");
 
-        let answer = voice.ask(prompt, &mut |_| Flow::Continue, &mut || {
-            if began.elapsed() > deadline {
-                Flow::Stop
-            } else {
+        // What the agent does while it works, written down as it happens.
+        //
+        // This closure used to be `|_| Flow::Continue`, which threw away every tool call and
+        // every piece of reasoning in the one place agents actually do the work. An agent
+        // running under the chain was invisible for the whole of its turn: `status` said the
+        // process was up and `activity` said the task had moved, and in between there was
+        // nothing. `watching` is that gap, and nothing here can fail because of it.
+        let mut notes = watching::Watching::of(&home, who);
+        notes.asked(prompt);
+        let answer = voice.ask(
+            prompt,
+            &mut |say| {
+                notes.saw(say);
                 Flow::Continue
-            }
-        })?;
+            },
+            &mut || {
+                if began.elapsed() > deadline {
+                    Flow::Stop
+                } else {
+                    Flow::Continue
+                }
+            },
+        )?;
+        notes.answered(&answer.text, answer.interrupted);
 
         if answer.interrupted {
             return Err(Error::Claude(format!(

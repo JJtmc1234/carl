@@ -400,6 +400,13 @@ impl Supervisor {
     /// Refused for an agent this supervisor is not holding, including one that is running under
     /// a supervisor that has since gone, because that process is alive and unreachable.
     pub fn deliver(&mut self, agent: &AgentId, text: &str, deadline: Duration) -> Result<String> {
+        // Taken before the borrow below, so the notes can say who this was without holding a
+        // second reference to `self` while the session is being asked.
+        let home = self.home.clone();
+        let name = self
+            .roll
+            .get(agent)
+            .map_or_else(|| agent.to_string(), |r| r.name.clone());
         let session = self
             .live
             .iter_mut()
@@ -413,14 +420,24 @@ impl Supervisor {
             })?;
 
         let began = std::time::Instant::now();
+        // Written down as it happens. The supervisor holds the pipe for every agent that is not
+        // being asked from the panel, so a message delivered here used to be the least visible
+        // work in the army: nothing at all between "delivered" and whatever came back minutes
+        // later. Recording cannot fail the delivery, see `watching`.
+        let mut notes = crate::army::watching::Watching::of(&home, &name);
+        notes.asked(text);
         let answer = session.ask(
             text,
-            &mut |_| crate::claude::Flow::Continue,
+            &mut |say| {
+                notes.saw(say);
+                crate::claude::Flow::Continue
+            },
             &mut || match began.elapsed() > deadline {
                 true => crate::claude::Flow::Stop,
                 false => crate::claude::Flow::Continue,
             },
         )?;
+        notes.answered(&answer.text, answer.interrupted);
 
         match answer.interrupted {
             true => Err(crate::Error::Claude(format!(

@@ -45,6 +45,30 @@ pub enum Say<'a> {
     Refused { tool: &'a str, why: &'a str },
 }
 
+impl Chunk {
+    /// The same piece, borrowed, for anything that takes the streaming form.
+    ///
+    /// The two shapes exist for a reason: `Chunk` owns its text because it crosses a channel,
+    /// and `Say` borrows because a surface only looks at it. A path that reads chunks itself
+    /// still wants everything written for `Say`, and converting by hand at each of those was
+    /// how one of them came to show tool calls while another silently did not.
+    ///
+    /// `Final` has no borrowed form. It is the envelope repeating the whole answer rather than
+    /// a piece of one, and the pieces have already been handed over by the time it arrives.
+    pub fn as_say(&self) -> Option<Say<'_>> {
+        match self {
+            Chunk::Text(t) => Some(Say::Words(t)),
+            Chunk::Thinking { text, tokens } => Some(Say::Thinking {
+                text,
+                tokens: *tokens,
+            }),
+            Chunk::Doing { tool, detail } => Some(Say::Doing { tool, detail }),
+            Chunk::Refused { tool, why } => Some(Say::Refused { tool, why }),
+            Chunk::Final(_) => None,
+        }
+    }
+}
+
 impl Say<'_> {
     /// The words, if this is words. `None` for every kind of note.
     ///

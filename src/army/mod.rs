@@ -49,6 +49,7 @@ mod roster;
 pub mod runtime;
 pub mod survey;
 pub mod task;
+pub mod watching;
 
 pub use board::Board;
 pub use campaign::{Departmental, JOBS_PER_HEAD, Outcome, parse_jobs, run_department};
