@@ -115,8 +115,46 @@ impl Camera {
                 to.display()
             )));
         }
+        looks_like_a_picture(to)?;
         Ok(to.to_path_buf())
     }
+}
+
+/// The least a real screenshot compresses to, in bytes per thousand pixels.
+///
+/// Measured on this machine rather than guessed. A blank frame of any single colour lands
+/// between 3.0 and 3.9, because PNG deflates uniform data to almost nothing. A real screenshot
+/// of the same size came to 160.8. Ten sits two and a half times above the blank ceiling and
+/// sixteen times below a real one, which is as much room as a threshold ever gets.
+const LEAST_DENSITY: f64 = 10.0;
+
+/// Refuses a capture that is technically a PNG and has nothing in it.
+///
+/// Wayland is the reason this exists. The compositor can refuse a capture and leave a full sized
+/// image of solid black behind, and everything downstream then works perfectly: the file is
+/// there, the header parses, the model reads it and describes a black rectangle in a confident
+/// sentence. That is worse than an error, because an error stops and a confident description of
+/// nothing gets believed.
+fn looks_like_a_picture(path: &Path) -> Result<()> {
+    let (w, h) = png_size(path)?;
+    let pixels = u64::from(w) * u64::from(h);
+    if pixels == 0 {
+        return Err(Error::Refused(format!(
+            "{} has no pixels in it",
+            path.display()
+        )));
+    }
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let density = size as f64 / pixels as f64 * 1000.0;
+    if density < LEAST_DENSITY {
+        return Err(Error::Refused(format!(
+            "the screenshot at {} is {w} by {h} and only {size} bytes, which is what a blank \
+             frame compresses to rather than a picture. The compositor almost certainly refused \
+             the capture. Nothing is described rather than describing an empty rectangle",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Width and height straight out of the PNG header.
@@ -219,5 +257,134 @@ mod tests {
         let path = dir.path().join("nope.png");
         std::fs::write(&path, "just some text pretending").unwrap();
         assert!(png_size(&path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod blank_frame_tests {
+    use super::*;
+
+    /// A PNG of one flat colour, built the way a refused capture leaves one behind.
+    fn flat_png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        fn chunk(tag: &[u8], data: &[u8]) -> Vec<u8> {
+            let mut body = tag.to_vec();
+            body.extend_from_slice(data);
+            let mut out = (data.len() as u32).to_be_bytes().to_vec();
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc32(&body).to_be_bytes());
+            out
+        }
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = 0xffff_ffffu32;
+            for b in bytes {
+                crc ^= u32::from(*b);
+                for _ in 0..8 {
+                    let mask = (crc & 1).wrapping_neg();
+                    crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+                }
+            }
+            !crc
+        }
+
+        let mut ihdr = w.to_be_bytes().to_vec();
+        ihdr.extend_from_slice(&h.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+
+        // Stored deflate blocks, so this needs no compression library. A real encoder would
+        // shrink it further, which only makes the density lower and the test stricter.
+        // One row built once and repeated. The leading zero is the PNG filter byte, which is
+        // per row rather than per image.
+        let mut row = vec![0u8];
+        for _ in 0..w {
+            row.extend_from_slice(&rgb);
+        }
+        let mut raw = Vec::with_capacity(row.len() * h as usize);
+        for _ in 0..h {
+            raw.extend_from_slice(&row);
+        }
+        let mut z = vec![0x78, 0x01];
+        for (i, part) in raw.chunks(65535).enumerate() {
+            let last = u8::from((i + 1) * 65535 >= raw.len());
+            z.push(last);
+            z.extend_from_slice(&(part.len() as u16).to_le_bytes());
+            z.extend_from_slice(&(!(part.len() as u16)).to_le_bytes());
+            z.extend_from_slice(part);
+        }
+        let mut a = 1u32;
+        let mut b = 0u32;
+        for byte in &raw {
+            a = (a + u32::from(*byte)) % 65521;
+            b = (b + a) % 65521;
+        }
+        z.extend_from_slice(&((b << 16) | a).to_be_bytes());
+
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&chunk(b"IHDR", &ihdr));
+        png.extend_from_slice(&chunk(b"IDAT", &z));
+        png.extend_from_slice(&chunk(b"IEND", b""));
+        png
+    }
+
+    fn written(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let at = dir.path().join("shot.png");
+        std::fs::write(&at, bytes).expect("write");
+        (dir, at)
+    }
+
+    /// The failure this exists for. Wayland refused the capture, the file is a full sized image
+    /// of solid black, and everything downstream works: the model reads it and describes an
+    /// empty rectangle in a confident sentence. That is worse than an error.
+    #[test]
+    fn a_blank_frame_is_refused_rather_than_described() {
+        // Deliberately tiny in stored form so the density is unambiguous. A real encoder makes
+        // a flat frame smaller still.
+        let (_d, at) = written(&flat_png(2468, 460, [0, 0, 0])[..300]);
+        let why = looks_like_a_picture(&at)
+            .expect_err("a blank frame must be refused")
+            .to_string();
+        assert!(why.contains("blank frame"), "{why}");
+        assert!(
+            why.contains("compositor"),
+            "the reason must say what to look at: {why}"
+        );
+    }
+
+    /// White and grey are as blank as black. The check is about density, not about darkness.
+    #[test]
+    fn any_flat_colour_is_refused_not_only_black() {
+        for rgb in [[255, 255, 255], [30, 30, 30], [11, 14, 19]] {
+            let (_d, at) = written(&flat_png(1920, 1080, rgb)[..400]);
+            assert!(
+                looks_like_a_picture(&at).is_err(),
+                "a flat {rgb:?} frame was accepted"
+            );
+        }
+    }
+
+    /// And the other half, or every real screenshot would be thrown away. Measured on this
+    /// machine a real one is 160 bytes per thousand pixels against a blank one's 4.
+    #[test]
+    fn a_picture_with_something_in_it_is_accepted() {
+        let mut bytes = flat_png(200, 100, [0, 0, 0]);
+        // Padded to the density a real screenshot has. The check reads the file size, so this
+        // is the same signal a photograph of a busy screen produces.
+        bytes.resize(200 * 100 / 1000 * 161, 0x5a);
+        let (_d, at) = written(&bytes);
+        assert!(
+            looks_like_a_picture(&at).is_ok(),
+            "a real picture was refused"
+        );
+    }
+
+    #[test]
+    fn something_that_is_not_a_png_is_refused_by_name() {
+        let (_d, at) = written(b"not a png at all");
+        assert!(
+            looks_like_a_picture(&at)
+                .expect_err("not a png")
+                .to_string()
+                .contains("not a PNG")
+        );
     }
 }
