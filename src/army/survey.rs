@@ -158,6 +158,32 @@ fn names_agent(haystack: &str, name: &str) -> bool {
     false
 }
 
+/// One line of counts, for something reading rather than somebody looking.
+///
+/// A stable contract, kept deliberately separate from the tree. The tree is laid out for a
+/// person and is free to change with taste. Anything parsing it would break the next time
+/// somebody widened a column, so the thing that gets parsed says so and never moves.
+///
+/// `running=9 asleep=1 attention=0 total=10`
+pub fn brief_of(all: &[Standing]) -> String {
+    let in_state = |want: &str| {
+        all.iter()
+            .filter(|s| {
+                s.runtime
+                    .as_ref()
+                    .is_some_and(|r| lifecycle_word(&r.lifecycle) == want)
+            })
+            .count()
+    };
+    format!(
+        "running={} asleep={} attention={} total={}",
+        in_state("running"),
+        in_state("asleep"),
+        all.iter().filter(|s| s.worry().is_some()).count(),
+        all.len(),
+    )
+}
+
 /// One word for a column, from a lifecycle that carries a whole sentence.
 ///
 /// The reason belongs on the warning line, not in the column. Debug printing the variant put

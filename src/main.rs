@@ -249,7 +249,14 @@ enum ArmyAction {
     /// `who` answers what each agent is holding. This answers whether each agent can work at
     /// all, which is a different question: a process can be up, a session can be resumed, and
     /// the folder the agent keeps everything in can be gone.
-    Status,
+    Status {
+        /// One line of counts, for something reading rather than somebody looking.
+        ///
+        /// A stable contract. The tree above is laid out for a person and is free to change
+        /// with taste, and anything parsing it would break the next time it did.
+        #[arg(long)]
+        brief: bool,
+    },
 
     /// Everything known about one agent, from every source that knows something.
     Inspect {
@@ -568,9 +575,12 @@ fn main() -> Result<()> {
                 println!("{} agents enlisted in {}", army.len(), home.display());
                 Ok(())
             }
-            ArmyAction::Status => {
+            ArmyAction::Status { brief } => {
                 let all = carl::army::survey::everyone(&home)?;
-                print_status(&all);
+                match brief {
+                    true => println!("{}", carl::army::survey::brief_of(&all)),
+                    false => print_status(&all),
+                }
                 Ok(())
             }
 

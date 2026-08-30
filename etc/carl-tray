@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Carl in the top bar.
+
+The army has been invisible. It was down for twenty one hours in August and nothing said so,
+because knowing meant remembering to run a command. A thing in the top bar is the difference
+between state you can check and state you notice.
+
+Deliberately small. It shows how many agents are up and whether any need attention, and it opens
+the panel. It decides nothing, stores nothing and starts no agents: every action here shells out
+to `carl`, which is the one thing that owns the army. A tray that kept its own idea of the state
+would be a second source of truth in the place least able to defend one.
+
+Python rather than Rust because the whole thing is a menu and a timer, and the GTK bindings are
+already on the machine. It reads `carl army status --brief`, which exists as a stable contract
+for exactly this: the tree output is laid out for a person and free to change.
+"""
+
+import subprocess
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("AyatanaAppIndicator3", "0.1")
+from gi.repository import AyatanaAppIndicator3 as AppIndicator  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
+
+# How often to ask. Five seconds is the supervisor's own tick, so anything faster reports the
+# same answer twice and anything much slower means the top bar is stale when you look at it.
+EVERY_SECONDS = 5
+
+# Named icons, so this follows the desktop theme rather than shipping art that will not match.
+ICON_OK = "emblem-default"
+ICON_ATTENTION = "dialog-warning"
+ICON_UNKNOWN = "dialog-question"
+
+
+def carl(*args, timeout=10):
+    """Runs carl and gives back its output, or None when it could not be asked.
+
+    None is not zero. An army nobody could ask about is a different thing from an army with
+    nothing running, and the top bar has to be able to say so.
+    """
+    try:
+        done = subprocess.run(
+            ["carl", *args], capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def read_state():
+    """`running=10 asleep=0 attention=0 total=10` as a dict, or None."""
+    line = carl("army", "status", "--brief")
+    if not line:
+        return None
+    out = {}
+    for pair in line.split():
+        key, _, value = pair.partition("=")
+        if value.isdigit():
+            out[key] = int(value)
+    return out or None
+
+
+class Tray:
+    def __init__(self):
+        self.indicator = AppIndicator.Indicator.new(
+            "carl-army", ICON_UNKNOWN, AppIndicator.IndicatorCategory.SYSTEM_SERVICES
+        )
+        self.indicator.set_status(AppIndicator.IndicatorStatus.ACTIVE)
+        self.status_item = Gtk.MenuItem(label="asking...")
+        self.status_item.set_sensitive(False)
+        self.indicator.set_menu(self.menu())
+        self.refresh()
+        GLib.timeout_add_seconds(EVERY_SECONDS, self.refresh)
+
+    def menu(self):
+        menu = Gtk.Menu()
+        menu.append(self.status_item)
+        menu.append(Gtk.SeparatorMenuItem())
+
+        for label, handler in [
+            ("Open the panel", self.open_panel),
+            ("Status in a terminal", self.open_status),
+            ("Revive whoever was given up on", self.revive),
+        ]:
+            item = Gtk.MenuItem(label=label)
+            item.connect("activate", handler)
+            menu.append(item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+        quit_item = Gtk.MenuItem(label="Quit this indicator")
+        # Quits the icon and nothing else. The army and the panel are systemd's, and a tray that
+        # could stop them would make closing a menu a way to take the machine down.
+        quit_item.connect("activate", lambda _: Gtk.main_quit())
+        menu.append(quit_item)
+
+        menu.show_all()
+        return menu
+
+    def refresh(self):
+        state = read_state()
+        if state is None:
+            self.indicator.set_icon_full(ICON_UNKNOWN, "Carl, cannot be asked")
+            self.status_item.set_label("cannot reach carl")
+            self.indicator.set_label("carl ?", "carl")
+            return True
+
+        running = state.get("running", 0)
+        total = state.get("total", 0)
+        attention = state.get("attention", 0)
+        asleep = state.get("asleep", 0)
+
+        parts = [f"{running} of {total} running"]
+        if asleep:
+            parts.append(f"{asleep} asleep")
+        if attention:
+            parts.append(f"{attention} need attention")
+        self.status_item.set_label(", ".join(parts))
+
+        # The label is what is actually visible without opening anything, so it carries the one
+        # number worth interrupting somebody about rather than the reassuring one.
+        if attention:
+            self.indicator.set_icon_full(ICON_ATTENTION, "Carl, agents need attention")
+            self.indicator.set_label(f"carl !{attention}", "carl")
+        else:
+            self.indicator.set_icon_full(ICON_OK, "Carl, healthy")
+            self.indicator.set_label(f"carl {running}/{total}", "carl")
+        return True
+
+    def open_panel(self, _):
+        # Through systemd, because it owns the panel. Starting a second window by hand is how a
+        # stale one ended up on screen next to a fresh binary.
+        subprocess.Popen(["systemctl", "--user", "restart", "carl-panel.service"])
+
+    def open_status(self, _):
+        subprocess.Popen(
+            ["gnome-terminal", "--", "bash", "-lc", "carl army status; read -n1 -r -p ''"]
+        )
+
+    def revive(self, _):
+        subprocess.Popen(
+            [
+                "gnome-terminal",
+                "--",
+                "bash",
+                "-lc",
+                "carl army revive --fresh; read -n1 -r -p ''",
+            ]
+        )
+
+
+if __name__ == "__main__":
+    Tray()
+    Gtk.main()
