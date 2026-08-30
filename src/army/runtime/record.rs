@@ -134,6 +134,22 @@ pub struct Runtime {
     /// Consecutive starts that did not stick. Reset by a process that stayed up.
     #[serde(default)]
     pub attempts: u32,
+    /// Whether a process using `session` ever lived long enough to have created it.
+    ///
+    /// The difference between a conversation and an intention to have one. `--resume` on an id
+    /// claude never wrote fails immediately, which the supervisor counts as a failed start, so
+    /// an unestablished session makes every attempt fail the same way forever.
+    ///
+    /// That is not hypothetical. On 2026 08 28 all ten agents reached this state at once: the
+    /// renewal at three failures minted a fresh id, the process died before writing anything,
+    /// and attempts four and five resumed an id that had never existed. Every recorded session
+    /// in the army was one no conversation matched.
+    ///
+    /// Defaulted, so a record written before this existed loads as not established. That is the
+    /// conservative direction: one fresh start, which then establishes it, rather than trusting
+    /// an id whose history is unknown.
+    #[serde(default)]
+    pub established: bool,
     /// Woken deliberately, and not to be put back until its window ends.
     ///
     /// The collision the design note flagged first: a scheduled window and an urgent task will
@@ -164,6 +180,7 @@ impl Runtime {
             continuity: None,
             abandoned: Vec::new(),
             attempts: 0,
+            established: false,
             roused: false,
             supervisor: None,
             updated_at: now,

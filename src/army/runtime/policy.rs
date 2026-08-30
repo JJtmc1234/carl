@@ -165,8 +165,14 @@ pub fn decide(record: &Runtime, supervisor: u32, alive: bool, now: u64) -> Next 
     }
 }
 
+/// Resume only a conversation that is known to exist.
+///
+/// A recorded id is an intention. An established one is a conversation a process actually got
+/// far enough to create. Resuming the first fails immediately and forever, because `--resume`
+/// on an id claude never wrote is an error rather than a fresh start, and the supervisor counts
+/// it as another failed start.
 fn resume_or_fresh(record: &Runtime) -> Start {
-    match record.session.is_some() {
+    match record.session.is_some() && record.established {
         true => Start::Resume,
         false => Start::Fresh,
     }
@@ -189,18 +195,33 @@ mod tests {
         Runtime::never(AgentId::fresh().unwrap(), "nora", 0)
     }
 
+    /// A session here is an established one, because that is what these tests are about: what
+    /// happens to an agent whose conversation exists. The case where it does not is its own
+    /// test, and it is the one that took the whole army down.
     fn exited(attempts: u32, at: u64, with_session: bool) -> Runtime {
         let mut r = record();
         r.lifecycle = Lifecycle::Exited { code: Some(1), at };
         r.attempts = attempts;
         if with_session {
             r.session = Some(SessionId::fresh().unwrap());
+            r.established = true;
         }
         r
     }
 
+    /// A recorded id that no process ever got far enough to create.
+    fn exited_with_a_session_that_never_existed(attempts: u32, at: u64) -> Runtime {
+        let mut r = exited(attempts, at, true);
+        r.established = false;
+        r
+    }
+
+    /// A record that claims a process carries an established session, because a process that
+    /// got as far as being recorded as running is one that created its conversation.
     fn running(supervisor: Option<u32>) -> Runtime {
         let mut r = record();
+        r.session = Some(SessionId::fresh().unwrap());
+        r.established = true;
         r.lifecycle = Lifecycle::Running {
             pid: 4321,
             started: 987,
@@ -343,5 +364,40 @@ mod tests {
             !was_healthy(100, 50),
             "a clock that went backwards is not up"
         );
+    }
+
+    /// The bug that took all ten agents down for twenty one hours on 2026 08 28.
+    ///
+    /// Renewing at three failures mints a fresh id and stores it. If that process dies before
+    /// writing anything, the id names no conversation, and `--resume` on it is an error rather
+    /// than a fresh start. Every later attempt then fails identically until the supervisor gives
+    /// up, and the record is left naming a conversation that has never existed.
+    #[test]
+    fn a_session_no_process_ever_created_is_never_resumed() {
+        for attempts in [1, 2, 4, 5] {
+            let record = exited_with_a_session_that_never_existed(attempts, 0);
+            let decided = decide(&record, 1, false, now_well_past_any_backoff());
+            assert_eq!(
+                decided,
+                Next::Start(Start::Fresh),
+                "attempt {attempts} resumed a conversation that was never created"
+            );
+        }
+    }
+
+    /// And the other half, or the fix would just throw away every conversation. A session a
+    /// process actually lived on is resumed as before.
+    #[test]
+    fn a_session_a_process_lived_on_is_still_resumed() {
+        let record = exited(1, 0, true);
+        assert_eq!(
+            decide(&record, 1, false, now_well_past_any_backoff()),
+            Next::Start(Start::Resume)
+        );
+    }
+
+    /// Far enough past any backoff that the decision under test is the session, not the wait.
+    fn now_well_past_any_backoff() -> u64 {
+        BACKOFF_MAX * 4
     }
 }
