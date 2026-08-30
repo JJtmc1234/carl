@@ -112,10 +112,24 @@ pub fn tools_for(rank: Rank) -> Vec<String> {
     };
     names
         .iter()
+        .chain(std::iter::once(&HYPR))
         .chain(MAIL.iter())
         .map(|s| s.to_string())
         .collect()
 }
+
+/// Looking at the desktop and moving windows, for every rank.
+///
+/// Scoped to `carl hypr` rather than to `hyprctl`, and the difference is the whole point.
+/// `hyprctl dispatch exec <anything>` runs an arbitrary command, so an agent granted raw
+/// hyprctl would hold a shell it was never given and every list above would be decoration.
+/// `carl hypr` reads freely and writes only through a named allow list of dispatchers that move
+/// windows and change workspaces. See `hypr/dispatch.rs` for what is refused and why.
+///
+/// Given to the chief too, though he can change nothing else. Knowing what is on JJ's screen is
+/// reading, and a chief who cannot see the machine cannot say which department a problem
+/// belongs to.
+const HYPR: &str = "Bash(carl hypr:*)";
 
 /// What everybody in the chain is told, whatever their rank.
 const STANDING: &str = "\

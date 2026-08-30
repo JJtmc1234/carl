@@ -51,6 +51,17 @@ enum Command {
         window: bool,
     },
 
+    /// Look at Hyprland, and move windows around in it.
+    ///
+    /// Reads are free. Writes are a named list of dispatchers that only ever move a window or
+    /// change a workspace: `exec`, `exit`, `killactive` and `keyword` are refused on purpose.
+    /// `hyprctl dispatch exec` runs any command at all, so an agent holding raw hyprctl would
+    /// have a shell rather than a window manager, and every tool list here would be decoration.
+    Hypr {
+        #[command(subcommand)]
+        action: HyprAction,
+    },
+
     /// Listen on the microphone until interrupted.
     ///
     /// Say "hey carl" to start, "end conversation" to finish. Anything not addressed to
@@ -230,6 +241,33 @@ enum Command {
     Memory {
         #[command(subcommand)]
         action: MemoryAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HyprAction {
+    /// Every window that is open, with the workspace it is on.
+    Windows,
+    /// The window with focus, or a plain answer that there is not one.
+    Active,
+    /// The workspaces that exist.
+    Workspaces,
+    /// The monitors, their size, and what each is showing.
+    Monitors,
+    /// Show a workspace by number or name.
+    Workspace { which: String },
+    /// Give a window focus, found by class or title.
+    ///
+    /// Refuses an ambiguous name rather than picking one. Two Chrome windows and "focus chrome"
+    /// is a question, and answering it silently moves the wrong window and reports success.
+    Focus { window: String },
+    /// Send a window to a workspace, found by class or title.
+    Send { window: String, workspace: String },
+    /// Run one allowed dispatcher directly, for the ones without their own command.
+    Do {
+        what: String,
+        #[arg(default_value = "")]
+        arg: String,
     },
 }
 
@@ -584,6 +622,8 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+
+        Command::Hypr { action } => hypr(action),
 
         Command::Army { action } => match action {
             ArmyAction::Found => {
@@ -1027,6 +1067,102 @@ fn main() -> Result<()> {
 }
 
 /// Unix seconds, for the commands that write a time down.
+/// Hyprland, read and moved, through the bounded surface rather than through a shell.
+///
+/// Printed for a person rather than as JSON. Anything that wants JSON can call hyprctl itself,
+/// and the reason this exists at all is that agents must not.
+fn hypr(action: HyprAction) -> anyhow::Result<()> {
+    use carl::hypr;
+
+    match action {
+        HyprAction::Windows => {
+            let windows = hypr::clients()?;
+            if windows.is_empty() {
+                println!("nothing is open");
+                return Ok(());
+            }
+            for w in &windows {
+                let where_ = match w.workspace.name.is_empty() {
+                    false => w.workspace.name.clone(),
+                    true => w.workspace.id.to_string(),
+                };
+                let how = match (w.floating, w.fullscreen > 0) {
+                    (_, true) => " fullscreen",
+                    (true, false) => " floating",
+                    (false, false) => "",
+                };
+                println!("{:<3} {:<22} {}{}", where_, w.name(), w.title, how);
+            }
+            println!("\n{} windows", windows.len());
+            Ok(())
+        }
+
+        HyprAction::Active => {
+            match hypr::active_window()? {
+                Some(w) => println!("{} on workspace {}\n{}", w.name(), w.workspace.id, w.title),
+                // Said plainly. Hyprland answers an empty object here, and describing a window
+                // whose every field is a default is how an agent reports on a window that is
+                // not there.
+                None => println!("nothing has focus"),
+            }
+            Ok(())
+        }
+
+        HyprAction::Workspaces => {
+            for w in hypr::workspaces()? {
+                println!("{:<4} {}", w.id, w.name);
+            }
+            Ok(())
+        }
+
+        HyprAction::Monitors => {
+            for m in hypr::monitors()? {
+                let focus = match m.focused {
+                    true => " (focused)",
+                    false => "",
+                };
+                println!(
+                    "{:<8} {}x{} at {}x, showing {}{}",
+                    m.name, m.width, m.height, m.scale, m.active_workspace.id, focus
+                );
+            }
+            Ok(())
+        }
+
+        HyprAction::Workspace { which } => {
+            println!("{}", hypr::dispatch("workspace", &which)?);
+            Ok(())
+        }
+
+        HyprAction::Focus { window } => {
+            let windows = hypr::clients()?;
+            let found = hypr::only_match(&windows, &window)?;
+            // By address rather than by name. The name found the window, and passing the name
+            // on would make Hyprland match it again by its own rules against a screen that may
+            // have changed in between.
+            hypr::dispatch("focuswindow", &format!("address:{}", found.address))?;
+            println!("focused {} ({})", found.name(), found.title);
+            Ok(())
+        }
+
+        HyprAction::Send { window, workspace } => {
+            let windows = hypr::clients()?;
+            let found = hypr::only_match(&windows, &window)?;
+            hypr::dispatch(
+                "movetoworkspacesilent",
+                &format!("{workspace},address:{}", found.address),
+            )?;
+            println!("sent {} to workspace {workspace}", found.name());
+            Ok(())
+        }
+
+        HyprAction::Do { what, arg } => {
+            println!("{}", hypr::dispatch(&what, &arg)?);
+            Ok(())
+        }
+    }
+}
+
 /// Prints what the agents are doing, and keeps printing when asked to.
 ///
 /// Polled rather than watched with inotify. The file is appended to a few times a second at

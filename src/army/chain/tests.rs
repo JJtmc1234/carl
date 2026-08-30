@@ -79,8 +79,15 @@ fn carl_can_never_do_the_work_himself() {
         !tools.iter().any(|t| t == "Bash"),
         "carl must never hold unrestricted Bash: {tools:?}"
     );
+    // Every shell he holds is one named command, not a shell. `Bash(carl handoff:*)` can only
+    // hand work to a lead, and `Bash(carl hypr:*)` can only look at the desktop and move a
+    // window. Both are scoped to a single binary whose own allow list decides the rest, which
+    // is the distinction the bare `Bash` assertion above exists to protect.
     for tool in tools.iter().filter(|t| t.contains("Bash")) {
-        assert_eq!(tool, HANDOFF, "the only shell carl gets is the handoff");
+        assert!(
+            tool == HANDOFF || tool == HYPR,
+            "carl was given a shell that is not one scoped command: {tool}"
+        );
     }
 
     // Everything he holds is either reading or mail. A tool added to the chief later has to
@@ -88,13 +95,18 @@ fn carl_can_never_do_the_work_himself() {
     //
     // Mail is not doing the work. JJ asked that every agent be able to write and send, and the
     // thing the chief must never do is implement, which is Write, Edit and Bash above.
+    // Looking at the desktop is reading. Moving a window is not doing a department's work, and
+    // a chief who cannot see what is on JJ's screen cannot say which department a problem
+    // belongs to.
     for tool in &tools {
         let allowed = matches!(tool.as_str(), "Read" | "Grep")
             || tool == HANDOFF
+            || tool == HYPR
             || MAIL.contains(&tool.as_str());
         assert!(
             allowed,
-            "the chief may only read, hand work down and send mail, and {tool} is none of them"
+            "the chief may only read, look at the desktop, hand work down and send mail, and \
+             {tool} is none of them"
         );
     }
 
