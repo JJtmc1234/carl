@@ -13,7 +13,6 @@
 //! Usage: `cargo run --example panel_says -- <home> "your question"`
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use carl::panel::client::{Heard, PanelClient};
 use carl::panel::command::PanelCommand;
@@ -33,7 +32,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  {asked}\n");
 
     let mut client = PanelClient::connect(&socket)?;
-    client.read_timeout(Some(Duration::from_secs(300)))?;
+    // No read timeout. The gap between frames is however long Carl thinks for, and a timeout
+    // here turns "still working" into an error, which is what happened the first time this ran:
+    // it printed a real tool call and then died with WouldBlock while he was mid answer.
+    // Bound the whole thing from outside with `timeout` instead.
+    client.read_timeout(None)?;
 
     let (mut words, mut thinking, mut doing) = (0usize, 0usize, 0usize);
     let done = client.command_streaming(
@@ -56,7 +59,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
 
-    println!("\n\n{}", done.what);
+    // Not printed again when it already streamed. `speak` streams every word and then returns
+    // the finished answer in `Done`, which is right: a caller that missed the stream still gets
+    // the answer. Printing both is this example's mistake, and it made the backend look like it
+    // was sending everything twice.
+    if words == 0 {
+        println!("{}", done.what);
+    }
+    println!();
     println!("frames: {words} bytes of answer, {thinking} bytes of reasoning, {doing} tool calls");
     if thinking == 0 && doing == 0 {
         println!(

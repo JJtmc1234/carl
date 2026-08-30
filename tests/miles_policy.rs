@@ -291,3 +291,36 @@ fn migration_of_a_real_looking_folder_keeps_everything() {
         "the old file was destroyed"
     );
 }
+
+/// The refusal JJ hit live: Carl was told "Read was not allowed. Add \"Read\" to
+/// permissions.json" while `Read` was already in permissions.json and his rank allows it.
+///
+/// Narrowing is not the cause, and this pins that so the search does not come back here.
+#[test]
+fn narrowing_the_real_permission_list_keeps_read_for_the_chief() {
+    let jj = [
+        "Bash(carl-python:*)",
+        "Bash(python3:*)",
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+    ]
+    .map(String::from)
+    .to_vec();
+
+    let kept = carl::claude::permits::narrow_to_rank(&jj, Rank::Chief);
+    assert!(
+        kept.iter().any(|t| t == "Read"),
+        "narrowing dropped Read: {kept:?}"
+    );
+    assert!(
+        kept.iter().any(|t| t == "Grep"),
+        "narrowing dropped Grep: {kept:?}"
+    );
+    assert!(
+        !kept.iter().any(|t| t == "Write"),
+        "the chief kept Write: {kept:?}"
+    );
+}
