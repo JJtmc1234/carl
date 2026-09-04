@@ -383,17 +383,53 @@ fn refusal(v: &serde_json::Value) -> Option<Chunk> {
         if !denied {
             continue;
         }
-        // The tool name, when the wording carries one, so it can be pasted into the allow list
-        // rather than worked out.
-        let tool = text
-            .split_whitespace()
-            .find(|w| w.starts_with("Bash(") || matches!(*w, "Write" | "Read" | "Edit"))
-            .unwrap_or("a tool")
-            .trim_end_matches([',', '.'])
-            .to_string();
+        // The tool name, so it can be pasted into the allow list rather than worked out.
+        //
+        // This used to match `Bash(`, `Write`, `Read` and `Edit` and nothing else, so every
+        // other tool came out as the literal words "a tool" and the refusal then told JJ to
+        // add "a tool" to permissions.json. On 2026 09 02 Carl was refused `ListAgents` and
+        // that is exactly what he was shown.
+        //
+        // The CLI's own wording is "requested permissions to use X", so the word after `use`
+        // is taken first. The shape check is the fallback for wording that does not say it.
+        let tool = named_tool(&text).unwrap_or_else(|| "a tool".to_string());
         return Some(Chunk::Refused { tool, why: text });
     }
     None
+}
+
+
+/// The tool a refusal is about, taken from the CLI's own wording.
+///
+/// Two ways round, because the wording has changed before. `use X` is what it says today. The
+/// shape check behind it accepts anything that looks like a tool name: a capitalised word, a
+/// `Bash(...)` pattern, or an `mcp__` name, which is what every tool in this system is called.
+///
+/// Returns nothing rather than a guess when neither finds one. A refusal naming the wrong tool
+/// sends somebody to widen a permission that was never the problem.
+fn named_tool(text: &str) -> Option<String> {
+    let looks_like_one = |word: &str| {
+        let word = word.trim_end_matches([',', '.', ':', ';']);
+        if word.is_empty() {
+            return None;
+        }
+        let shaped = word.starts_with("Bash(")
+            || word.starts_with("mcp__")
+            || (word.starts_with(|c: char| c.is_ascii_uppercase())
+                && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        shaped.then(|| word.to_string())
+    };
+
+    let words: Vec<&str> = text.split_whitespace().collect();
+    // `requested permissions to use ListAgents, but ...`
+    for pair in words.windows(2) {
+        if pair[0] == "use"
+            && let Some(found) = looks_like_one(pair[1])
+        {
+            return Some(found);
+        }
+    }
+    words.iter().find_map(|w| looks_like_one(w))
 }
 
 #[cfg(test)]
@@ -600,6 +636,71 @@ mod refusal_tests {
     fn a_successful_tool_result_says_nothing() {
         let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","content":"42"}]}}"#;
         assert!(chunk_of(line).is_none());
+    }
+
+    /// The bug JJ hit on 2026 09 02. Carl was refused `ListAgents` and the message said
+    /// `[refused: a tool]` and told him to add `"a tool"` to permissions.json, which is not
+    /// something anybody can act on. The extractor matched `Bash(`, `Write`, `Read` and `Edit`
+    /// and nothing else.
+    #[test]
+    fn a_refusal_names_a_tool_that_is_not_bash_or_a_file_tool() {
+        for (wording, expected) in [
+            (
+                "Claude requested permissions to use ListAgents, but you have not granted it yet.",
+                "ListAgents",
+            ),
+            (
+                "Claude requested permissions to use ToolSearch, but you have not granted it yet.",
+                "ToolSearch",
+            ),
+            (
+                "Claude requested permissions to use mcp__claude_ai_Gmail__send_message, but you have not granted it yet.",
+                "mcp__claude_ai_Gmail__send_message",
+            ),
+            (
+                "Claude requested permissions to use Bash(python3:*), but you have not granted it yet.",
+                "Bash(python3:*)",
+            ),
+        ] {
+            let line = format!(
+                r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"x","is_error":true,"content":"{wording}"}}]}}}}"#
+            );
+            match chunk_of(&line) {
+                Some(Chunk::Refused { tool, .. }) => assert_eq!(tool, expected, "{wording}"),
+                other => panic!("not recognised as a refusal: {other:?}"),
+            }
+        }
+    }
+
+    /// And when the wording carries no name at all, it says so rather than inventing one. A
+    /// refusal naming the wrong tool sends somebody to widen a permission that was never the
+    /// problem.
+    #[test]
+    fn a_refusal_with_no_tool_in_it_does_not_invent_one() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"x","is_error":true,"content":"you have not granted permission for that"}]}}"#;
+        match chunk_of(line) {
+            Some(Chunk::Refused { tool, .. }) => assert_eq!(tool, "a tool"),
+            other => panic!("not recognised as a refusal: {other:?}"),
+        }
+    }
+
+    /// The agent tools are absent by decision. Sending somebody to permissions.json would
+    /// invite them to undo that, so the refusal names the route that does exist instead.
+    #[test]
+    fn a_refused_agent_tool_points_at_the_handoff_rather_than_permissions() {
+        for tool in ["Agent", "Task", "ListAgents", "SendMessage"] {
+            let line = crate::claude::refusal_line(tool, "not granted");
+            assert!(line.contains(tool), "it still names the tool: {line}");
+            assert!(line.contains("carl handoff"), "it names the route: {line}");
+            assert!(
+                !line.contains("Add"),
+                "it must not tell anybody to widen a permission: {line}"
+            );
+        }
+
+        let search = crate::claude::refusal_line("ToolSearch", "not granted");
+        assert!(search.contains("no wider set to search"), "{search}");
+        assert!(!search.contains("Add"), "{search}");
     }
 
     #[test]

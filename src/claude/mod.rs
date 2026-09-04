@@ -96,11 +96,6 @@ pub struct Runner {
 /// file the user could read, and anybody able to message Carl in Slack could ask it to.
 pub const PYTHON: &str = "Bash(carl-python:*)";
 
-/// How a refusal reads when it is put in front of a person.
-///
-/// Names the tool in the CLI's own syntax, because the fix is to paste that into the allow list
-/// in `permissions.json`, and a message that describes the tool without naming it makes somebody
-/// go and look it up.
 /// How a tool Carl has picked up reads on screen.
 ///
 /// One short line, marked so it is obviously not part of the answer. It exists so a person can
@@ -119,10 +114,45 @@ pub fn doing_line(tool: &str, detail: &str) -> String {
     }
 }
 
+/// How a refusal reads when it is put in front of a person.
+///
+/// Names the tool in the CLI's own syntax, because the usual fix is to paste that into the
+/// allow list in `permissions.json`, and a message that describes the tool without naming it
+/// makes somebody go and look it up.
+///
+/// It is not always the fix, which is the other half. Some tools are absent on purpose and
+/// there is a sanctioned route in their place. Telling somebody to widen a permission that was
+/// deliberately narrow sends them to make the system worse, so where a route exists this says
+/// the route instead.
 pub fn refusal_line(tool: &str, why: &str) -> String {
-    format!(
-        "\n[refused: {tool}] {why}\nNobody can approve this while Carl runs headless. Add          {tool:?} to permissions.json, or raise the mode for this surface.\n"
-    )
+    format!("\n[refused: {tool}] {why}\n{}\n", advice_for(tool))
+}
+
+/// What to do about a refused tool.
+///
+/// The agent tools are absent by decision, not by oversight. Given one, Carl spawned a process
+/// and told it who to be, which is not delegating: the thing he made had no identity, no
+/// memory, no rank and no lead. `carl handoff` exists so the work goes to a real agent. A
+/// refusal that pointed at `permissions.json` would invite somebody to undo that.
+fn advice_for(tool: &str) -> String {
+    match tool {
+        "Agent" | "Task" | "ListAgents" | "SendMessage" => {
+            "Work goes down the chain with `carl handoff --from <you> --to <them> \"the work\"`, \
+             which runs the real agent with their own memory and tools. There is no tool for \
+             listing agents or reaching one directly, and nothing here needs adding to \
+             permissions.json."
+                .to_string()
+        }
+        "ToolSearch" => {
+            "The tools you hold are the ones you were given at the start of this run. There is \
+             no wider set to search, so nothing here needs adding to permissions.json."
+                .to_string()
+        }
+        _ => format!(
+            "Nobody can approve this while Carl runs headless. Add {tool:?} to \
+             permissions.json, or raise the mode for this surface."
+        ),
+    }
 }
 
 /// Where the sandboxed interpreter lives, relative to the repository.
