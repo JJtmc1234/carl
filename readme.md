@@ -1,3 +1,10 @@
+> **This repository is archived. Carl now lives in
+> [AgenticOperatingSystem](https://github.com/JJtmc1234/AgenticOperatingSystem), under `carl/`.**
+>
+> It was moved there in September 2026 with all of its history, because one project in four
+> repositories is four places to look for one answer. Everything here is still readable, and
+> nothing here is still developed. See AOS issue 41.
+
 # carl
 
 A helper that remembers, and the thing that organises the agents. Rust, driving the `claude`
